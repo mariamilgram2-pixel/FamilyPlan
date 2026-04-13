@@ -28,15 +28,19 @@ export default function SignupScreen({ navigation }: Props) {
     setLoading(true);
     const { error } = await signUp(email.trim(), password, fullName.trim());
     setLoading(false);
-    if (error) Alert.alert('Sign-up failed', error.message);
+    if (error) {
+      Alert.alert('Sign-up failed', error.message);
+    } else {
+      Alert.alert('Almost there!', 'Check your email for a confirmation link, then come back and sign in.');
+    }
   }
 
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={styles.inner} keyboardShouldPersistTaps="handled">
-        <Text style={styles.logo}>🏠</Text>
+        <Text style={styles.logo}>🐑</Text>
         <Text style={styles.title}>Create account</Text>
-        <Text style={styles.subtitle}>Join FamilyPlan today</Text>
+        <Text style={styles.subtitle}>Join sheep today</Text>
 
         <View style={styles.card}>
           <Text style={styles.label}>Full name</Text>
@@ -91,11 +95,11 @@ export default function SignupScreen({ navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#6366F1' },
+  container: { flex: 1, backgroundColor: '#8B7B6B' },
   inner: { flexGrow: 1, justifyContent: 'center', padding: 24 },
   logo: { textAlign: 'center', fontSize: 56, marginBottom: 8 },
   title: { textAlign: 'center', fontSize: 28, fontWeight: '800', color: '#fff', marginBottom: 4 },
-  subtitle: { textAlign: 'center', fontSize: 14, color: '#C7D2FE', marginBottom: 32 },
+  subtitle: { textAlign: 'center', fontSize: 14, color: '#D9CFC8', marginBottom: 32 },
   card: {
     backgroundColor: '#fff',
     borderRadius: 20,
@@ -116,10 +120,10 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#111827',
     marginBottom: 16,
-    backgroundColor: '#F9FAFB',
+    backgroundColor: '#F5F0EB',
   },
   primaryBtn: {
-    backgroundColor: '#6366F1',
+    backgroundColor: '#8B7B6B',
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: 'center',
@@ -127,6 +131,6 @@ const styles = StyleSheet.create({
   },
   primaryBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
   linkRow: { flexDirection: 'row', justifyContent: 'center', marginTop: 24 },
-  linkText: { fontSize: 14, color: '#C7D2FE' },
+  linkText: { fontSize: 14, color: '#D9CFC8' },
   linkAccent: { color: '#fff', fontWeight: '700' },
 });

@@ -18,7 +18,7 @@ function GroupHeaderTitle() {
   const { activeGroup } = useGroup();
   return (
     <Text style={styles.headerGroupName} numberOfLines={1}>
-      {activeGroup?.name ?? 'FamilyPlan'}
+      {activeGroup?.name ?? 'sheep'}
     </Text>
   );
 }
@@ -33,7 +33,7 @@ function SignOutButton() {
 }
 
 const HEADER_OPTS = {
-  headerStyle: { backgroundColor: '#6366F1' },
+  headerStyle: { backgroundColor: '#C4B5A5' },
   headerTintColor: '#fff',
   headerTitle: () => <GroupHeaderTitle />,
   headerRight: () => <SignOutButton />,
@@ -62,7 +62,7 @@ export default function TabNavigator() {
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: '#6366F1',
+        tabBarActiveTintColor: '#8B7B6B',
         tabBarInactiveTintColor: '#9CA3AF',
         tabBarStyle: styles.tabBar,
         tabBarLabelStyle: styles.tabLabel,

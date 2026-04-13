@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "FamilyPlan",
+    "name": "sheep",
     "slug": "familyplan",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -9,7 +9,7 @@
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#6366F1"
+      "backgroundColor": "#C4B5A0"
     },
     "assetBundlePatterns": ["**/*"],
     "ios": {
@@ -19,7 +19,7 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#6366F1"
+        "backgroundColor": "#C4B5A0"
       },
       "package": "com.familyplan.app"
     },

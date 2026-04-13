@@ -5,11 +5,12 @@ import {
 } from 'react-native';
 import { useGroup } from '../contexts/GroupContext';
 import { useAuth } from '../contexts/AuthContext';
+import { skipAuthForDev } from '../navigation/AppNavigator';
 
 type Tab = 'create' | 'join';
 
 export default function GroupSetupScreen() {
-  const { createGroup, joinGroup } = useGroup();
+  const { createGroup, joinGroup, setActiveGroup } = useGroup();
   const { signOut } = useAuth();
   const [tab, setTab] = useState<Tab>('create');
 
@@ -30,7 +31,7 @@ export default function GroupSetupScreen() {
     setLoading(true);
     const { error } = await createGroup(groupName.trim(), groupDesc.trim());
     setLoading(false);
-    if (error) Alert.alert('Error', error.message);
+    if (error) Alert.alert('Error creating group', error.message + '\n\nTip: use "Skip to demo" below to explore the app first.');
   }
 
   async function handleJoin() {
@@ -47,8 +48,8 @@ export default function GroupSetupScreen() {
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={styles.inner} keyboardShouldPersistTaps="handled">
-        <Text style={styles.emoji}>🏠</Text>
-        <Text style={styles.title}>Welcome to FamilyPlan</Text>
+        <Text style={styles.emoji}>🐑</Text>
+        <Text style={styles.title}>Welcome to sheep</Text>
         <Text style={styles.subtitle}>Create a new group or join an existing one with an invite code</Text>
 
         <View style={styles.tabRow}>
@@ -110,6 +111,17 @@ export default function GroupSetupScreen() {
           )}
         </View>
 
+        <TouchableOpacity
+          style={styles.skipBtn}
+          onPress={() => {
+            setActiveGroup({ id: 'demo', name: 'My Family', description: null, invite_code: 'DEMO', created_by: null, created_at: new Date().toISOString() });
+            skipAuthForDev();
+            (skipAuthForDev as any)._notify?.();
+          }}
+        >
+          <Text style={styles.skipText}>Skip to demo →</Text>
+        </TouchableOpacity>
+
         <TouchableOpacity onPress={signOut} style={styles.signOutBtn}>
           <Text style={styles.signOutText}>Sign out</Text>
         </TouchableOpacity>
@@ -119,7 +131,7 @@ export default function GroupSetupScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F9FAFB' },
+  container: { flex: 1, backgroundColor: '#F5F0EB' },
   inner: { flexGrow: 1, justifyContent: 'center', padding: 24 },
   emoji: { textAlign: 'center', fontSize: 56, marginBottom: 12 },
   title: { textAlign: 'center', fontSize: 24, fontWeight: '800', color: '#111827', marginBottom: 8 },
@@ -134,13 +146,15 @@ const styles = StyleSheet.create({
   tabBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: 'center' },
   tabBtnActive: { backgroundColor: '#fff', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 4, elevation: 2 },
   tabBtnText: { fontSize: 14, fontWeight: '600', color: '#6B7280' },
-  tabBtnTextActive: { color: '#6366F1' },
+  tabBtnTextActive: { color: '#8B7B6B' },
   card: { backgroundColor: '#fff', borderRadius: 20, padding: 24, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 2 },
   label: { fontSize: 13, fontWeight: '600', color: '#374151', marginBottom: 6 },
-  input: { borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: '#111827', marginBottom: 16, backgroundColor: '#F9FAFB' },
+  input: { borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: '#111827', marginBottom: 16, backgroundColor: '#F5F0EB' },
   textArea: { height: 80, textAlignVertical: 'top' },
-  primaryBtn: { backgroundColor: '#6366F1', borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 4 },
+  primaryBtn: { backgroundColor: '#8B7B6B', borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 4 },
   primaryBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  signOutBtn: { marginTop: 24, alignItems: 'center' },
+  skipBtn: { marginTop: 20, alignItems: 'center' },
+  skipText: { color: '#8B7B6B', fontSize: 14, fontWeight: '600' },
+  signOutBtn: { marginTop: 12, alignItems: 'center' },
   signOutText: { color: '#9CA3AF', fontSize: 14 },
 });

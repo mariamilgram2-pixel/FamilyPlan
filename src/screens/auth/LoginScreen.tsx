@@ -6,11 +6,14 @@ import {
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { AuthStackParamList } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
+import { skipAuthForDev } from '../../navigation/AppNavigator';
+import { useGroup } from '../../contexts/GroupContext';
 
 type Props = { navigation: NativeStackNavigationProp<AuthStackParamList, 'Login'> };
 
 export default function LoginScreen({ navigation }: Props) {
   const { signIn } = useAuth();
+  const { setActiveGroup } = useGroup();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -29,8 +32,8 @@ export default function LoginScreen({ navigation }: Props) {
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <View style={styles.inner}>
-        <Text style={styles.logo}>🏠</Text>
-        <Text style={styles.title}>FamilyPlan</Text>
+        <Text style={styles.logo}>🐑</Text>
+        <Text style={styles.title}>sheep</Text>
         <Text style={styles.subtitle}>Stay connected with the people who matter</Text>
 
         <View style={styles.card}>
@@ -66,6 +69,17 @@ export default function LoginScreen({ navigation }: Props) {
           </TouchableOpacity>
         </View>
 
+        <TouchableOpacity
+          style={styles.skipBtn}
+          onPress={() => {
+            setActiveGroup({ id: 'demo', name: 'My Family', description: null, invite_code: 'DEMO', created_by: null, created_at: new Date().toISOString() });
+            skipAuthForDev();
+            (skipAuthForDev as any)._notify?.();
+          }}
+        >
+          <Text style={styles.skipText}>Skip sign in →</Text>
+        </TouchableOpacity>
+
         <TouchableOpacity onPress={() => navigation.navigate('Signup')} style={styles.linkRow}>
           <Text style={styles.linkText}>Don't have an account? </Text>
           <Text style={[styles.linkText, styles.linkAccent]}>Sign up</Text>
@@ -76,11 +90,11 @@ export default function LoginScreen({ navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#6366F1' },
+  container: { flex: 1, backgroundColor: '#8B7B6B' },
   inner: { flex: 1, justifyContent: 'center', padding: 24 },
   logo: { textAlign: 'center', fontSize: 56, marginBottom: 8 },
   title: { textAlign: 'center', fontSize: 32, fontWeight: '800', color: '#fff', marginBottom: 4 },
-  subtitle: { textAlign: 'center', fontSize: 14, color: '#C7D2FE', marginBottom: 32 },
+  subtitle: { textAlign: 'center', fontSize: 14, color: '#D9CFC8', marginBottom: 32 },
   card: {
     backgroundColor: '#fff',
     borderRadius: 20,
@@ -101,10 +115,10 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#111827',
     marginBottom: 16,
-    backgroundColor: '#F9FAFB',
+    backgroundColor: '#F5F0EB',
   },
   primaryBtn: {
-    backgroundColor: '#6366F1',
+    backgroundColor: '#8B7B6B',
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: 'center',
@@ -112,6 +126,8 @@ const styles = StyleSheet.create({
   },
   primaryBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
   linkRow: { flexDirection: 'row', justifyContent: 'center', marginTop: 24 },
-  linkText: { fontSize: 14, color: '#C7D2FE' },
+  linkText: { fontSize: 14, color: '#D9CFC8' },
   linkAccent: { color: '#fff', fontWeight: '700' },
+  skipBtn: { alignItems: 'center', marginTop: 16 },
+  skipText: { color: '#EDE5DC', fontSize: 14 },
 });
