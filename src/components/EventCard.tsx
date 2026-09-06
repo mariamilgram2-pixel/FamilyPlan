@@ -1,69 +1,99 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Event } from '../types';
+import { colors, radius, shadow } from '../theme';
+import AvatarStack from './AvatarStack';
+import { AvatarPerson } from './Avatar';
 
 interface Props {
   event: Event;
+  attendees?: AvatarPerson[];   // resolved profiles for the attendee ids
+  currentUserId?: string | null;
+  groupName?: string | null;
+  onPress?: () => void;
 }
 
 function formatTime(iso: string) {
-  return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  const d = new Date(iso);
+  // Split hour/min from am/pm so we can stack them like the mockup.
+  const parts = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }).split(' ');
+  return { hm: parts[0], ampm: (parts[1] ?? '').toLowerCase() };
 }
 
-function durationLabel(start: string, end: string) {
-  const mins = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 60000);
-  if (mins < 60) return `${mins}m`;
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
-  return m > 0 ? `${h}h ${m}m` : `${h}h`;
-}
+export default function EventCard({ event, attendees = [], currentUserId, groupName, onPress }: Props) {
+  const { hm, ampm } = formatTime(event.start_time);
+  const youAreGoing = !!currentUserId && event.attendees?.includes(currentUserId);
 
-export default function EventCard({ event }: Props) {
   return (
-    <View style={styles.card}>
+    <TouchableOpacity
+      activeOpacity={onPress ? 0.75 : 1}
+      onPress={onPress}
+      style={[styles.card, youAreGoing && styles.cardRsvp]}
+    >
       <View style={styles.timeCol}>
-        <Text style={styles.time}>{formatTime(event.start_time)}</Text>
-        <Text style={styles.duration}>{durationLabel(event.start_time, event.end_time)}</Text>
+        <Text style={styles.time}>{hm}</Text>
+        <Text style={styles.ampm}>{ampm}</Text>
       </View>
-      <View style={styles.divider} />
-      <View style={styles.content}>
+
+      <View style={styles.body}>
         <Text style={styles.title} numberOfLines={2}>{event.title}</Text>
-        {event.description ? (
-          <Text style={styles.description} numberOfLines={2}>{event.description}</Text>
-        ) : null}
-        {event.profiles?.full_name ? (
-          <Text style={styles.creator}>by {event.profiles.full_name}</Text>
-        ) : null}
-        {event.attendees.length > 0 && (
-          <Text style={styles.attendees}>
-            {event.attendees.length} attendee{event.attendees.length !== 1 ? 's' : ''}
-          </Text>
-        )}
+        <View style={styles.metaRow}>
+          {youAreGoing ? (
+            <View style={[styles.tag, styles.tagRose]}>
+              <Text style={[styles.tagText, styles.tagTextRose]}>You're going</Text>
+            </View>
+          ) : groupName ? (
+            <View style={styles.tag}>
+              <Text style={styles.tagText}>{groupName}</Text>
+            </View>
+          ) : null}
+          {event.location ? (
+            <Text style={styles.metaText} numberOfLines={1}>· {event.location}</Text>
+          ) : null}
+        </View>
       </View>
-    </View>
+
+      {attendees.length > 0 && (
+        <AvatarStack people={attendees} max={3} size={24} style={styles.avatars} />
+      )}
+    </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
   card: {
     flexDirection: 'row',
-    backgroundColor: '#fff',
-    borderRadius: 14,
-    marginBottom: 10,
-    padding: 14,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-    elevation: 2,
+    alignItems: 'center',
+    backgroundColor: colors.card,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 8,
+    gap: 12,
+    ...shadow.card,
   },
-  timeCol: { width: 64, alignItems: 'center', justifyContent: 'center' },
-  time: { fontSize: 13, fontWeight: '700', color: '#6366F1', textAlign: 'center' },
-  duration: { fontSize: 11, color: '#9CA3AF', marginTop: 2, textAlign: 'center' },
-  divider: { width: 2, backgroundColor: '#EEF2FF', borderRadius: 1, marginHorizontal: 12 },
-  content: { flex: 1 },
-  title: { fontSize: 15, fontWeight: '700', color: '#111827', marginBottom: 4 },
-  description: { fontSize: 13, color: '#6B7280', marginBottom: 4 },
-  creator: { fontSize: 12, color: '#9CA3AF', marginTop: 2 },
-  attendees: { fontSize: 12, color: '#9CA3AF', marginTop: 2 },
+  cardRsvp: { borderColor: colors.roseTint },
+
+  timeCol: { width: 44, alignItems: 'flex-start' },
+  time: { fontSize: 13, fontWeight: '700', color: colors.ink2, fontVariant: ['tabular-nums'] as any, lineHeight: 15 },
+  ampm: { fontSize: 10, fontWeight: '500', color: colors.muted, letterSpacing: 0.5, marginTop: 1 },
+
+  body: { flex: 1, minWidth: 0 },
+  title: { fontSize: 14.5, fontWeight: '600', color: colors.ink, letterSpacing: -0.1 },
+  metaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 3, gap: 6, flexWrap: 'wrap' },
+  metaText: { fontSize: 12, color: colors.muted, flexShrink: 1 },
+
+  tag: {
+    backgroundColor: colors.sheepTint,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: radius.pill,
+  },
+  tagText: { fontSize: 10, fontWeight: '700', color: colors.sheepDeep, letterSpacing: 0.2 },
+  tagRose: { backgroundColor: colors.roseTint },
+  tagTextRose: { color: colors.rose },
+
+  avatars: { marginLeft: 4 },
 });

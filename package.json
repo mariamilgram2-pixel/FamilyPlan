@@ -16,6 +16,7 @@
     "@react-navigation/native-stack": "^6.9.26",
     "@supabase/supabase-js": "^2.39.0",
     "expo": "~50.0.6",
+    "expo-clipboard": "~5.0.1",
     "expo-secure-store": "~12.8.1",
     "expo-status-bar": "~1.11.1",
     "react": "18.2.0",

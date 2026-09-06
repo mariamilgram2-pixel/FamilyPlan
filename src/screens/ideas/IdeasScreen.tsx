@@ -1,14 +1,16 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert,
 } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { supabase } from '../../lib/supabase';
-import { Idea, IdeasStackParamList } from '../../types';
+import { Idea, IdeasStackParamList, Profile } from '../../types';
 import { useGroup } from '../../contexts/GroupContext';
 import { useAuth } from '../../contexts/AuthContext';
 import IdeaCard from '../../components/IdeaCard';
+import { AvatarPerson } from '../../components/Avatar';
+import { colors, radius, shadow } from '../../theme';
 
 type Props = { navigation: NativeStackNavigationProp<IdeasStackParamList, 'IdeasHome'> };
 
@@ -20,62 +22,64 @@ export default function IdeasScreen({ navigation }: Props) {
   const { activeGroup } = useGroup();
   const { user } = useAuth();
   const [ideas, setIdeas] = useState<Idea[]>([]);
+  const [members, setMembers] = useState<Profile[]>([]);
   const [filter, setFilter] = useState<StatusFilter>('all');
   const [loading, setLoading] = useState(true);
 
-  const fetchIdeas = useCallback(async () => {
+  const fetchAll = useCallback(async () => {
     if (!activeGroup) return;
     setLoading(true);
-    const { data, error } = await supabase
-      .from('ideas')
-      .select('*, profiles(id, full_name, email), idea_votes(id, user_id)')
-      .eq('group_id', activeGroup.id)
-      .order('votes', { ascending: false });
-
+    const [{ data: ideasData, error }, { data: memberRows }] = await Promise.all([
+      supabase.from('ideas')
+        .select('*, profiles(id, full_name, email), idea_votes(id, user_id)')
+        .eq('group_id', activeGroup.id)
+        .order('votes', { ascending: false }),
+      supabase.from('group_members').select('profiles(id, full_name, email, avatar_url)')
+        .eq('group_id', activeGroup.id),
+    ]);
     if (error) Alert.alert('Error', error.message);
-    else setIdeas((data as Idea[]) ?? []);
+    else setIdeas((ideasData as Idea[]) ?? []);
+    setMembers(((memberRows ?? []).map((r: any) => r.profiles).filter(Boolean)) as Profile[]);
     setLoading(false);
   }, [activeGroup]);
 
-  useEffect(() => {
-    fetchIdeas();
-  }, [fetchIdeas]);
+  useEffect(() => { fetchAll(); }, [fetchAll]);
 
   useEffect(() => {
-    const unsubscribe = navigation.addListener('focus', fetchIdeas);
-    return unsubscribe;
-  }, [navigation, fetchIdeas]);
+    const unsub = navigation.addListener('focus', fetchAll);
+    return unsub;
+  }, [navigation, fetchAll]);
+
+  const memberById = useMemo(() => {
+    const m = new Map<string, Profile>();
+    members.forEach(p => m.set(p.id, p));
+    return m;
+  }, [members]);
 
   async function handleVote(idea: Idea) {
     if (!user) return;
-
-    const alreadyVoted = idea.idea_votes?.some((v) => v.user_id === user.id);
-
-    if (alreadyVoted) {
-      // Remove vote
+    const already = idea.idea_votes?.some(v => v.user_id === user.id);
+    if (already) {
       await supabase.from('idea_votes').delete().eq('idea_id', idea.id).eq('user_id', user.id);
       await supabase.from('ideas').update({ votes: Math.max(0, idea.votes - 1) }).eq('id', idea.id);
     } else {
-      // Add vote
       await supabase.from('idea_votes').insert({ idea_id: idea.id, user_id: user.id });
       await supabase.from('ideas').update({ votes: idea.votes + 1 }).eq('id', idea.id);
     }
-
-    fetchIdeas();
+    fetchAll();
   }
 
   async function handleStatusChange(idea: Idea, status: Idea['status']) {
     await supabase.from('ideas').update({ status }).eq('id', idea.id);
-    fetchIdeas();
+    fetchAll();
   }
 
-  const filtered = filter === 'all' ? ideas : ideas.filter((i) => i.status === filter);
+  const filtered = filter === 'all' ? ideas : ideas.filter(i => i.status === filter);
 
   return (
     <View style={styles.container}>
-      {/* Filter bar */}
       <View style={styles.filterBar}>
-        {FILTERS.map((f) => (
+        {FILTERS.map(f => (
           <TouchableOpacity
             key={f}
             style={[styles.filterChip, filter === f && styles.filterChipActive]}
@@ -89,71 +93,74 @@ export default function IdeasScreen({ navigation }: Props) {
       </View>
 
       {loading ? (
-        <ActivityIndicator style={{ marginTop: 40 }} color="#6366F1" />
+        <ActivityIndicator style={{ marginTop: 40 }} color={colors.sheep} />
       ) : (
         <FlatList
           data={filtered}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => (
-            <IdeaCard
-              idea={item}
-              currentUserId={user?.id ?? ''}
-              onVote={() => handleVote(item)}
-              onStatusChange={(status) => handleStatusChange(item, status)}
-            />
-          )}
+          keyExtractor={(i) => i.id}
+          renderItem={({ item }) => {
+            const voters = (item.idea_votes ?? []).map(v => memberById.get(v.user_id)).filter(Boolean) as AvatarPerson[];
+            return (
+              <IdeaCard
+                idea={item}
+                currentUserId={user?.id ?? ''}
+                voters={voters}
+                onVote={() => handleVote(item)}
+                onStatusChange={(status) => handleStatusChange(item, status)}
+              />
+            );
+          }}
           ListEmptyComponent={
             <View style={styles.empty}>
               <Text style={styles.emptyEmoji}>💡</Text>
-              <Text style={styles.emptyText}>No ideas yet</Text>
+              <Text style={styles.emptyTitle}>Nothing brewing yet</Text>
               <TouchableOpacity onPress={() => navigation.navigate('CreateIdea')}>
-                <Text style={styles.emptyLink}>Add the first one →</Text>
+                <Text style={styles.emptyLink}>Add the first idea →</Text>
               </TouchableOpacity>
             </View>
           }
-          contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}
+          contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 100 }}
         />
       )}
 
-      <TouchableOpacity style={styles.fab} onPress={() => navigation.navigate('CreateIdea')}>
-        <Text style={styles.fabText}>+ New idea</Text>
+      <TouchableOpacity style={styles.fab} onPress={() => navigation.navigate('CreateIdea')} activeOpacity={0.85}>
+        <Text style={styles.fabText}>＋ New idea</Text>
       </TouchableOpacity>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F9FAFB' },
+  container: { flex: 1, backgroundColor: colors.ground },
   filterBar: {
     flexDirection: 'row',
     paddingHorizontal: 16,
     paddingVertical: 12,
     gap: 8,
     borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-    backgroundColor: '#fff',
+    borderBottomColor: colors.border,
+    backgroundColor: colors.card,
   },
-  filterChip: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20, backgroundColor: '#F3F4F6', borderWidth: 1.5, borderColor: 'transparent' },
-  filterChipActive: { backgroundColor: '#EEF2FF', borderColor: '#6366F1' },
-  filterChipText: { fontSize: 13, fontWeight: '600', color: '#6B7280' },
-  filterChipTextActive: { color: '#6366F1' },
+  filterChip: {
+    paddingHorizontal: 12, paddingVertical: 6,
+    borderRadius: radius.pill,
+    backgroundColor: colors.ground2,
+    borderWidth: 1, borderColor: 'transparent',
+  },
+  filterChipActive: { backgroundColor: colors.sheepTint, borderColor: colors.sheep },
+  filterChipText: { fontSize: 12, fontWeight: '600', color: colors.muted },
+  filterChipTextActive: { color: colors.sheepDeep },
   empty: { alignItems: 'center', paddingTop: 60 },
   emptyEmoji: { fontSize: 40, marginBottom: 8 },
-  emptyText: { fontSize: 16, color: '#6B7280', marginBottom: 8 },
-  emptyLink: { color: '#6366F1', fontWeight: '600', fontSize: 15 },
+  emptyTitle: { fontSize: 15, fontWeight: '700', color: colors.ink2, marginBottom: 4 },
+  emptyLink: { color: colors.sheepDeep, fontWeight: '600', fontSize: 14 },
   fab: {
     position: 'absolute',
-    bottom: 20,
-    right: 20,
-    backgroundColor: '#6366F1',
-    borderRadius: 24,
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    shadowColor: '#6366F1',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 8,
-    elevation: 6,
+    bottom: 20, right: 20,
+    backgroundColor: colors.sheep,
+    borderRadius: radius.pill,
+    paddingHorizontal: 18, paddingVertical: 12,
+    ...shadow.lifted,
   },
-  fabText: { color: '#fff', fontWeight: '700', fontSize: 15 },
+  fabText: { color: '#fff', fontWeight: '700', fontSize: 14 },
 });

@@ -90,11 +90,11 @@ export default function LoginScreen({ navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#8B7B6B' },
+  container: { flex: 1, backgroundColor: '#8dc76d' },
   inner: { flex: 1, justifyContent: 'center', padding: 24 },
   logo: { textAlign: 'center', fontSize: 56, marginBottom: 8 },
   title: { textAlign: 'center', fontSize: 32, fontWeight: '800', color: '#fff', marginBottom: 4 },
-  subtitle: { textAlign: 'center', fontSize: 14, color: '#D9CFC8', marginBottom: 32 },
+  subtitle: { textAlign: 'center', fontSize: 14, color: '#d6d2be', marginBottom: 32 },
   card: {
     backgroundColor: '#fff',
     borderRadius: 20,
@@ -115,10 +115,10 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#111827',
     marginBottom: 16,
-    backgroundColor: '#F5F0EB',
+    backgroundColor: '#f5f3e7',
   },
   primaryBtn: {
-    backgroundColor: '#8B7B6B',
+    backgroundColor: '#8dc76d',
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: 'center',
@@ -126,8 +126,8 @@ const styles = StyleSheet.create({
   },
   primaryBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
   linkRow: { flexDirection: 'row', justifyContent: 'center', marginTop: 24 },
-  linkText: { fontSize: 14, color: '#D9CFC8' },
+  linkText: { fontSize: 14, color: '#d6d2be' },
   linkAccent: { color: '#fff', fontWeight: '700' },
   skipBtn: { alignItems: 'center', marginTop: 16 },
-  skipText: { color: '#EDE5DC', fontSize: 14 },
+  skipText: { color: '#ece8d5', fontSize: 14 },
 });

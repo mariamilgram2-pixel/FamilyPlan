@@ -53,6 +53,7 @@ export interface Event {
   description: string | null;
   start_time: string;
   end_time: string;
+  location: string | null;
   created_by: string | null;
   attendees: string[];
   created_at: string;
@@ -103,9 +104,11 @@ export type CalendarStackParamList = {
   CalendarHome: undefined;
   CreateEvent: { date?: string };
   EventDetail: { eventId: string };
+  Profile: undefined;
 };
 
 export type IdeasStackParamList = {
   IdeasHome: undefined;
   CreateIdea: undefined;
+  Profile: undefined;
 };
