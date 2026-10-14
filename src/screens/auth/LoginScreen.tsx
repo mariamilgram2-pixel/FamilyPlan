@@ -1,15 +1,31 @@
 import React, { useState } from 'react';
-import {
-  View, Text, TextInput, TouchableOpacity, StyleSheet,
-  KeyboardAvoidingView, Platform, ActivityIndicator, Alert,
-} from 'react-native';
+import { View } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { AuthStackParamList } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
-import { skipAuthForDev } from '../../navigation/AppNavigator';
 import { useGroup } from '../../contexts/GroupContext';
+import { skipAuthForDev } from '../../navigation/AppNavigator';
+import { DEMO_GROUP_ID } from '../../lib/demo';
+import { Button, Field } from '../../components/ui';
+import { space } from '../../theme';
+import AuthLayout, { FormMessage } from './AuthLayout';
 
 type Props = { navigation: NativeStackNavigationProp<AuthStackParamList, 'Login'> };
+
+export function enterDemo(setActiveGroup: ReturnType<typeof useGroup>['setActiveGroup']) {
+  setActiveGroup({ id: DEMO_GROUP_ID, name: 'My Family', description: null, invite_code: 'DEMO42', created_by: null, created_at: new Date().toISOString() });
+  skipAuthForDev();
+  (skipAuthForDev as any)._notify?.();
+}
+
+/** Turn Supabase auth errors into something a person can act on. */
+export function friendlyAuthError(message: string) {
+  const m = message.toLowerCase();
+  if (m.includes('invalid login')) return 'That email and password don’t match. Check them and try again.';
+  if (m.includes('email not confirmed')) return 'Confirm your email first — we sent you a link when you signed up.';
+  if (m.includes('fetch') || m.includes('network')) return 'Can’t reach the server. Check your connection and try again.';
+  return message;
+}
 
 export default function LoginScreen({ navigation }: Props) {
   const { signIn } = useAuth();
@@ -17,117 +33,35 @@ export default function LoginScreen({ navigation }: Props) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const ready = email.trim().length > 0 && password.length > 0;
 
   async function handleLogin() {
-    if (!email || !password) {
-      Alert.alert('Missing fields', 'Please enter your email and password.');
-      return;
-    }
+    if (!ready || loading) return;
+    setError(null);
     setLoading(true);
-    const { error } = await signIn(email.trim(), password);
-    setLoading(false);
-    if (error) Alert.alert('Login failed', error.message);
+    try {
+      const { error: err } = await signIn(email.trim(), password);
+      if (err) setError(friendlyAuthError(err.message));
+    } catch (e: any) {
+      setError(friendlyAuthError(e?.message ?? 'Something went wrong. Try again.'));
+    } finally {
+      setLoading(false);
+    }
   }
 
+  const edit = (setter: (v: string) => void) => (v: string) => { setter(v); if (error) setError(null); };
+
   return (
-    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <View style={styles.inner}>
-        <Text style={styles.logo}>🐑</Text>
-        <Text style={styles.title}>sheep</Text>
-        <Text style={styles.subtitle}>Stay connected with the people who matter</Text>
-
-        <View style={styles.card}>
-          <Text style={styles.label}>Email</Text>
-          <TextInput
-            style={styles.input}
-            value={email}
-            onChangeText={setEmail}
-            placeholder="you@example.com"
-            placeholderTextColor="#9CA3AF"
-            keyboardType="email-address"
-            autoCapitalize="none"
-            autoComplete="email"
-          />
-
-          <Text style={styles.label}>Password</Text>
-          <TextInput
-            style={styles.input}
-            value={password}
-            onChangeText={setPassword}
-            placeholder="••••••••"
-            placeholderTextColor="#9CA3AF"
-            secureTextEntry
-            autoComplete="password"
-          />
-
-          <TouchableOpacity style={styles.primaryBtn} onPress={handleLogin} disabled={loading}>
-            {loading ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.primaryBtnText}>Sign In</Text>
-            )}
-          </TouchableOpacity>
-        </View>
-
-        <TouchableOpacity
-          style={styles.skipBtn}
-          onPress={() => {
-            setActiveGroup({ id: 'demo', name: 'My Family', description: null, invite_code: 'DEMO', created_by: null, created_at: new Date().toISOString() });
-            skipAuthForDev();
-            (skipAuthForDev as any)._notify?.();
-          }}
-        >
-          <Text style={styles.skipText}>Skip sign in →</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity onPress={() => navigation.navigate('Signup')} style={styles.linkRow}>
-          <Text style={styles.linkText}>Don't have an account? </Text>
-          <Text style={[styles.linkText, styles.linkAccent]}>Sign up</Text>
-        </TouchableOpacity>
+    <AuthLayout title="sheep" subtitle="One calendar for the people you plan with.">
+      <Field label="Email" value={email} onChangeText={edit(setEmail)} placeholder="you@example.com" keyboardType="email-address" autoCapitalize="none" autoComplete="email" textContentType="emailAddress" />
+      <Field label="Password" value={password} onChangeText={edit(setPassword)} placeholder="Password" secureTextEntry autoComplete="password" textContentType="password" onSubmitEditing={handleLogin} />
+      <FormMessage message={error} />
+      <Button label="Sign In" onPress={handleLogin} loading={loading} disabled={!ready} block style={{ marginTop: space.s }} />
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+        <Button label="Create Account" variant="plain" onPress={() => navigation.navigate('Signup')} />
+        <Button label="Explore Demo" variant="plain" onPress={() => enterDemo(setActiveGroup)} />
       </View>
-    </KeyboardAvoidingView>
+    </AuthLayout>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#8dc76d' },
-  inner: { flex: 1, justifyContent: 'center', padding: 24 },
-  logo: { textAlign: 'center', fontSize: 56, marginBottom: 8 },
-  title: { textAlign: 'center', fontSize: 32, fontWeight: '800', color: '#fff', marginBottom: 4 },
-  subtitle: { textAlign: 'center', fontSize: 14, color: '#d6d2be', marginBottom: 32 },
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    padding: 24,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 4,
-  },
-  label: { fontSize: 13, fontWeight: '600', color: '#374151', marginBottom: 6 },
-  input: {
-    borderWidth: 1.5,
-    borderColor: '#E5E7EB',
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 15,
-    color: '#111827',
-    marginBottom: 16,
-    backgroundColor: '#f5f3e7',
-  },
-  primaryBtn: {
-    backgroundColor: '#8dc76d',
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-    marginTop: 4,
-  },
-  primaryBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  linkRow: { flexDirection: 'row', justifyContent: 'center', marginTop: 24 },
-  linkText: { fontSize: 14, color: '#d6d2be' },
-  linkAccent: { color: '#fff', fontWeight: '700' },
-  skipBtn: { alignItems: 'center', marginTop: 16 },
-  skipText: { color: '#ece8d5', fontSize: 14 },
-});

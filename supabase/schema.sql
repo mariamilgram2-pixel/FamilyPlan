@@ -50,15 +50,29 @@ CREATE TABLE public.events (
 
 CREATE INDEX events_group_start ON public.events (group_id, start_time);
 
-CREATE TABLE public.ideas (
+CREATE TABLE public.contacts (
   id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  group_id    UUID        NOT NULL REFERENCES public.groups(id) ON DELETE CASCADE,
-  title       TEXT        NOT NULL,
-  description TEXT,
-  votes       INTEGER     NOT NULL DEFAULT 0,
-  status      TEXT        NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed', 'planned', 'done')),
-  created_by  UUID        REFERENCES public.profiles(id) ON DELETE SET NULL,
+  owner_id    UUID        NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  name        TEXT        NOT NULL,
+  email       TEXT,
+  note        TEXT,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX contacts_owner ON public.contacts (owner_id);
+
+CREATE TABLE public.ideas (
+  id                    UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  group_id              UUID        NOT NULL REFERENCES public.groups(id) ON DELETE CASCADE,
+  title                 TEXT        NOT NULL,
+  description           TEXT,
+  votes                 INTEGER     NOT NULL DEFAULT 0,
+  status                TEXT        NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed', 'planned', 'done')),
+  audience_group_ids    UUID[]      NOT NULL DEFAULT '{}',
+  audience_user_ids     UUID[]      NOT NULL DEFAULT '{}',
+  audience_contact_ids  UUID[]      NOT NULL DEFAULT '{}',
+  created_by            UUID        REFERENCES public.profiles(id) ON DELETE SET NULL,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX ideas_group_votes ON public.ideas (group_id, votes DESC);
@@ -99,6 +113,7 @@ ALTER TABLE public.group_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.events       ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ideas        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.idea_votes   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.contacts     ENABLE ROW LEVEL SECURITY;
 
 -- profiles
 CREATE POLICY "Users can view any profile"
@@ -170,3 +185,13 @@ CREATE POLICY "Users can vote on ideas in their groups"
   ));
 CREATE POLICY "Users can remove their own vote"
   ON public.idea_votes FOR DELETE USING (auth.uid() = user_id);
+
+-- contacts (per-user address book of people you plan with who aren't app users)
+CREATE POLICY "Users can view their own contacts"
+  ON public.contacts FOR SELECT USING (auth.uid() = owner_id);
+CREATE POLICY "Users can create their own contacts"
+  ON public.contacts FOR INSERT WITH CHECK (auth.uid() = owner_id);
+CREATE POLICY "Users can update their own contacts"
+  ON public.contacts FOR UPDATE USING (auth.uid() = owner_id);
+CREATE POLICY "Users can delete their own contacts"
+  ON public.contacts FOR DELETE USING (auth.uid() = owner_id);

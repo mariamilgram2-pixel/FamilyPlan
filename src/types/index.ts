@@ -9,6 +9,7 @@ export interface Database {
       events: { Row: Event; Insert: EventInsert; Update: Partial<EventInsert> };
       ideas: { Row: Idea; Insert: IdeaInsert; Update: Partial<IdeaInsert> };
       idea_votes: { Row: IdeaVote; Insert: IdeaVoteInsert; Update: Partial<IdeaVoteInsert> };
+      contacts: { Row: Contact; Insert: ContactInsert; Update: Partial<ContactInsert> };
     };
   };
 }
@@ -70,6 +71,9 @@ export interface Idea {
   description: string | null;
   votes: number;
   status: 'proposed' | 'planned' | 'done';
+  audience_group_ids: string[];
+  audience_user_ids: string[];
+  audience_contact_ids: string[];
   created_by: string | null;
   created_at: string;
   // joined relations
@@ -78,6 +82,17 @@ export interface Idea {
 }
 
 export type IdeaInsert = Omit<Idea, 'id' | 'votes' | 'created_at' | 'profiles' | 'idea_votes'>;
+
+export interface Contact {
+  id: string;
+  owner_id: string;
+  name: string;
+  email: string | null;
+  note: string | null;
+  created_at: string;
+}
+
+export type ContactInsert = Omit<Contact, 'id' | 'created_at'>;
 
 export interface IdeaVote {
   id: string;
@@ -100,15 +115,9 @@ export type MainStackParamList = {
   Tabs: undefined;
 };
 
-export type CalendarStackParamList = {
-  CalendarHome: undefined;
-  CreateEvent: { date?: string };
-  EventDetail: { eventId: string };
-  Profile: undefined;
-};
-
-export type IdeasStackParamList = {
-  IdeasHome: undefined;
-  CreateIdea: undefined;
-  Profile: undefined;
+export type TabParamList = {
+  Calendar: undefined;
+  Ideas: undefined;
+  People: undefined;
+  You: undefined;
 };

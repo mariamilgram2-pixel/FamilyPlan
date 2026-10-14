@@ -5,13 +5,15 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
       "backgroundColor": "#C4B5A0"
     },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.familyplan.app"
@@ -32,6 +34,13 @@
         "expo-secure-store",
         {
           "faceIDPermission": "Allow FamilyPlan to use Face ID to authenticate."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow sheep to access your photos so you can import a work schedule screenshot.",
+          "cameraPermission": false
         }
       ]
     ]

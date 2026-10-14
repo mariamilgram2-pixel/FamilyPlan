@@ -38,7 +38,7 @@ export function GroupProvider({ children }: { children: React.ReactNode }) {
       .filter(Boolean);
 
     setGroups(fetched);
-    if (fetched.length > 0 && !activeGroup) setActiveGroup(fetched[0]);
+    setActiveGroup(prev => (prev && fetched.some(g => g.id === prev.id) ? prev : fetched[0] ?? null));
     setLoadingGroups(false);
   }, [user]);
 

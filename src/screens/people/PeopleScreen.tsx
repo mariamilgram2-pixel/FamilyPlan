@@ -1,54 +1,100 @@
+// People
+//
+// Three chunks — Groups, Your people, People you plan with — each capped at
+// five rows with an explicit "Show all". Creating things (group, person,
+// join by code) is one "+" menu instead of three competing cards. Group
+// management (invite code, members, leave) lives in the group's detail.
+
 import React, { useCallback, useEffect, useState } from 'react';
-import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, TextInput, Alert, Modal, KeyboardAvoidingView, Platform,
-} from 'react-native';
+import { ActivityIndicator, ScrollView, View } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { supabase } from '../../lib/supabase';
+import { notify, confirmAction } from '../../lib/alert';
+import { DEMO_CONTACTS, DEMO_MEMBERS, DEMO_ME, isDemoGroup } from '../../lib/demo';
+import { useShortcut } from '../../lib/shortcuts';
 import { useAuth } from '../../contexts/AuthContext';
 import { useGroup } from '../../contexts/GroupContext';
-import { Profile } from '../../types';
+import { Contact, Group, Profile } from '../../types';
 import Avatar, { AvatarPerson } from '../../components/Avatar';
 import AvatarStack from '../../components/AvatarStack';
-import { colors, radius, shadow } from '../../theme';
+import { useGroupSheets, useVisibleGroups } from '../../components/GroupSwitcher';
+import {
+  Button, EmptyState, Field, IconButton, ListRow, ListSection, Menu, ReadingColumn,
+  ScreenHeader, Sheet, SplitView, Tag, Txt, useBottomClearance,
+} from '../../components/ui';
+import { continuous, radius, space, tabularNums, useLayout, useTheme } from '../../theme';
 
 interface PersonEntry {
   profile: Profile;
   groups: { id: string; name: string }[];
 }
 
+type Selection =
+  | { kind: 'group'; id: string }
+  | { kind: 'contact'; id: string }
+  | { kind: 'person'; id: string }
+  | null;
+
+const CHUNK = 5;
+
 export default function PeopleScreen() {
   const { user } = useAuth();
-  const { groups, activeGroup, setActiveGroup, joinGroup, createGroup } = useGroup();
+  const { activeGroup, setActiveGroup, fetchGroups } = useGroup();
+  const groups = useVisibleGroups();
+  const { c } = useTheme();
+  const { threeColumn, compact } = useLayout();
+  const bottomClearance = useBottomClearance();
+  const isDemo = isDemoGroup(activeGroup);
+  const meId = user?.id ?? (isDemo ? DEMO_ME : null);
+  const { openCreate, openJoin, sheets: groupSheets } = useGroupSheets();
 
   const [people, setPeople] = useState<PersonEntry[]>([]);
   const [membersByGroup, setMembersByGroup] = useState<Record<string, Profile[]>>({});
+  const [contacts, setContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(false);
+  const [selection, setSelection] = useState<Selection>(null);
+  const [showAllPeople, setShowAllPeople] = useState(false);
+  const [showAllContacts, setShowAllContacts] = useState(false);
 
-  const [modalMode, setModalMode] = useState<null | 'create' | 'join'>(null);
-  const [inviteCode, setInviteCode] = useState('');
-  const [newName, setNewName] = useState('');
-  const [newDesc, setNewDesc] = useState('');
+  // Person sheet (add / edit contact)
+  const [personSheet, setPersonSheet] = useState<null | { editing: Contact | null }>(null);
+  const [personName, setPersonName] = useState('');
+  const [personEmail, setPersonEmail] = useState('');
+  const [personNote, setPersonNote] = useState('');
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    if (groups.length === 0) { setPeople([]); setMembersByGroup({}); return; }
+    if (isDemo) {
+      const others = DEMO_MEMBERS.filter(m => m.id !== DEMO_ME);
+      setMembersByGroup({ [activeGroup!.id]: DEMO_MEMBERS });
+      setPeople(others.map(p => ({ profile: p, groups: [{ id: activeGroup!.id, name: activeGroup!.name }] })));
+      setContacts(DEMO_CONTACTS);
+      return;
+    }
     setLoading(true);
 
-    const results = await Promise.all(
-      groups.map(g =>
-        supabase.from('group_members')
-          .select('profiles(id, full_name, email, avatar_url)')
-          .eq('group_id', g.id)
-          .then(({ data }) => ({
-            group: g,
-            members: ((data ?? []).map((r: any) => r.profiles).filter(Boolean)) as Profile[],
-          }))
-      )
-    );
+    const memberPromise = groups.length === 0
+      ? Promise.resolve([] as { group: { id: string; name: string }; members: Profile[] }[])
+      : Promise.all(
+          groups.map(g =>
+            supabase.from('group_members')
+              .select('profiles(id, full_name, email, avatar_url)')
+              .eq('group_id', g.id)
+              .then(({ data }) => ({
+                group: g,
+                members: ((data ?? []).map((r: any) => r.profiles).filter(Boolean)) as Profile[],
+              }))
+          )
+        );
+
+    const contactsPromise = user
+      ? supabase.from('contacts').select('*').eq('owner_id', user.id).order('name')
+      : Promise.resolve({ data: [] as Contact[] } as any);
+
+    const [results, contactsRes] = await Promise.all([memberPromise, contactsPromise]);
 
     const byGroup: Record<string, Profile[]> = {};
     const peopleMap = new Map<string, PersonEntry>();
-
     results.forEach(({ group, members }) => {
       byGroup[group.id] = members;
       members.forEach(p => {
@@ -60,285 +106,309 @@ export default function PeopleScreen() {
     });
 
     setMembersByGroup(byGroup);
-    setPeople(Array.from(peopleMap.values()).sort((a, b) => {
-      const an = a.profile.full_name ?? a.profile.email ?? '';
-      const bn = b.profile.full_name ?? b.profile.email ?? '';
-      return an.localeCompare(bn);
-    }));
+    setPeople(Array.from(peopleMap.values()).sort((a, b) =>
+      (a.profile.full_name ?? a.profile.email ?? '').localeCompare(b.profile.full_name ?? b.profile.email ?? '')));
+    setContacts((contactsRes?.data ?? []) as Contact[]);
     setLoading(false);
-  }, [groups, user]);
+  }, [groups, user, isDemo, activeGroup]);
 
   useEffect(() => { load(); }, [load]);
 
-  function openJoin()   { setInviteCode(''); setModalMode('join'); }
-  function openCreate() { setNewName(''); setNewDesc(''); setModalMode('create'); }
+  // Detail column defaults to the active group.
+  useEffect(() => {
+    if (!threeColumn) { setSelection(null); return; }
+    if (!selection && activeGroup) setSelection({ kind: 'group', id: activeGroup.id });
+  }, [threeColumn, activeGroup]);
 
-  async function handleJoin() {
-    if (!inviteCode.trim()) return Alert.alert('Required', 'Enter an invite code.');
+  // ─── Person (contact) actions ─────────────────────────────────────────────
+  function openPersonSheet(editing: Contact | null) {
+    setPersonName(editing?.name ?? '');
+    setPersonEmail(editing?.email ?? '');
+    setPersonNote(editing?.note ?? '');
+    setPersonSheet({ editing });
+  }
+
+  async function savePerson() {
+    if (!personName.trim()) return;
+    if (isDemo || !user) return notify('Demo mode', 'Sign in to save people.');
     setBusy(true);
-    const { error } = await joinGroup(inviteCode.trim());
+    const payload = {
+      owner_id: user.id,
+      name: personName.trim(),
+      email: personEmail.trim() || null,
+      note: personNote.trim() || null,
+    };
+    const editingId = personSheet?.editing?.id;
+    const { error } = editingId
+      ? await supabase.from('contacts').update(payload as any).eq('id', editingId)
+      : await supabase.from('contacts').insert(payload as any);
     setBusy(false);
-    if (error) return Alert.alert('Error', error.message);
-    setModalMode(null);
+    if (error) return notify('Couldn’t save', error.message);
+    setPersonSheet(null);
     load();
   }
 
-  async function handleCreate() {
-    if (!newName.trim()) return Alert.alert('Required', 'Give the group a name.');
-    setBusy(true);
-    const { error } = await createGroup(newName.trim(), newDesc.trim());
-    setBusy(false);
-    if (error) return Alert.alert('Error', error.message);
-    setModalMode(null);
+  async function removeContact(ct: Contact) {
+    if (!(await confirmAction('Remove person', `Remove ${ct.name} from your people?`, 'Remove'))) return;
+    if (isDemo) return notify('Demo mode', 'Sign in to manage people.');
+    const { error } = await supabase.from('contacts').delete().eq('id', ct.id);
+    if (error) return notify('Couldn’t remove', error.message);
+    setSelection(null);
     load();
   }
+
+  async function leaveGroup(g: Group) {
+    if (!(await confirmAction('Leave group', `Leave “${g.name}”? You’ll need a new invite code to rejoin.`, 'Leave'))) return;
+    if (isDemo || !user) return notify('Demo mode', 'Sign in to manage groups.');
+    const { error } = await supabase.from('group_members').delete().eq('group_id', g.id).eq('user_id', user.id);
+    if (error) return notify('Couldn’t leave', error.message);
+    setSelection(null);
+    await fetchGroups();
+  }
+
+  useShortcut('n', () => openPersonSheet(null));
+
+  // ─── List ──────────────────────────────────────────────────────────────────
+  const isSel = (kind: string, id: string) => threeColumn && selection?.kind === kind && selection.id === id;
+  const shownPeople = showAllPeople ? people : people.slice(0, CHUNK);
+  const shownContacts = showAllContacts ? contacts : contacts.slice(0, CHUNK);
+
+  const addMenu = (
+    <Menu
+      title="Add"
+      sections={[{ items: [
+        { key: 'person', label: 'Add Person…', icon: 'person-add-outline', onSelect: () => openPersonSheet(null) },
+        { key: 'group', label: 'New Group…', icon: 'add-circle-outline', onSelect: openCreate },
+        { key: 'join', label: 'Join with Code…', icon: 'enter-outline', onSelect: openJoin },
+      ] }]}
+    >
+      {(open) => <IconButton icon="add" label="Add" variant="gray" onPress={open} />}
+    </Menu>
+  );
+
+  const list = (
+    <ScrollView contentContainerStyle={{ paddingBottom: bottomClearance }}>
+      <ScreenHeader title="People" trailing={addMenu} />
+      <View style={{ paddingHorizontal: compact ? space.m : space.s, gap: space.l, paddingTop: space.s }}>
+        {loading && <ActivityIndicator color={c.secondaryLabel} />}
+
+        <ListSection header="Groups">
+          {groups.map(g => {
+            const members = membersByGroup[g.id] ?? [];
+            const active = g.id === activeGroup?.id;
+            return (
+              <ListRow
+                key={g.id}
+                title={g.name}
+                subtitle={`${members.length} member${members.length === 1 ? '' : 's'}${active ? ' · Active' : ''}`}
+                trailing={members.length > 0 ? <AvatarStack people={members as AvatarPerson[]} max={3} size={24} ringColor={c.fill} /> : null}
+                chevron={!threeColumn}
+                selected={isSel('group', g.id)}
+                onPress={() => setSelection({ kind: 'group', id: g.id })}
+              />
+            );
+          })}
+          {groups.length === 0 ? (
+            <ListRow key="none" title="Create or join a group" icon="add-circle-outline" tintTitle onPress={openCreate} />
+          ) : null}
+        </ListSection>
+
+        <ListSection header="Your people" separatorInset={64} footer={contacts.length === 0 ? 'People you add show up when you’re deciding who an idea is for.' : undefined}>
+          {shownContacts.map(ct => (
+            <ListRow
+              key={ct.id}
+              leading={<Avatar person={{ id: ct.id, full_name: ct.name }} size={32} />}
+              title={ct.name}
+              subtitle={ct.email ?? ct.note}
+              chevron={!threeColumn}
+              selected={isSel('contact', ct.id)}
+              onPress={() => setSelection({ kind: 'contact', id: ct.id })}
+            />
+          ))}
+          {contacts.length > CHUNK ? (
+            <ListRow key="more" title={showAllContacts ? 'Show fewer' : `Show all ${contacts.length}`} tintTitle onPress={() => setShowAllContacts(x => !x)} />
+          ) : null}
+          <ListRow key="add" icon="person-add-outline" title="Add Person" tintTitle onPress={() => openPersonSheet(null)} />
+        </ListSection>
+
+        {people.length > 0 && (
+          <ListSection header="People you plan with" separatorInset={64}>
+            {shownPeople.map(p => (
+              <ListRow
+                key={p.profile.id}
+                leading={<Avatar person={p.profile} size={32} />}
+                title={p.profile.full_name ?? p.profile.email}
+                subtitle={p.groups.map(g => g.name).join(', ')}
+                chevron={!threeColumn}
+                selected={isSel('person', p.profile.id)}
+                onPress={() => setSelection({ kind: 'person', id: p.profile.id })}
+              />
+            ))}
+            {people.length > CHUNK ? (
+              <ListRow key="more" title={showAllPeople ? 'Show fewer' : `Show all ${people.length}`} tintTitle onPress={() => setShowAllPeople(x => !x)} />
+            ) : null}
+          </ListSection>
+        )}
+      </View>
+    </ScrollView>
+  );
+
+  // ─── Detail ────────────────────────────────────────────────────────────────
+  const selGroup = selection?.kind === 'group' ? groups.find(g => g.id === selection.id) ?? null : null;
+  const selContact = selection?.kind === 'contact' ? contacts.find(x => x.id === selection.id) ?? null : null;
+  const selPerson = selection?.kind === 'person' ? people.find(x => x.profile.id === selection.id) ?? null : null;
+
+  let detailBody: React.ReactNode = null;
+  let detailTitle = '';
+  if (selGroup) {
+    detailTitle = 'Group';
+    detailBody = (
+      <GroupDetail
+        group={selGroup}
+        isActive={selGroup.id === activeGroup?.id}
+        meId={meId}
+        fallbackMembers={membersByGroup[selGroup.id] ?? []}
+        isDemo={isDemo}
+        onMakeActive={() => setActiveGroup(selGroup)}
+        onLeave={() => leaveGroup(selGroup)}
+      />
+    );
+  } else if (selContact) {
+    detailTitle = 'Person';
+    detailBody = (
+      <View style={{ gap: space.l }}>
+        <IdentityHeader person={{ id: selContact.id, full_name: selContact.name }} title={selContact.name} subtitle={selContact.email} />
+        {selContact.note ? (
+          <ListSection header="Note"><View style={{ padding: space.m }}><Txt v="body">{selContact.note}</Txt></View></ListSection>
+        ) : null}
+        <ListSection>
+          <ListRow icon="create-outline" title="Edit" tintTitle onPress={() => { if (!threeColumn) setSelection(null); openPersonSheet(selContact); }} />
+          <ListRow icon="trash-outline" title="Remove from Your People" destructive onPress={() => removeContact(selContact)} />
+        </ListSection>
+      </View>
+    );
+  } else if (selPerson) {
+    detailTitle = 'Person';
+    detailBody = (
+      <View style={{ gap: space.l }}>
+        <IdentityHeader person={selPerson.profile} title={selPerson.profile.full_name ?? selPerson.profile.email} subtitle={selPerson.profile.full_name ? selPerson.profile.email : null} />
+        <ListSection header="Shared groups">
+          {selPerson.groups.map(g => <ListRow key={g.id} title={g.name} />)}
+        </ListSection>
+      </View>
+    );
+  }
+
+  const detail = detailBody ? <ReadingColumn>{detailBody}</ReadingColumn> : (
+    <View style={{ flex: 1, justifyContent: 'center' }}>
+      <EmptyState icon="people-outline" title="Select a group or person" />
+    </View>
+  );
 
   return (
-    <View style={styles.container}>
-      <ScrollView contentContainerStyle={styles.content}>
-        {/* Actions */}
-        <View style={styles.actionsRow}>
-          <TouchableOpacity style={[styles.actionCard, styles.actionCardPrimary]} onPress={openCreate} activeOpacity={0.85}>
-            <Text style={styles.actionIconPrimary}>＋</Text>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.actionTitlePrimary}>Create group</Text>
-              <Text style={styles.actionHintPrimary}>Start planning with new people</Text>
-            </View>
-          </TouchableOpacity>
-        </View>
+    <>
+      <SplitView list={list} detail={detail} />
+      {!threeColumn && (
+        <Sheet visible={!!detailBody} onClose={() => setSelection(null)} title={detailTitle} cancelLabel="Done">
+          {detailBody}
+        </Sheet>
+      )}
+      <Sheet
+        visible={!!personSheet}
+        onClose={() => setPersonSheet(null)}
+        title={personSheet?.editing ? 'Edit Person' : 'Add Person'}
+        width={480}
+        action={{ label: personSheet?.editing ? 'Save' : 'Add', onPress: savePerson, disabled: !personName.trim(), loading: busy }}
+      >
+        <Field label="Name" value={personName} onChangeText={setPersonName} placeholder="Alex Kim" autoFocus />
+        <Field label="Email" value={personEmail} onChangeText={setPersonEmail} placeholder="Optional" keyboardType="email-address" autoCapitalize="none" autoCorrect={false} />
+        <Field
+          label="Note"
+          value={personNote}
+          onChangeText={setPersonNote}
+          placeholder="How you know them, hobbies…"
+          multiline
+          hint="People you add here show up when deciding who an idea is for."
+        />
+      </Sheet>
+      {groupSheets}
+    </>
+  );
+}
 
-        <TouchableOpacity style={styles.joinCard} onPress={openJoin} activeOpacity={0.75}>
-          <View style={styles.joinIcon}><Text style={styles.joinIconText}>#</Text></View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.joinTitle}>Join with a code</Text>
-            <Text style={styles.joinHint}>Ask someone in the group to share it</Text>
-          </View>
-          <Text style={styles.joinArrow}>›</Text>
-        </TouchableOpacity>
+// ─── Pieces ──────────────────────────────────────────────────────────────────
 
-        {/* Your groups */}
-        <Text style={styles.sectionLabel}>YOUR GROUPS</Text>
-        {loading ? (
-          <ActivityIndicator color={colors.sheep} style={{ marginVertical: 20 }} />
-        ) : groups.length === 0 ? (
-          <View style={styles.emptyCard}>
-            <Text style={styles.emptyTitle}>No groups yet</Text>
-            <Text style={styles.emptyBody}>Groups hold your shared calendars. Create one above, or join with a code.</Text>
-          </View>
-        ) : (
-          <View style={{ gap: 10 }}>
-            {groups.map(g => {
-              const members = membersByGroup[g.id] ?? [];
-              const others = members.filter(m => m.id !== user?.id);
-              const isActive = activeGroup?.id === g.id;
-              return (
-                <TouchableOpacity
-                  key={g.id}
-                  style={[styles.groupCard, isActive && styles.groupCardActive]}
-                  onPress={() => setActiveGroup(g)}
-                  activeOpacity={0.8}
-                >
-                  <View style={styles.groupHead}>
-                    <Text style={styles.groupName} numberOfLines={1}>{g.name}</Text>
-                    {isActive && (
-                      <View style={styles.activePill}>
-                        <Text style={styles.activePillText}>ACTIVE</Text>
-                      </View>
-                    )}
-                  </View>
-                  <View style={styles.groupBody}>
-                    {members.length > 0 ? (
-                      <AvatarStack people={members as AvatarPerson[]} max={5} size={26} />
-                    ) : (
-                      <Text style={styles.groupMeta}>No members yet</Text>
-                    )}
-                    <Text style={styles.groupMeta}>
-                      {members.length} member{members.length === 1 ? '' : 's'}
-                      {others.length > 0 ? ` · ${others.length} besides you` : ''}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        )}
-
-        {/* People you plan with */}
-        {people.length > 0 && (
-          <>
-            <Text style={[styles.sectionLabel, { marginTop: 28 }]}>PEOPLE YOU PLAN WITH</Text>
-            <View style={styles.peopleList}>
-              {people.map((p, idx) => (
-                <View key={p.profile.id}>
-                  {idx > 0 && <View style={styles.rowDivider} />}
-                  <View style={styles.personRow}>
-                    <Avatar person={p.profile} size={40} />
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <Text style={styles.personName} numberOfLines={1}>{p.profile.full_name ?? p.profile.email}</Text>
-                      <Text style={styles.personMeta} numberOfLines={1}>
-                        in {p.groups.map(g => g.name).join(', ')}
-                      </Text>
-                    </View>
-                    <Text style={styles.personCount}>{p.groups.length}</Text>
-                  </View>
-                </View>
-              ))}
-            </View>
-          </>
-        )}
-
-        <View style={{ height: 40 }} />
-      </ScrollView>
-
-      {/* Create / Join Modal */}
-      <Modal visible={modalMode !== null} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setModalMode(null)}>
-        <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.ground }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={styles.modalHeader}>
-            <TouchableOpacity onPress={() => setModalMode(null)}><Text style={styles.modalCancel}>Cancel</Text></TouchableOpacity>
-            <Text style={styles.modalTitle}>{modalMode === 'create' ? 'New group' : 'Join a group'}</Text>
-            <TouchableOpacity onPress={modalMode === 'create' ? handleCreate : handleJoin} disabled={busy}>
-              {busy ? <ActivityIndicator color={colors.sheep} /> : <Text style={styles.modalSave}>{modalMode === 'create' ? 'Create' : 'Join'}</Text>}
-            </TouchableOpacity>
-          </View>
-
-          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 20 }} keyboardShouldPersistTaps="handled">
-            {modalMode === 'create' ? (
-              <>
-                <Text style={styles.fieldLabel}>Name</Text>
-                <TextInput
-                  style={styles.field}
-                  value={newName}
-                  onChangeText={setNewName}
-                  placeholder="The Cohens, Book club…"
-                  placeholderTextColor={colors.muted2}
-                  autoFocus
-                />
-                <Text style={styles.fieldLabel}>Description (optional)</Text>
-                <TextInput
-                  style={[styles.field, { height: 70, textAlignVertical: 'top' }]}
-                  value={newDesc}
-                  onChangeText={setNewDesc}
-                  placeholder="Who's this for?"
-                  placeholderTextColor={colors.muted2}
-                  multiline
-                />
-              </>
-            ) : (
-              <>
-                <Text style={styles.fieldLabel}>Invite code</Text>
-                <TextInput
-                  style={[styles.field, styles.fieldMono]}
-                  value={inviteCode}
-                  onChangeText={setInviteCode}
-                  placeholder="ABC123"
-                  placeholderTextColor={colors.muted2}
-                  autoCapitalize="characters"
-                  autoCorrect={false}
-                  autoFocus
-                />
-                <Text style={styles.hint}>Ask someone in the group to share the 6-character code.</Text>
-              </>
-            )}
-          </ScrollView>
-        </KeyboardAvoidingView>
-      </Modal>
+function IdentityHeader({ person, title, subtitle }: { person: AvatarPerson; title: string; subtitle?: string | null }) {
+  return (
+    <View style={{ alignItems: 'center', gap: space.s, paddingVertical: space.m }}>
+      <Avatar person={person} size={80} />
+      <Txt v="title" align="center">{title}</Txt>
+      {subtitle ? <Txt v="callout" tone="secondary" align="center">{subtitle}</Txt> : null}
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.ground },
-  content: { padding: 20 },
+function GroupDetail({ group, isActive, meId, fallbackMembers, isDemo, onMakeActive, onLeave }: {
+  group: Group; isActive: boolean; meId: string | null; fallbackMembers: Profile[]; isDemo: boolean;
+  onMakeActive: () => void; onLeave: () => void;
+}) {
+  const { c } = useTheme();
+  const [members, setMembers] = useState<(Profile & { role?: string })[]>(fallbackMembers);
+  const [copied, setCopied] = useState(false);
+  const [showAll, setShowAll] = useState(false);
 
-  actionsRow: { flexDirection: 'row', gap: 10, marginBottom: 10 },
-  actionCard: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: colors.card, borderRadius: radius.lg,
-    padding: 14, borderWidth: 1, borderColor: colors.border,
-    ...shadow.card,
-  },
-  actionCardPrimary: { backgroundColor: colors.sheep, borderColor: colors.sheep },
-  actionIconPrimary: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.22)',
-    color: '#fff', fontSize: 22, fontWeight: '600',
-    textAlign: 'center', lineHeight: 40,
-  },
-  actionTitlePrimary: { color: '#fff', fontSize: 15, fontWeight: '700' },
-  actionHintPrimary: { color: 'rgba(255,255,255,0.85)', fontSize: 12, marginTop: 2 },
+  useEffect(() => {
+    setShowAll(false);
+    if (isDemo) { setMembers(fallbackMembers); return; }
+    supabase.from('group_members').select('profiles(id, full_name, email, avatar_url), role').eq('group_id', group.id)
+      .then(({ data }) => setMembers((data ?? []).map((r: any) => r.profiles && ({ ...r.profiles, role: r.role })).filter(Boolean)));
+  }, [group.id, isDemo]);
 
-  joinCard: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: colors.card, borderRadius: radius.lg,
-    padding: 14, borderWidth: 1, borderColor: colors.border, marginTop: 10,
-    ...shadow.card,
-  },
-  joinIcon: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: colors.sheepTint,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  joinIconText: { fontSize: 18, fontWeight: '800', color: colors.sheepDeep },
-  joinTitle: { fontSize: 15, fontWeight: '600', color: colors.ink },
-  joinHint: { fontSize: 12, color: colors.muted, marginTop: 2 },
-  joinArrow: { fontSize: 22, color: colors.muted2, fontWeight: '300' },
+  async function copy() {
+    await Clipboard.setStringAsync(group.invite_code);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  }
 
-  sectionLabel: {
-    fontSize: 11, fontWeight: '800', color: colors.muted,
-    letterSpacing: 1.4, marginTop: 24, marginBottom: 10, marginLeft: 4,
-  },
+  const shown = showAll ? members : members.slice(0, CHUNK);
 
-  emptyCard: {
-    backgroundColor: colors.card, borderRadius: radius.lg,
-    borderWidth: 1, borderColor: colors.border, padding: 20,
-  },
-  emptyTitle: { fontSize: 15, fontWeight: '700', color: colors.ink },
-  emptyBody: { fontSize: 13, color: colors.muted, marginTop: 6, lineHeight: 18 },
+  return (
+    <View style={{ gap: space.l }}>
+      <View style={{ gap: space.s }}>
+        <Txt v="title" accessibilityRole="header">{group.name}</Txt>
+        {group.description ? <Txt v="callout" tone="secondary">{group.description}</Txt> : null}
+        {isActive ? <View style={{ flexDirection: 'row' }}><Tag label="Active group" tone="tint" /></View> : null}
+      </View>
 
-  // Group cards
-  groupCard: {
-    backgroundColor: colors.card, borderRadius: radius.lg,
-    borderWidth: 1, borderColor: colors.border, padding: 14,
-    ...shadow.card,
-  },
-  groupCardActive: { borderColor: colors.sheep, backgroundColor: colors.sheepTint },
-  groupHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  groupName: { fontSize: 16, fontWeight: '700', color: colors.ink, flexShrink: 1, letterSpacing: -0.1 },
-  activePill: { backgroundColor: colors.sheepDeep, paddingHorizontal: 8, paddingVertical: 2, borderRadius: radius.pill },
-  activePillText: { color: '#fff', fontSize: 9, fontWeight: '800', letterSpacing: 0.8 },
-  groupBody: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10 },
-  groupMeta: { fontSize: 12, color: colors.muted, flexShrink: 1 },
+      <View style={{ backgroundColor: c.fill, borderRadius: radius.group, padding: space.m, gap: space.s, ...continuous }}>
+        <Txt v="footnote" tone="secondary" semibold style={{ textTransform: 'uppercase', letterSpacing: 0.4 }}>Invite code</Txt>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.m }}>
+          <Txt v="title" selectable style={[tabularNums, { flex: 1, letterSpacing: 4 }]}>{group.invite_code}</Txt>
+          <Button label={copied ? 'Copied' : 'Copy'} icon={copied ? 'checkmark' : 'copy-outline'} variant="plain" onPress={copy} />
+        </View>
+        <Txt v="footnote" tone="secondary">Share this code so others can join.</Txt>
+      </View>
 
-  // People list
-  peopleList: {
-    backgroundColor: colors.card, borderRadius: radius.lg,
-    borderWidth: 1, borderColor: colors.border,
-    ...shadow.card,
-  },
-  personRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    paddingHorizontal: 14, paddingVertical: 12,
-  },
-  personName: { fontSize: 15, fontWeight: '600', color: colors.ink },
-  personMeta: { fontSize: 12, color: colors.muted, marginTop: 2 },
-  personCount: { fontSize: 12, color: colors.muted2, fontWeight: '700' },
-  rowDivider: { height: 1, backgroundColor: colors.border, marginLeft: 60 },
+      <ListSection header={`Members · ${members.length}`} separatorInset={64}>
+        {shown.map(m => (
+          <ListRow
+            key={m.id}
+            leading={<Avatar person={m} size={32} highlight={m.id === meId} />}
+            title={m.id === meId ? `${m.full_name ?? m.email} (you)` : (m.full_name ?? m.email)}
+            subtitle={m.full_name ? m.email : null}
+            trailing={m.role === 'admin' ? <Tag label="Admin" /> : null}
+          />
+        ))}
+        {members.length > CHUNK ? (
+          <ListRow key="more" title={showAll ? 'Show fewer' : `Show all ${members.length}`} tintTitle onPress={() => setShowAll(x => !x)} />
+        ) : null}
+      </ListSection>
 
-  // Modal
-  modalHeader: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: 20, paddingTop: 20, paddingBottom: 14,
-    borderBottomWidth: 1, borderBottomColor: colors.border, backgroundColor: colors.card,
-  },
-  modalTitle: { fontSize: 17, fontWeight: '700', color: colors.ink },
-  modalCancel: { fontSize: 16, color: colors.muted },
-  modalSave: { fontSize: 16, fontWeight: '700', color: colors.sheepDeep },
-  fieldLabel: { fontSize: 13, fontWeight: '600', color: colors.ink2, marginBottom: 6, marginTop: 4 },
-  field: {
-    borderWidth: 1, borderColor: colors.border, borderRadius: radius.md,
-    paddingHorizontal: 14, paddingVertical: 12,
-    fontSize: 15, color: colors.ink, marginBottom: 12, backgroundColor: colors.card,
-  },
-  fieldMono: { fontSize: 20, letterSpacing: 2, fontWeight: '700', textAlign: 'center' },
-  hint: { fontSize: 12, color: colors.muted, marginTop: 2 },
-});
+      <ListSection>
+        {!isActive ? <ListRow key="active" icon="checkmark-circle-outline" title="Make Active Group" tintTitle onPress={onMakeActive} /> : null}
+        <ListRow key="leave" icon="exit-outline" title="Leave Group" destructive onPress={onLeave} />
+      </ListSection>
+    </View>
+  );
+}
+

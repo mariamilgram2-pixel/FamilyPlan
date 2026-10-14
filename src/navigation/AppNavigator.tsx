@@ -6,20 +6,25 @@ import { useGroup } from '../contexts/GroupContext';
 import AuthNavigator from './AuthNavigator';
 import TabNavigator from './TabNavigator';
 import GroupSetupScreen from '../screens/GroupSetupScreen';
+import { useTheme } from '../theme';
 
 const Stack = createNativeStackNavigator();
 
 // Shared skip flag — LoginScreen can call this to bypass auth in dev
 let _skipAuth = false;
 export function skipAuthForDev() { _skipAuth = true; }
+/** Leave demo mode and return to sign-in. */
+export function exitDemo() { _skipAuth = false; (skipAuthForDev as any)._exit?.(); }
 
 export default function AppNavigator() {
   const { session, loading } = useAuth();
   const { groups, loadingGroups } = useGroup();
   const [skipped, setSkipped] = useState(false);
+  const { c } = useTheme();
 
   // Expose a way for LoginScreen to trigger re-render after skip
   (skipAuthForDev as any)._notify = () => setSkipped(true);
+  (skipAuthForDev as any)._exit = () => setSkipped(false);
 
   if (_skipAuth || skipped) {
     return <TabNavigator />;
@@ -27,8 +32,8 @@ export default function AppNavigator() {
 
   if (loading || (session && loadingGroups)) {
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5f3e7' }}>
-        <ActivityIndicator size="large" color="#8dc76d" />
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: c.background }}>
+        <ActivityIndicator size="large" color={c.secondaryLabel} />
       </View>
     );
   }
