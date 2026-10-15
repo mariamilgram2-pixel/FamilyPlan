@@ -166,14 +166,28 @@ CREATE POLICY "Group admins can update their group"
   USING (id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid() AND role = 'admin'));
 
 -- group_members
+-- "Which groups am I in?" via SECURITY DEFINER helpers: asking it by reading
+-- group_members inside group_members' own policy recurses forever.
+CREATE OR REPLACE FUNCTION public.my_group_ids()
+RETURNS SETOF UUID LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT group_id FROM public.group_members WHERE user_id = auth.uid();
+$$;
+CREATE OR REPLACE FUNCTION public.my_admin_group_ids()
+RETURNS SETOF UUID LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT group_id FROM public.group_members WHERE user_id = auth.uid() AND role = 'admin';
+$$;
+
 CREATE POLICY "Members can view membership of their groups"
   ON public.group_members FOR SELECT
-  USING (group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid()));
+  USING (group_id IN (SELECT public.my_group_ids()));
 CREATE POLICY "Authenticated users can join groups"
   ON public.group_members FOR INSERT WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Admins can manage members"
   ON public.group_members FOR DELETE
-  USING (group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid() AND role = 'admin'));
+  USING (group_id IN (SELECT public.my_admin_group_ids()));
+CREATE POLICY "Members can leave their groups"
+  ON public.group_members FOR DELETE
+  USING (user_id = auth.uid());
 
 -- events
 CREATE POLICY "Group members can view events"
