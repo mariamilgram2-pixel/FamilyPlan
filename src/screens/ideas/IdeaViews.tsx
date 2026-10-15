@@ -2,9 +2,12 @@ import React from 'react';
 import { View } from 'react-native';
 import { AppNotification, Idea, TimeSlot } from '../../types';
 import Avatar, { AvatarPerson } from '../../components/Avatar';
-import { Button, Icon, ListRow, ListSection, Segmented, Tag, Tappable, Txt } from '../../components/ui';
+import { Button, Icon, ListRow, ListSection, Tag, Tappable, Txt } from '../../components/ui';
 import { continuous, radius, space, tabularNums, useTheme } from '../../theme';
 import { slotDay, slotLabel, slotTime } from '../../lib/planner';
+import { bestSlot, dateVoters, tallySlots } from '../../lib/rsvp';
+import { STAGE_LABEL, awaitingYourDates, readyToSend, stageOf } from '../../lib/plans';
+import AvatarStack from '../../components/AvatarStack';
 import { shortDate } from '../calendar/dates';
 
 export const STATUS_LABEL: Record<Idea['status'], string> = {
@@ -13,7 +16,6 @@ export const STATUS_LABEL: Record<Idea['status'], string> = {
   done: 'Done',
 };
 
-export const STATUS_OPTIONS = (['proposed', 'planned', 'done'] as const).map(k => ({ key: k, label: STATUS_LABEL[k] }));
 
 /** Upcoming date options on a proposed idea. */
 export function upcomingSlots(idea: Idea): TimeSlot[] {
@@ -64,45 +66,57 @@ export function VoteButton({ count, voted, onPress }: { count: number; voted: bo
 interface RowProps {
   idea: Idea;
   voted: boolean;
-  showStatus: boolean;
+  meId: string | null;
   audienceSummary: string | null;
   selected: boolean;
   onVote: () => void;
   onPress: () => void;
 }
 
-export function IdeaRow({ idea, voted, showStatus, audienceSummary, selected, onVote, onPress }: RowProps) {
-  const options = idea.status === 'proposed' ? upcomingSlots(idea).length : 0;
+export function IdeaRow({ idea, voted, meId, audienceSummary, selected, onVote, onPress }: RowProps) {
+  const { c } = useTheme();
+  const stage = stageOf(idea);
   const booked = scheduled(idea);
-  // With "Show all" the tag carries the stamp; otherwise it leads the meta line.
-  const stamp = idea.status !== 'done' ? statusStamp(idea) : null;
-  const meta = [
-    showStatus ? null : stamp,
-    booked ? `On ${slotLabel(booked)}` : null,
-    options ? `${options} date option${options === 1 ? '' : 's'}` : null,
-    audienceSummary ? `For ${audienceSummary}` : null,
-    idea.profiles?.full_name ? `by ${idea.profiles.full_name}` : null,
-  ].filter(Boolean).join(' · ');
+  const options = stage === 'dates' ? upcomingSlots(idea).length : 0;
+  const answered = Object.keys(idea.slot_votes ?? {}).length;
+  const voters = dateVoters(idea).length;
+  const needsYou = awaitingYourDates(idea, meId);
+  const ready = readyToSend(idea, meId);
+
+  // One line that says where it stands, then who it's for.
+  const where =
+    ready ? 'Everyone answered — send the invite'
+    : needsYou ? 'Say which dates work for you'
+    : stage === 'dates' ? `${options} date option${options === 1 ? '' : 's'} · ${answered} of ${voters} answered`
+    : booked ? `${stage === 'happened' ? '' : 'On '}${slotLabel(booked)}`
+    : stage === 'happened' ? 'Happened'
+    : statusStamp(idea);
+  const meta = [where, audienceSummary ? `For ${audienceSummary}` : null, idea.profiles?.full_name ? `by ${idea.profiles.full_name.split(' ')[0]}` : null]
+    .filter(Boolean).join(' · ');
+  const strong = needsYou || ready;
 
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.s, paddingLeft: space.m }}>
-      <VoteButton count={idea.votes} voted={voted} onPress={onVote} />
+      {stage === 'idea' || stage === 'dates' ? (
+        <VoteButton count={idea.votes} voted={voted} onPress={onVote} />
+      ) : (
+        <View style={{ width: 48, height: 56, alignItems: 'center', justifyContent: 'center' }}>
+          <Icon name={stage === 'on' ? 'calendar' : 'checkmark-done'} size={22} color={stage === 'on' ? c.tint : c.secondaryLabel} />
+        </View>
+      )}
       <Tappable
         onPress={onPress}
         selected={selected}
-        accessibilityLabel={[idea.title, showStatus ? statusStamp(idea) : null, meta || null].filter(Boolean).join(', ')}
+        accessibilityLabel={[idea.title, meta || null].filter(Boolean).join(', ')}
         style={{
           flex: 1, minWidth: 0, minHeight: 72, justifyContent: 'center',
           paddingVertical: space.s, paddingHorizontal: space.s, marginRight: space.s,
           borderRadius: radius.row, ...continuous,
         }}
       >
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.s }}>
-          <Txt v="headline" numberOfLines={1} style={{ flexShrink: 1 }}>{idea.title}</Txt>
-          {showStatus ? <Tag label={statusStamp(idea)} tone={idea.status === 'planned' ? 'tint' : 'secondary'} /> : null}
-        </View>
+        <Txt v="headline" numberOfLines={1} tone={stage === 'happened' ? 'secondary' : 'primary'}>{idea.title}</Txt>
         {idea.description ? <Txt v="callout" tone="secondary" numberOfLines={1}>{idea.description}</Txt> : null}
-        {meta ? <Txt v="footnote" tone="secondary" numberOfLines={1} style={{ marginTop: 2 }}>{meta}</Txt> : null}
+        {meta ? <Txt v="footnote" tone={strong ? 'tint' : 'secondary'} semibold={strong} numberOfLines={1} style={{ marginTop: 2 }}>{meta}</Txt> : null}
       </Tappable>
     </View>
   );
@@ -127,14 +141,23 @@ interface DetailProps {
   audienceGroupNames: string[];
   meId: string | null;
   onVote: () => void;
-  onStatusChange: (s: Idea['status']) => void;
   onPlan: () => void;
   onPickSlot: (slot: TimeSlot) => void;
+  onSlotVotes: (starts: string[]) => void;
+  personOf: (id: string) => AvatarPerson;
+  onOpenEvent?: () => void;     // "See on Calendar" once it's booked
+  onDoAgain?: () => void;       // after: same plan again
+  onSamePeople?: () => void;    // after: same people, new plan
+  onAddMemories?: () => void;   // after: photos and notes on its event
+  onDrop?: () => void;          // whoever proposed it can let it go
+  conversation?: React.ReactNode;
 }
 
-export function IdeaDetail({ idea, voted, voters, audience, audienceGroupNames, meId, onVote, onStatusChange, onPlan, onPickSlot }: DetailProps) {
-  const options = idea.status === 'proposed' ? upcomingSlots(idea) : [];
+export function IdeaDetail({ idea, voted, voters, audience, audienceGroupNames, meId, onVote, onPlan, onPickSlot, onSlotVotes, personOf, onOpenEvent, onDoAgain, onSamePeople, onAddMemories, onDrop, conversation }: DetailProps) {
+  const stage = stageOf(idea);
+  const options = stage === 'dates' ? upcomingSlots(idea) : [];
   const booked = scheduled(idea);
+  const early = stage === 'idea' || stage === 'dates';
   const facts = [
     booked ? { icon: 'calendar' as const, text: slotLabel(booked) } : null,
     !booked && idea.target_date ? { icon: 'calendar-outline' as const, text: `Hoping for ${shortDate(idea.target_date)}` } : null,
@@ -144,45 +167,51 @@ export function IdeaDetail({ idea, voted, voters, audience, audienceGroupNames, 
   return (
     <View style={{ gap: space.l }}>
       <View style={{ gap: space.s }}>
+        <View style={{ flexDirection: 'row' }}><Tag label={STAGE_LABEL[stage]} tone={stage === 'on' ? 'tint' : 'secondary'} /></View>
         <Txt v="title" accessibilityRole="header">{idea.title}</Txt>
         <Txt v="callout" tone="secondary">
-          {[
-            `Proposed${idea.profiles?.full_name ? ` by ${idea.profiles.full_name}` : ''} on ${stampDate(idea.created_at)}`,
-            idea.status !== 'proposed' && idea.planned_at ? `planned ${stampDate(idea.planned_at)}` : null,
-          ].filter(Boolean).join(' · ')}
+          {`Proposed${idea.profiles?.full_name ? ` by ${idea.profiles.full_name}` : ''} on ${stampDate(idea.created_at)}`}
         </Txt>
         {facts.map(f => <FactLine key={f.text} icon={f.icon} text={f.text} />)}
         {idea.description ? <Txt v="body" style={{ marginTop: space.s }}>{idea.description}</Txt> : null}
       </View>
 
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.m }}>
-        <Button
-          label={voted ? 'You’re in' : 'I’m in'}
-          icon={voted ? 'checkmark' : 'arrow-up'}
-          variant={voted ? 'gray' : 'filled'}
-          onPress={onVote}
-        />
-        <Txt v="callout" tone="secondary">
-          {idea.votes === 0 ? 'No votes yet' : `${idea.votes} ${idea.votes === 1 ? 'person' : 'people'} interested`}
-        </Txt>
-      </View>
+      {early ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.m }}>
+          <Button
+            label={voted ? 'You’re in' : 'I’m in'}
+            icon={voted ? 'checkmark' : 'arrow-up'}
+            variant={voted ? 'gray' : 'filled'}
+            onPress={onVote}
+          />
+          <Txt v="callout" tone="secondary">
+            {idea.votes === 0 ? 'No one’s in yet' : `${idea.votes} ${idea.votes === 1 ? 'person' : 'people'} in`}
+          </Txt>
+        </View>
+      ) : null}
 
       {options.length > 0 && (
-        <ListSection header="Proposed dates" footer="Tap a date to send the invite.">
-          {options.map(s => (
-            <ListRow key={s.start} icon="calendar-outline" title={shortDate(slotDay(s))} subtitle={slotTime(s)} chevron onPress={() => onPickSlot(s)} />
-          ))}
-        </ListSection>
+        <DateVotes idea={idea} options={options} meId={meId} personOf={personOf} onSlotVotes={onSlotVotes} onPickSlot={onPickSlot} />
       )}
 
-      {idea.status === 'proposed' && (
-        <Button label={options.length ? 'Find Other Times' : 'Find a Time'} icon="calendar-outline" variant="gray" onPress={onPlan} />
+      {early && (
+        <Button label={options.length ? 'Find Other Times' : 'Find a Time'} icon="search-outline" variant="gray" onPress={onPlan} />
       )}
-
-      <View style={{ gap: space.s }}>
-        <Txt v="footnote" tone="secondary" semibold style={{ textTransform: 'uppercase', letterSpacing: 0.4, paddingHorizontal: space.m }}>Status</Txt>
-        <Segmented options={STATUS_OPTIONS} value={idea.status} onChange={onStatusChange} />
-      </View>
+      {stage === 'on' && onOpenEvent ? (
+        <Button label="See on Calendar" icon="calendar-outline" variant="gray" onPress={onOpenEvent} />
+      ) : null}
+      {stage === 'happened' ? (
+        <View style={{ gap: space.s }}>
+          <Txt v="headline" style={{ paddingHorizontal: space.m }}>How was it?</Txt>
+          {onAddMemories ? <Button label="Add Memories" icon="images-outline" onPress={onAddMemories} block /> : null}
+          {onDoAgain || onSamePeople ? (
+            <ListSection separatorInset={60}>
+              {onDoAgain ? <ListRow icon="refresh" title="Same plan again" tintTitle chevron onPress={onDoAgain} /> : null}
+              {onSamePeople ? <ListRow icon="people-outline" title="Same people, new plan" tintTitle chevron onPress={onSamePeople} /> : null}
+            </ListSection>
+          ) : null}
+        </View>
+      ) : null}
 
       {(audienceGroupNames.length > 0 || audience.length > 0) && (
         <ListSection header="For" separatorInset={64}>
@@ -195,8 +224,8 @@ export function IdeaDetail({ idea, voted, voters, audience, audienceGroupNames, 
         </ListSection>
       )}
 
-      {voters.length > 0 && (
-        <ListSection header={`Interested · ${voters.length}`} separatorInset={64}>
+      {voters.length > 0 && early && (
+        <ListSection header={`In · ${voters.length}`} separatorInset={64}>
           {voters.map(v => (
             <ListRow
               key={v.id}
@@ -205,6 +234,96 @@ export function IdeaDetail({ idea, voted, voters, audience, audienceGroupNames, 
             />
           ))}
         </ListSection>
+      )}
+
+      {conversation}
+
+      {onDrop && early ? (
+        <ListSection>
+          <ListRow icon="trash-outline" title="Drop This Idea" destructive onPress={onDrop} />
+        </ListSection>
+      ) : null}
+    </View>
+  );
+}
+
+// ─── Date votes ──────────────────────────────────────────────────────────────
+
+/**
+ * "Which of these work for you?" Everyone ticks the dates they can make; the
+ * person who proposed it sees which one works for the most people and sends
+ * the invite from there.
+ */
+function DateVotes({ idea, options, meId, personOf, onSlotVotes, onPickSlot }: {
+  idea: Idea; options: TimeSlot[]; meId: string | null; personOf: (id: string) => AvatarPerson;
+  onSlotVotes: (starts: string[]) => void; onPickSlot: (slot: TimeSlot) => void;
+}) {
+  const { c } = useTheme();
+  const organizer = !!meId && idea.created_by === meId;
+  const mine = meId ? idea.slot_votes?.[meId] : undefined;   // undefined = hasn't answered
+  const tallies = tallySlots(idea, options);
+  const best = bestSlot(tallies);
+  const everyone = dateVoters(idea);
+  const answered = everyone.filter(id => idea.slot_votes?.[id]);
+  const waiting = everyone.filter(id => !idea.slot_votes?.[id]);
+  const allIn = !!best && waiting.length === 0 && best.yes.length === everyone.length;
+  const first = (id: string) => (id === meId ? 'you' : personOf(id).full_name?.split(' ')[0] ?? 'someone');
+  const host = idea.created_by ? first(idea.created_by) : 'The organizer';
+
+  function toggle(start: string) {
+    const current = mine ?? [];
+    onSlotVotes(current.includes(start) ? current.filter(s => s !== start) : [...current, start]);
+  }
+
+  const summary =
+    waiting.length === 0 ? (allIn ? `${slotLabel(best!.slot)} works for everyone.` : 'Everyone has answered.')
+    : `${answered.length} of ${everyone.length} answered · waiting on ${waiting.map(first).join(', ')}`;
+
+  return (
+    <View style={{ gap: space.s }}>
+      <ListSection
+        header={mine ? 'Dates · tap the ones that work' : 'Which dates work for you?'}
+        footer={summary}
+        separatorInset={60}
+      >
+        {tallies.map(({ slot, yes }) => {
+          const checked = !!mine?.includes(slot.start);
+          const top = best?.slot.start === slot.start;
+          return (
+            <ListRow
+              key={slot.start}
+              leading={<Icon name={checked ? 'checkmark-circle' : 'ellipse-outline'} size={24} color={checked ? c.tint : c.secondaryLabel} />}
+              title={shortDate(slotDay(slot))}
+              subtitle={`${slotTime(slot)} · ${yes.length} of ${everyone.length} can make it${top && yes.length > 1 ? ' · best so far' : ''}`}
+              trailing={yes.length ? <AvatarStack people={yes.map(personOf)} max={3} size={24} ringColor={c.fill} /> : undefined}
+              onPress={() => toggle(slot.start)}
+            />
+          );
+        })}
+        {mine === undefined || mine.length > 0 ? (
+          <ListRow key="none" title="None of these work" tintTitle onPress={() => onSlotVotes([])} />
+        ) : (
+          <ListRow key="none" title="You said none of these work" subtitle="Tap a date if that changes" />
+        )}
+      </ListSection>
+
+      {organizer ? (
+        <View style={{ gap: space.s }}>
+          <Button
+            label={best ? `Send Invite for ${shortDate(slotDay(best.slot))}` : 'Choose a Date & Send Invite'}
+            icon="send"
+            variant={allIn || waiting.length === 0 ? 'filled' : 'gray'}
+            onPress={() => onPickSlot(best?.slot ?? options[0])}
+            block
+          />
+          {!allIn && waiting.length > 0 ? (
+            <Txt v="footnote" tone="secondary" style={{ paddingHorizontal: space.m }}>You can send it now, or wait until everyone answers.</Txt>
+          ) : null}
+        </View>
+      ) : (
+        <Txt v="footnote" tone="secondary" style={{ paddingHorizontal: space.m }}>
+          {host === 'you' ? 'You' : host.charAt(0).toUpperCase() + host.slice(1)} will send the invite once a date is picked.
+        </Txt>
       )}
     </View>
   );

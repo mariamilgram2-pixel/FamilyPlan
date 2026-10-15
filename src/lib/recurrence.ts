@@ -91,14 +91,16 @@ export function expandEvents(events: Event[], from: Date, to: Date): Event[] {
     const start = new Date(e.start_time);
     const length = new Date(e.end_time).getTime() - start.getTime();
     const until = r.until ? parseKey(r.until).getTime() + 86400000 : Infinity;   // inclusive day
+    let count = 0;   // real occurrences so far, for "#5" and whose turn it is to host
     for (let i = 0; i < MAX_OCCURRENCES; i++) {
       const s = nth(start, r, i);
       if (!s) continue;
       if (s.getTime() >= to.getTime() || s.getTime() >= until) break;
       if (r.weekdaysOnly && (s.getDay() === 0 || s.getDay() === 6)) continue;
+      const occurrence = count++;
       const end = new Date(s.getTime() + length);
       if (end.getTime() <= from.getTime()) continue;
-      out.push({ ...e, id: `${e.id}@${dateKey(s)}`, series_id: e.id, start_time: s.toISOString(), end_time: end.toISOString() });
+      out.push({ ...e, id: `${e.id}@${dateKey(s)}`, series_id: e.id, occurrence, start_time: s.toISOString(), end_time: end.toISOString() });
     }
   }
   return out.sort((a, b) => a.start_time.localeCompare(b.start_time));

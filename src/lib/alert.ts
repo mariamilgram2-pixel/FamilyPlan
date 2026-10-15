@@ -11,6 +11,7 @@ export interface AlertRequest {
   title: string;
   message?: string;
   confirmLabel?: string;     // present → two-button confirmation
+  cancelLabel?: string;
   destructive?: boolean;
   resolve: (ok: boolean) => void;
 }
@@ -34,14 +35,14 @@ export function notify(title: string, message?: string) {
   present({ title, message });
 }
 
-export function confirmAction(title: string, message: string, confirmLabel: string): Promise<boolean> {
+export function confirmAction(title: string, message: string, confirmLabel: string, cancelLabel = 'Cancel'): Promise<boolean> {
   if (Platform.OS !== 'web') {
     return new Promise(resolve => {
       Alert.alert(title, message, [
-        { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+        { text: cancelLabel, style: 'cancel', onPress: () => resolve(false) },
         { text: confirmLabel, style: 'destructive', onPress: () => resolve(true) },
       ], { cancelable: true, onDismiss: () => resolve(false) });
     });
   }
-  return present({ title, message, confirmLabel, destructive: true });
+  return present({ title, message, confirmLabel, cancelLabel, destructive: true });
 }

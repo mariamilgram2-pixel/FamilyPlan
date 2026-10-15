@@ -4,17 +4,20 @@ import { View } from 'react-native';
 import { supabase } from '../../lib/supabase';
 import { Event, Group, Profile } from '../../types';
 import Avatar, { AvatarPerson } from '../../components/Avatar';
-import { Field, Icon, ListRow, ListSection, Sheet, Tag, Txt } from '../../components/ui';
+import { Button, Field, Icon, IconName, ListRow, ListSection, Sheet, Tag, Toggle, Txt } from '../../components/ui';
 import { WorkDay, formatHours, useWorkSchedules, workConflict, workOn } from '../../lib/workSchedule';
 import { space, useTheme } from '../../theme';
 import CalendarGrid from './CalendarGrid';
 import { keyOf, longDate, relativeDay, shortDate, timeRange, todayKey } from './dates';
 import { ParsedEvent, parseEventText } from '../../lib/nlEvent';
 import { formatTime } from '../../lib/workSchedule';
-import { REPEAT_OPTIONS, RepeatKey, describeRecurrence, ruleFor, untilLabel } from '../../lib/recurrence';
-import { addDemoEvent } from '../../lib/demo';
+import { REPEAT_OPTIONS, RepeatKey, describeRecurrence, keyFor, ruleFor, untilLabel } from '../../lib/recurrence';
+import { addDemoEvent, DEMO_EVENTS } from '../../lib/demo';
+import { sendNotifications } from '../../lib/notifications';
 import { useCircle } from '../../lib/people';
-import { Assignment } from '../../types';
+import { Assignment, Rsvp } from '../../types';
+import { Reply, RSVP_LABEL, repliesByStatus, repliesOpen, replyOf } from '../../lib/rsvp';
+import { hostOf, nextHostOf, ordinal } from '../../lib/plans';
 import { AssignEditor, AssignmentList, InvitePicker } from './InviteViews';
 
 // ─── Detail ──────────────────────────────────────────────────────────────────
@@ -26,48 +29,132 @@ interface DetailProps {
   group: Group | null;
   onClaim?: (itemId: string, claim: boolean) => void;
   onAssign?: (items: Assignment[]) => void;   // organizer edits
+  onRsvp?: (reply: Rsvp, note?: string) => void;
+  onEdit?: () => void;
+  onCancel?: () => void;
+  onNudge?: (ids: string[]) => void;          // remind people who haven't replied
+  onDoAgain?: () => void;                      // after: same plan again
+  onSamePeople?: () => void;                   // after: same people, new plan
+  onAddMemories?: () => void;                  // after: photos and notes
+  conversation?: React.ReactNode;              // comments, or memories afterwards
 }
 
+const REPLY_OPTIONS: { key: Rsvp; label: string; icon: IconName }[] = [
+  { key: 'going', label: 'Going', icon: 'checkmark-circle-outline' },
+  { key: 'maybe', label: 'Maybe', icon: 'help-circle-outline' },
+  { key: 'declined', label: 'Can’t go', icon: 'close-circle-outline' },
+];
+
 /** Event content; the caller provides the scroll container (pane or sheet). */
-export function EventDetail({ event, attendees, meId, group, onClaim, onAssign }: DetailProps) {
+export function EventDetail({ event, attendees, meId, group, onClaim, onAssign, onRsvp, onEdit, onCancel, onNudge, onDoAgain, onSamePeople, onAddMemories, conversation }: DetailProps) {
   const organizer = !!meId && event.created_by === meId;
-  const going = !!meId && event.attendees?.includes(meId);
+  const reply = replyOf(event, meId);
+  const cancelled = !!event.cancelled_at;
+  const open = repliesOpen(event);   // replies close when it starts
   const minutes = Math.round((new Date(event.end_time).getTime() - new Date(event.start_time).getTime()) / 60000);
   const duration = minutes >= 60 ? `${Math.floor(minutes / 60)} hr${minutes % 60 ? ` ${minutes % 60} min` : ''}` : `${minutes} min`;
   const creator = attendees.find(a => a.id === event.created_by) ?? event.profiles;
   const conflict = workConflict(useWorkSchedules(), event.start_time, event.end_time);
+  const byStatus = repliesByStatus(event);
+  const personOf = (id: string): AvatarPerson => attendees.find(a => a.id === id) ?? { id };
+  const others = (event.attendees ?? []).filter(id => id !== event.created_by);
+  const replied = others.filter(id => replyOf(event, id) !== 'pending').length;
+  const over = new Date(event.end_time).getTime() < Date.now();
+  const wasThere = !cancelled && (reply === 'going' || reply === 'maybe');
+  // Traditions: whose turn it is, and which time this is.
+  const host = hostOf(event);
+  const nextHost = nextHostOf(event);
+  const nameOf = (id: string) => (id === meId ? 'You' : personOf(id).full_name?.split(' ')[0] ?? 'Someone');
 
   return (
     <View style={{ gap: space.l }}>
       <View style={{ gap: space.s }}>
         {group ? <Txt v="footnote" tone="secondary" semibold style={{ textTransform: 'uppercase', letterSpacing: 0.4 }}>{group.name}</Txt> : null}
-        <Txt v="title" accessibilityRole="header">{event.title}</Txt>
+        <Txt v="title" accessibilityRole="header" style={cancelled ? { textDecorationLine: 'line-through' } : undefined}>{event.title}</Txt>
         <Txt v="callout" tone="secondary">{longDate(keyOf(event.start_time))}</Txt>
-        {going ? <View style={{ flexDirection: 'row' }}><Tag label="You’re going" tone="tint" /></View> : null}
+        {cancelled ? <View style={{ flexDirection: 'row' }}><Tag label="Cancelled" /></View>
+          : organizer ? <View style={{ flexDirection: 'row' }}><Tag label="You’re organizing" tone="tint" /></View>
+          : reply && reply !== 'pending' ? <View style={{ flexDirection: 'row' }}><Tag label={reply === 'going' ? 'You’re going' : RSVP_LABEL[reply]} tone={reply === 'going' ? 'tint' : 'secondary'} /></View>
+          : null}
       </View>
+
+      {reply && !organizer && open && onRsvp ? (
+        <RsvpSection
+          key={event.series_id ?? event.id}
+          event={event}
+          reply={reply}
+          meId={meId}
+          firstName={(id) => personOf(id).full_name?.split(' ')[0] ?? 'someone'}
+          onRsvp={onRsvp}
+        />
+      ) : null}
 
       <ListSection separatorInset={60}>
         <ListRow icon="time-outline" title={timeRange(event.start_time, event.end_time)} subtitle={duration} />
         {event.recurrence ? (
           <ListRow icon="repeat" title={describeRecurrence({ ...event.recurrence, until: null }, event.start_time)} subtitle={untilLabel(event.recurrence)} />
         ) : null}
-        {conflict ? <ListRow icon="briefcase-outline" title="During your work hours" subtitle={formatHours(conflict)} /> : null}
+        {conflict && !cancelled ? <ListRow icon="briefcase-outline" title="During your work hours" subtitle={formatHours(conflict)} /> : null}
         {event.location ? <ListRow icon="location-outline" title={event.location} /> : null}
+        {host ? (
+          <ListRow
+            icon="home-outline"
+            title={host === meId ? 'Your turn to host' : `${nameOf(host)} is hosting`}
+            subtitle={[`${ordinal((event.occurrence ?? 0) + 1)} time`, nextHost && nextHost !== host ? `Next: ${nameOf(nextHost)}` : null].filter(Boolean).join(' · ')}
+          />
+        ) : null}
       </ListSection>
 
-      {attendees.length > 0 && (
-        <ListSection header={`Going · ${attendees.length}`} separatorInset={64}>
-          {attendees.map(a => (
-            <ListRow
-              key={a.id}
-              leading={<Avatar person={a} size={32} highlight={a.id === meId} />}
-              title={a.id === meId ? `${a.full_name ?? 'You'} (you)` : (a.full_name ?? a.email ?? 'Someone')}
-            />
-          ))}
-        </ListSection>
-      )}
+      {/* After: keep the memories first, then make the next one. */}
+      {over && wasThere && (onAddMemories || onDoAgain || onSamePeople) ? (
+        <View style={{ gap: space.s }}>
+          <Txt v="headline" style={{ paddingHorizontal: space.m }}>How was it?</Txt>
+          {onAddMemories ? <Button label="Add Memories" icon="images-outline" onPress={onAddMemories} block /> : null}
+          {onDoAgain || onSamePeople ? (
+            <ListSection separatorInset={60}>
+              {onDoAgain ? <ListRow icon="refresh" title="Same plan again" tintTitle chevron onPress={onDoAgain} /> : null}
+              {onSamePeople ? <ListRow icon="people-outline" title="Same people, new plan" tintTitle chevron onPress={onSamePeople} /> : null}
+            </ListSection>
+          ) : null}
+        </View>
+      ) : null}
 
-      {organizer && onAssign ? (
+      {organizer && others.length > 0 && !cancelled ? (
+        <View style={{ gap: space.s, paddingHorizontal: space.m }}>
+          <Txt v="callout" tone="secondary">
+            {replied === others.length ? 'Everyone has replied.' : `${replied} of ${others.length} replied.`}
+          </Txt>
+          {byStatus.pending.length > 0 && open && onNudge ? (
+            <View style={{ flexDirection: 'row' }}>
+              <Button
+                label={`Remind ${byStatus.pending.length === 1 ? (personOf(byStatus.pending[0]).full_name?.split(' ')[0] ?? '1 person') : `${byStatus.pending.length} people`}`}
+                icon="notifications-outline"
+                variant="gray"
+                onPress={() => onNudge(byStatus.pending)}
+              />
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+
+      {(['going', 'maybe', 'declined', 'pending'] as Reply[]).map(status => byStatus[status].length ? (
+        <ListSection key={status} header={`${RSVP_LABEL[status]} · ${byStatus[status].length}`} separatorInset={64}>
+          {byStatus[status].map(id => {
+            const a = personOf(id);
+            return (
+              <ListRow
+                key={id}
+                leading={<Avatar person={a} size={32} highlight={id === meId} />}
+                title={id === meId ? `${a.full_name ?? 'You'} (you)` : (a.full_name ?? a.email ?? 'Someone')}
+                subtitle={event.rsvp_notes?.[id] ? `“${event.rsvp_notes[id]}”` : undefined}
+                trailing={id === event.created_by ? <Tag label="Organizer" /> : null}
+              />
+            );
+          })}
+        </ListSection>
+      ) : null)}
+
+      {organizer && onAssign && !cancelled ? (
         // The organizer hands things out; everyone else claims what's open.
         <AssignEditor
           items={event.assignments ?? []}
@@ -79,8 +166,10 @@ export function EventDetail({ event, attendees, meId, group, onClaim, onAssign }
           hint="You’re organizing — tap an item to assign it. Open items can be claimed by anyone invited."
         />
       ) : event.assignments?.length ? (
-        <AssignmentList items={event.assignments} people={attendees} meId={meId} canClaim={going} onClaim={onClaim} />
+        <AssignmentList items={event.assignments} people={attendees} meId={meId} canClaim={!!reply && reply !== 'declined' && !cancelled} onClaim={onClaim} />
       ) : null}
+
+      {conversation}
 
       {event.description ? (
         <ListSection header="Notes">
@@ -90,7 +179,130 @@ export function EventDetail({ event, attendees, meId, group, onClaim, onAssign }
         </ListSection>
       ) : null}
 
+      {organizer && !cancelled && (onEdit || onCancel) ? (
+        <ListSection footer={event.recurrence ? 'Changes apply to every time it repeats.' : undefined}>
+          {onEdit ? <ListRow icon="create-outline" title="Edit Event" tintTitle onPress={onEdit} /> : null}
+          {onCancel ? <ListRow icon="close-circle-outline" title="Cancel Event" destructive onPress={onCancel} /> : null}
+        </ListSection>
+      ) : null}
+
       {creator?.full_name ? <Txt v="footnote" tone="secondary" style={{ paddingHorizontal: space.m }}>Added by {creator.full_name}</Txt> : null}
+    </View>
+  );
+}
+
+// ─── RSVP ────────────────────────────────────────────────────────────────────
+
+const YOUR_REPLY: Record<Rsvp, { title: string; icon: IconName }> = {
+  going: { title: 'You’re going', icon: 'checkmark-circle' },
+  maybe: { title: 'You’re a maybe', icon: 'help-circle' },
+  declined: { title: 'You can’t go', icon: 'close-circle' },
+};
+
+/**
+ * First reply: three buttons. Once you've answered, your answer stands, with
+ * Edit RSVP behind it. Editing is deliberate: pick the new answer, optionally
+ * say why, and confirm — with a heads-up that the organizer and everyone
+ * going or maybe will hear about it.
+ */
+function RsvpSection({ event, reply, meId, firstName, onRsvp }: {
+  event: Event; reply: Reply; meId: string | null; firstName: (id: string) => string;
+  onRsvp: (r: Rsvp, note?: string) => void;
+}) {
+  const { c } = useTheme();
+  const myNote = (meId && event.rsvp_notes?.[meId]) || '';
+  const [editing, setEditing] = useState(false);
+  const [choice, setChoice] = useState<Rsvp | null>(reply === 'pending' ? null : reply);
+  const [note, setNote] = useState(myNote);
+  const host = event.created_by ? firstName(event.created_by) : 'They';
+  const series = event.recurrence ? <Txt v="footnote" tone="secondary" style={{ paddingHorizontal: space.m }}>Your RSVP applies to every time it repeats.</Txt> : null;
+
+  const buttons = (selected: Rsvp | null, onPick: (r: Rsvp) => void) => (
+    <View style={{ flexDirection: 'row', gap: space.s }}>
+      {REPLY_OPTIONS.map(o => (
+        <Button
+          key={o.key}
+          label={o.label}
+          icon={selected === o.key ? 'checkmark' : o.icon}
+          variant={selected === o.key ? 'filled' : 'gray'}
+          onPress={() => onPick(o.key)}
+          style={{ flex: 1 }}
+        />
+      ))}
+    </View>
+  );
+
+  if (reply === 'pending') {
+    return (
+      <View style={{ gap: space.s }}>
+        <Txt v="headline" style={{ paddingHorizontal: space.m }}>{host} invited you. Can you make it?</Txt>
+        {buttons(null, (r) => onRsvp(r))}
+        {series}
+      </View>
+    );
+  }
+
+  function startEditing() {
+    setChoice(reply as Rsvp);
+    setNote(myNote);
+    setEditing(true);
+  }
+
+  if (!editing) {
+    const mine = YOUR_REPLY[reply];
+    return (
+      <ListSection header="Your RSVP" separatorInset={60}>
+        <ListRow
+          icon={mine.icon}
+          title={mine.title}
+          subtitle={myNote ? `“${myNote}”` : undefined}
+          trailing={<Button label="Edit RSVP" variant="plain" onPress={startEditing} />}
+        />
+      </ListSection>
+    );
+  }
+
+  // Who hears about a change: the organizer, plus everyone going or maybe.
+  const byStatus = repliesByStatus(event);
+  const told = Array.from(new Set([
+    ...(event.created_by ? [event.created_by] : []),
+    ...byStatus.going, ...byStatus.maybe,
+  ])).filter(id => id !== meId);
+  const names = told.map(id => (id === event.created_by ? `${firstName(id)} (organizer)` : firstName(id)));
+  const list =
+    names.length <= 3 ? (names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`)
+    : `${names[0]} and ${names.length - 1} others going or maybe`;
+  const changed = choice !== reply || note.trim() !== myNote;
+
+  return (
+    <View style={{ gap: space.s }}>
+      <Txt v="headline" style={{ paddingHorizontal: space.m }}>Edit your RSVP</Txt>
+      {buttons(choice, setChoice)}
+      <Field
+        value={note}
+        onChangeText={setNote}
+        placeholder={choice === 'declined' ? 'Add a note, like why you can’t make it' : 'Add a note (optional)'}
+        accessibilityLabel="Note with your RSVP"
+        maxLength={280}
+        multiline
+      />
+      <View style={{ flexDirection: 'row', gap: space.s, alignItems: 'flex-start', paddingHorizontal: space.m }}>
+        <Icon name="notifications-outline" size={16} color={c.secondaryLabel} style={{ marginTop: 1 }} />
+        <Txt v="footnote" tone="secondary" style={{ flex: 1 }}>
+          {told.length ? `Updating your RSVP lets ${list} know` : 'Updating your RSVP lets the organizer know'}
+          {note.trim() ? ', with your note.' : '.'}
+        </Txt>
+      </View>
+      {series}
+      <View style={{ flexDirection: 'row', gap: space.s }}>
+        <Button
+          label="Update RSVP"
+          disabled={!changed || !choice}
+          onPress={() => { setEditing(false); onRsvp(choice!, note.trim() || undefined); }}
+          style={{ flex: 1 }}
+        />
+        <Button label="Keep My RSVP" variant="gray" onPress={() => setEditing(false)} style={{ flex: 1 }} />
+      </View>
     </View>
   );
 }
@@ -107,11 +319,17 @@ interface ComposerProps {
   members: Profile[];
   suggestedIds: string[];
   isDemo: boolean;
+  editing?: Event | null;      // the series row when editing a repeating event
+  prefill?: { title?: string; location?: string; notes?: string; people?: string[]; date?: string | null; start?: string; end?: string } | null;
+  myName?: string;
 }
 
 const TIME_RE = /^([01]?\d|2[0-3]):([0-5]\d)$/;
 
-export function EventComposer({ visible, onClose, onSaved, initialDate, group, meId, members, suggestedIds, isDemo }: ComposerProps) {
+const addHour = (hm: string, n: number) => { const [h, m] = hm.split(':').map(Number); return `${String(Math.min(23, h + n)).padStart(2, '0')}:${String(m).padStart(2, '0')}`; };
+const hhmm = (iso: string) => { const d = new Date(iso); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+
+export function EventComposer({ visible, onClose, onSaved, initialDate, group, meId, members, suggestedIds, isDemo, editing, prefill, myName = 'Someone' }: ComposerProps) {
   const [title, setTitle] = useState('');
   const [date, setDate] = useState(initialDate);
   const [pickingDate, setPickingDate] = useState(false);
@@ -129,16 +347,29 @@ export function EventComposer({ visible, onClose, onSaved, initialDate, group, m
   const [repeat, setRepeat] = useState<RepeatKey>('never');
   const [repeatUntil, setRepeatUntil] = useState<string | null>(null);
   const [picking, setPicking] = useState<'repeat' | 'until' | null>(null);
+  const [rotate, setRotate] = useState(false);   // traditions: take turns hosting
 
-  // Fresh form each time the sheet opens.
+  // Fresh form each time the sheet opens, or the event being edited.
   useEffect(() => {
     if (!visible) return;
-    setTitle(''); setDate(initialDate); setPickingDate(false);
-    setStartTime('09:00'); setEndTime('10:00');
-    setLocation(''); setNotes(''); setInvited([]); setInvitedGroups([]); setAssignments([]);
-    setDescribe(''); setParsed(null);
-    setRepeat('never'); setRepeatUntil(null); setPicking(null);
-  }, [visible, initialDate]);
+    setPickingDate(false); setDescribe(''); setParsed(null); setPicking(null);
+    if (editing) {
+      setTitle(editing.title); setDate(keyOf(editing.start_time));
+      setStartTime(hhmm(editing.start_time)); setEndTime(hhmm(editing.end_time));
+      setLocation(editing.location ?? ''); setNotes(editing.description ?? '');
+      setInvited((editing.attendees ?? []).filter(id => id !== meId));
+      setInvitedGroups(editing.invited_group_ids ?? []);
+      setAssignments(editing.assignments ?? []);
+      setRepeat(keyFor(editing.recurrence)); setRepeatUntil(editing.recurrence?.until ?? null);
+      setRotate(!!editing.host_rotation?.length);
+      return;
+    }
+    setTitle(prefill?.title ?? ''); setDate(prefill?.date ?? initialDate);
+    setStartTime(prefill?.start ?? '18:00'); setEndTime(prefill?.end ?? (prefill?.start ? addHour(prefill.start, 2) : '20:00'));
+    setLocation(prefill?.location ?? ''); setNotes(prefill?.notes ?? '');
+    setInvited((prefill?.people ?? []).filter(id => id !== meId)); setInvitedGroups([]); setAssignments([]);
+    setRepeat('never'); setRepeatUntil(null); setRotate(false);
+  }, [visible, initialDate, editing, prefill]);
 
   // The sentence drives the form: each edit rebuilds the fields from the
   // defaults plus whatever was understood. Manual edits below stick until
@@ -151,8 +382,8 @@ export function EventComposer({ visible, onClose, onSaved, initialDate, group, m
     setParsed(p);
     setTitle(p.title);
     setDate(p.date ?? initialDate);
-    setStartTime(p.start ?? '09:00');
-    setEndTime(p.end ?? '10:00');
+    setStartTime(p.start ?? '18:00');
+    setEndTime(p.end ?? (p.start ? addHour(p.start, 2) : '20:00'));
     setLocation(p.location ?? '');
     setInvited(p.inviteIds);
     setRepeat(p.repeat ?? 'never');
@@ -177,25 +408,73 @@ export function EventComposer({ visible, onClose, onSaved, initialDate, group, m
     const endIso = new Date(`${date}T${endTime.padStart(5, '0')}:00`).toISOString();
     if (new Date(endIso) <= new Date(startIso)) return notify('Check the time', 'End time must be after the start time.');
     if (repeat !== 'never' && repeatUntil && repeatUntil < date) return notify('Check the repeat', 'The repeat has to end on or after the first day.');
+    // A new time asks everyone again; other edits keep their replies.
+    const timeChanged = !!editing && (editing.start_time !== startIso || editing.end_time !== endIso || keyFor(editing.recurrence) !== repeat);
+    const keptReplies = Object.fromEntries(Object.entries(editing?.rsvps ?? {}).filter(([id]) => attendeeIds.includes(id)));
+    const keptNotes = Object.fromEntries(Object.entries(editing?.rsvp_notes ?? {}).filter(([id]) => attendeeIds.includes(id)));
     const row = {
       title: title.trim(),
       description: notes.trim() || null,
       location: location.trim() || null,
       start_time: startIso,
       end_time: endIso,
-      created_by: meId,
+      created_by: editing?.created_by ?? meId,
       attendees: [meId, ...attendeeIds],
       invited_group_ids: invitedGroups,
       // Anyone dropped from the invite list loses their assignment.
       assignments: assignments.map(a => (a.assignee_id && a.assignee_id !== meId && !attendeeIds.includes(a.assignee_id) ? { ...a, assignee_id: null } : a)),
       recurrence: ruleFor(repeat, repeatUntil),
+      rsvps: timeChanged ? {} : keptReplies,
+      rsvp_notes: timeChanged ? {} : keptNotes,
+      // Hosts take turns in the order people were invited, starting with you.
+      host_rotation: repeat !== 'never' && rotate
+        ? (editing?.host_rotation?.length
+            ? [...editing.host_rotation.filter(id => id === meId || attendeeIds.includes(id)), ...attendeeIds.filter(id => !editing.host_rotation!.includes(id))]
+            : [meId, ...attendeeIds])
+        : [],
     };
-    // Demo events live in memory so the calendar can show them.
-    if (isDemo) { addDemoEvent(row); onSaved(); onClose(); return; }
+
+    // Who hears about it: new invitees get an invite; everyone else still
+    // invited hears what changed.
+    const before = new Set(editing?.attendees ?? []);
+    const added = attendeeIds.filter(id => !before.has(id));
+    const kept = attendeeIds.filter(id => before.has(id));
+    const when = `${shortDate(date)} · ${timeRange(startIso, endIso)}`;
+    const changes = editing ? [
+      timeChanged ? 'new time' : null,
+      (editing.location ?? '') !== (row.location ?? '') ? 'new place' : null,
+      editing.title !== row.title ? 'new name' : null,
+    ].filter(Boolean) as string[] : [];
+
+    if (isDemo) {
+      // Demo events live in memory so the calendar can show them.
+      if (editing) Object.assign(DEMO_EVENTS.find(e => e.id === editing.id) ?? {}, row);
+      else addDemoEvent(row);
+      onSaved(); onClose(); return;
+    }
     setSaving(true);
-    const { error } = await supabase.from('events').insert({ ...row, group_id: group.id } as any);
+    const { data, error } = editing
+      ? await supabase.from('events').update(row as any).eq('id', editing.id).select('id').single()
+      : await supabase.from('events').insert({ ...row, group_id: group.id } as any).select('id').single();
+    if (error) { setSaving(false); return notify('Couldn’t save', error.message); }
+    const eventId = (data as { id: string }).id;
+    const place = row.location ? ` · ${row.location}` : '';
+    await sendNotifications([
+      ...added.map(uid => ({
+        user_id: uid, actor_id: meId, kind: 'invite' as const, idea_id: null, event_id: eventId,
+        title: `${myName} invited you to ${row.title}`, body: `${when}${place}`,
+      })),
+      ...(changes.length ? kept.map(uid => ({
+        user_id: uid, actor_id: meId, kind: 'event_changed' as const, idea_id: null, event_id: eventId,
+        title: `${myName} changed ${row.title}: ${changes.join(', ')}`,
+        body: `${when}${place}${timeChanged ? '\nLet them know if you can still make it.' : ''}`,
+      })) : []),
+    ], false);
+    // A planned idea shows its booked time; keep it in step.
+    if (editing && timeChanged) {
+      await supabase.from('ideas').update({ proposed_slots: [{ start: startIso, end: endIso }] } as any).eq('event_id', editing.id);
+    }
     setSaving(false);
-    if (error) return notify('Couldn’t save', error.message);
     onSaved();
     onClose();
   }
@@ -204,10 +483,11 @@ export function EventComposer({ visible, onClose, onSaved, initialDate, group, m
     <Sheet
       visible={visible}
       onClose={onClose}
-      title="New Event"
-      action={{ label: 'Add', onPress: save, disabled: !title.trim(), loading: saving }}
+      title={editing ? 'Edit Event' : 'New Event'}
+      action={{ label: editing ? 'Save' : 'Add', onPress: save, disabled: !title.trim(), loading: saving }}
     >
-      <DescribeField value={describe} onChange={onDescribe} parsed={parsed} onSubmit={save} />
+      {/* Already described when it comes from New Plan or a suggestion. */}
+      {editing || prefill ? null : <DescribeField value={describe} onChange={onDescribe} parsed={parsed} onSubmit={save} />}
 
       <Field value={title} onChangeText={setTitle} placeholder="Title" accessibilityLabel="Title" returnKeyType="next" />
 
@@ -284,6 +564,14 @@ export function EventComposer({ visible, onClose, onSaved, initialDate, group, m
         <Txt v="footnote" tone="secondary" style={{ paddingHorizontal: space.m, marginTop: -space.s }}>
           {describeRecurrence(ruleFor(repeat, repeatUntil)!, new Date(`${date}T${TIME_RE.test(startTime) ? startTime.padStart(5, '0') : '09:00'}:00`).toISOString())}.
         </Txt>
+      ) : null}
+
+      {repeat !== 'never' ? (
+        <ListSection footer={rotate
+          ? `Hosts take turns${assignable.length > 1 ? `: ${assignable.map(p => (p.id === meId ? 'you' : (p.full_name ?? 'someone').split(' ')[0])).join(', then ')}` : ' once you invite people'}.`
+          : 'Make it a tradition: everyone hosts in turn.'}>
+          <ListRow icon="home-outline" title="Take turns hosting" trailing={<Toggle label="Take turns hosting" value={rotate} onValueChange={setRotate} />} />
+        </ListSection>
       ) : null}
 
       <WorkHint

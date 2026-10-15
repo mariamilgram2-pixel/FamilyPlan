@@ -1,17 +1,22 @@
 // The adaptive shell.
 //
-// One navigator, two presentations of the same four destinations:
-//   compact  → translucent tab bar anchored to the bottom (thumb zone)
+// One navigator, two presentations of the same four destinations — Home,
+// Calendar, Plans, People:
+//   compact  → translucent tab bar anchored to the bottom (thumb zone);
+//              settings ("You") open from your avatar on Home
 //   sidebar  → a left source list with sections, your groups, and your
 //              account pinned bottom-left (macOS / iPadOS convention)
-// Desktop also gets ⌘1–⌘4 to jump between sections.
+// Desktop also gets ⌘1–⌘4 to jump between sections. The New Plan sheet
+// wraps everything so any screen can open it.
 
 import React, { useEffect } from 'react';
 import { Platform, ScrollView, StyleSheet, View } from 'react-native';
 import { BottomTabBarProps, createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import HomeScreen from '../screens/home/HomeScreen';
 import CalendarScreen from '../screens/calendar/CalendarScreen';
-import IdeasScreen from '../screens/ideas/IdeasScreen';
+import PlansScreen from '../screens/ideas/IdeasScreen';
+import { PlanComposerProvider } from '../components/PlanComposer';
 import PeopleScreen from '../screens/people/PeopleScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import Avatar from '../components/Avatar';
@@ -26,26 +31,29 @@ import { continuous, radius, SIDEBAR_WIDTH, space, useLayout, useTheme } from '.
 const Tab = createBottomTabNavigator<TabParamList>();
 
 const DESTINATIONS: { name: keyof TabParamList; label: string; icon: IconName; iconActive: IconName }[] = [
+  { name: 'Home',     label: 'Home',     icon: 'home-outline',     iconActive: 'home' },
   { name: 'Calendar', label: 'Calendar', icon: 'calendar-outline', iconActive: 'calendar' },
-  { name: 'Ideas',    label: 'Ideas',    icon: 'bulb-outline',     iconActive: 'bulb' },
+  { name: 'Plans',    label: 'Plans',    icon: 'sparkles-outline', iconActive: 'sparkles' },
   { name: 'People',   label: 'People',   icon: 'people-outline',   iconActive: 'people' },
-  { name: 'You',      label: 'You',      icon: 'person-circle-outline', iconActive: 'person-circle' },
 ];
 
 export default function TabNavigator() {
   const { c } = useTheme();
   const { hasSidebar } = useLayout();
   return (
-    <Tab.Navigator
-      screenOptions={{ headerShown: false }}
-      sceneContainerStyle={{ backgroundColor: c.background, marginLeft: hasSidebar ? SIDEBAR_WIDTH : 0 }}
-      tabBar={(props) => (hasSidebar ? <Sidebar {...props} /> : <TabBar {...props} />)}
-    >
-      <Tab.Screen name="Calendar" component={CalendarScreen} />
-      <Tab.Screen name="Ideas" component={IdeasScreen} />
-      <Tab.Screen name="People" component={PeopleScreen} />
-      <Tab.Screen name="You" component={ProfileScreen} />
-    </Tab.Navigator>
+    <PlanComposerProvider>
+      <Tab.Navigator
+        screenOptions={{ headerShown: false }}
+        sceneContainerStyle={{ backgroundColor: c.background, marginLeft: hasSidebar ? SIDEBAR_WIDTH : 0 }}
+        tabBar={(props) => (hasSidebar ? <Sidebar {...props} /> : <TabBar {...props} />)}
+      >
+        <Tab.Screen name="Home" component={HomeScreen} />
+        <Tab.Screen name="Calendar" component={CalendarScreen} />
+        <Tab.Screen name="Plans" component={PlansScreen} />
+        <Tab.Screen name="People" component={PeopleScreen} />
+        <Tab.Screen name="You" component={ProfileScreen} />
+      </Tab.Navigator>
+    </PlanComposerProvider>
   );
 }
 
@@ -58,7 +66,8 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
     <Material style={[styles.tabBar, { paddingBottom: insets.bottom, borderTopColor: c.separator }]}>
       <View accessibilityRole="tablist" style={styles.tabRow}>
         {state.routes.map((route, i) => {
-          const d = DESTINATIONS.find(x => x.name === route.name)!;
+          const d = DESTINATIONS.find(x => x.name === route.name);
+          if (!d) return null;   // "You" opens from your avatar on Home
           const focused = state.index === i;
           const color = focused ? c.tint : c.secondaryLabel;
           return (
@@ -120,7 +129,7 @@ function Sidebar({ state, navigation }: BottomTabBarProps) {
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: space.s, paddingBottom: space.m }}>
         <View accessibilityRole="tablist" style={{ gap: 2 }}>
-          {DESTINATIONS.filter(d => d.name !== 'You').map((d, i) => {
+          {DESTINATIONS.map((d, i) => {
             const selected = current === d.name;
             return (
               <SidebarItem
@@ -176,7 +185,7 @@ function Sidebar({ state, navigation }: BottomTabBarProps) {
           <Avatar person={me} size={32} highlight />
           <View style={{ flex: 1, minWidth: 0 }}>
             <Txt v="callout" semibold numberOfLines={1}>{me.full_name}</Txt>
-            <Txt v="footnote" tone="secondary" numberOfLines={1}>Settings · {modKey}4</Txt>
+            <Txt v="footnote" tone="secondary" numberOfLines={1}>Profile & settings</Txt>
           </View>
         </Tappable>
       </View>

@@ -31,7 +31,7 @@ export function useCircle(active: boolean, meId: string | null) {
         const list = groups.length ? groups : activeGroup ? [activeGroup] : [];
         setLoading(true);
         rows = await Promise.all(list.map(g =>
-          supabase.from('group_members').select('profiles(id, full_name, email, avatar_url)').eq('group_id', g.id)
+          supabase.from('group_members').select('profiles(id, full_name, email, avatar_url, birthday)').eq('group_id', g.id)
             .then(({ data }) => ({ group: g, members: ((data ?? []).map((r: any) => r.profiles).filter(Boolean)) as Profile[] })),
         ));
       }

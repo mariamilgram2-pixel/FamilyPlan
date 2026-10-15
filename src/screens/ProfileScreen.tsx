@@ -7,6 +7,7 @@
 import React, { useEffect, useState } from 'react';
 import { Platform, Share, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import { useGroup } from '../contexts/GroupContext';
 import { supabase } from '../lib/supabase';
@@ -57,6 +58,7 @@ export default function ProfileScreen() {
   const { c } = useTheme();
   const bottomClearance = useBottomClearance();
   const isDemo = !user || isDemoGroup(activeGroup);
+  const navigation = useNavigation<any>();
 
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
   const [showEmail, setShowEmail] = useState(false);
@@ -124,6 +126,7 @@ export default function ProfileScreen() {
       if (error) { setExporting(false); return notify('Couldn’t export', error.message); }
       events = (data ?? []) as Event[];
     }
+    events = events.filter(e => !e.cancelled_at);
 
     const stamp = (iso: string) => new Date(iso).toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
     const esc = (s: string) => s.replace(/\\/g, '\\\\').replace(/[,;]/g, m => `\\${m}`).replace(/\n/g, '\\n');
@@ -178,7 +181,8 @@ export default function ProfileScreen() {
     <Screen>
       <ReadingColumn contentContainerStyle={{ paddingTop: 0, paddingBottom: bottomClearance, paddingHorizontal: compact ? space.m : space.l }}>
         <View style={{ marginHorizontal: compact ? -space.m : -space.l }}>
-          <ScreenHeader title="You" />
+          {/* Reached from your avatar on Home; on phones it's not in the tab bar. */}
+          <ScreenHeader title="You" trailing={compact ? <Button label="Done" variant="gray" onPress={() => navigation.navigate('Home')} /> : undefined} />
         </View>
 
         <ListSection>
@@ -266,6 +270,7 @@ export default function ProfileScreen() {
         isDemo={isDemo}
         initialName={profile?.full_name ?? ''}
         initialEmail={user?.email ?? ''}
+        initialBirthday={profile?.birthday ?? (isDemo ? DEMO_MEMBERS[0].birthday ?? null : null)}
         avatarUri={avatarUri}
         onAvatar={setAvatar}
         userId={user?.id ?? null}
@@ -281,13 +286,25 @@ export default function ProfileScreen() {
 
 // ─── Edit profile ────────────────────────────────────────────────────────────
 
-function EditProfileSheet({ visible, onClose, isDemo, initialName, initialEmail, avatarUri, onAvatar, userId, currentEmail, onSaved }: {
-  visible: boolean; onClose: () => void; isDemo: boolean; initialName: string; initialEmail: string;
+/** "10/23" or "10-23" → "10-23"; null when blank; undefined when invalid. */
+function parseBirthday(text: string): string | null | undefined {
+  const t = text.trim();
+  if (!t) return null;
+  const m = t.match(/^(\d{1,2})[/-](\d{1,2})$/);
+  if (!m) return undefined;
+  const mm = Number(m[1]), dd = Number(m[2]);
+  if (mm < 1 || mm > 12 || dd < 1 || dd > new Date(2024, mm, 0).getDate()) return undefined;
+  return `${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+}
+
+function EditProfileSheet({ visible, onClose, isDemo, initialName, initialEmail, initialBirthday, avatarUri, onAvatar, userId, currentEmail, onSaved }: {
+  visible: boolean; onClose: () => void; isDemo: boolean; initialName: string; initialEmail: string; initialBirthday: string | null;
   avatarUri: string | null; onAvatar: (u: string | null) => void; userId: string | null; currentEmail: string | null;
   onSaved: () => Promise<void>;
 }) {
   const [name, setName] = useState(initialName);
   const [email, setEmail] = useState(initialEmail);
+  const [birthday, setBirthday] = useState('');
   const [urlMode, setUrlMode] = useState(false);
   const [photoUrl, setPhotoUrl] = useState('');
   const [saving, setSaving] = useState(false);
@@ -295,6 +312,7 @@ function EditProfileSheet({ visible, onClose, isDemo, initialName, initialEmail,
   useEffect(() => {
     if (!visible) return;
     setName(initialName); setEmail(initialEmail); setUrlMode(false); setPhotoUrl('');
+    setBirthday(initialBirthday ? initialBirthday.replace('-', '/') : '');
   }, [visible]);
 
   function pickFile() {
@@ -321,9 +339,11 @@ function EditProfileSheet({ visible, onClose, isDemo, initialName, initialEmail,
 
   async function save() {
     if (!name.trim()) return;
+    const bday = parseBirthday(birthday);
+    if (bday === undefined) return notify('Check your birthday', 'Use month and day, like 10/23.');
     if (isDemo || !userId) return notify('Demo mode', 'Sign in to save profile changes.');
     setSaving(true);
-    const { error } = await supabase.from('profiles').update({ full_name: name.trim() } as any).eq('id', userId);
+    const { error } = await supabase.from('profiles').update({ full_name: name.trim(), birthday: bday } as any).eq('id', userId);
     if (error) { setSaving(false); return notify('Couldn’t save', error.message); }
 
     const newEmail = email.trim();
@@ -359,6 +379,14 @@ function EditProfileSheet({ visible, onClose, isDemo, initialName, initialEmail,
         </View>
       ) : null}
       <Field label="Name" value={name} onChangeText={setName} placeholder="Your name" />
+      <Field
+        label="Birthday"
+        value={birthday}
+        onChangeText={setBirthday}
+        placeholder="MM/DD"
+        keyboardType="numbers-and-punctuation"
+        hint="Just the month and day. People you plan with get a nudge to celebrate."
+      />
       <Field label="Email" value={email} onChangeText={setEmail} placeholder="you@example.com" keyboardType="email-address" autoCapitalize="none" hint="Changing your email sends a confirmation link." />
     </Sheet>
   );

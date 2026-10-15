@@ -1,12 +1,14 @@
 // People
 //
-// Three chunks — Groups, Your people, People you plan with — each capped at
-// five rows with an explicit "Show all". Creating things (group, person,
+// Two chunks — Groups, and People — each capped at five rows with an
+// explicit "Show all". People is one list: everyone you plan with, whether
+// they're on sheep (from your groups) or not yet (people you added), with an
+// easy way to invite the latter. Creating things (group, person,
 // join by code) is one "+" menu instead of three competing cards. Group
 // management (invite code, members, leave) lives in the group's detail.
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, ScrollView, View } from 'react-native';
+import { ActivityIndicator, Platform, ScrollView, Share, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { supabase } from '../../lib/supabase';
 import { notify, confirmAction } from '../../lib/alert';
@@ -18,6 +20,7 @@ import { Contact, Group, Profile } from '../../types';
 import Avatar, { AvatarPerson } from '../../components/Avatar';
 import AvatarStack from '../../components/AvatarStack';
 import { useGroupSheets, useVisibleGroups } from '../../components/GroupSwitcher';
+import { usePlanComposer } from '../../components/PlanComposer';
 import {
   Button, EmptyState, Field, IconButton, ListRow, ListSection, Menu, ReadingColumn,
   ScreenHeader, Sheet, SplitView, Tag, Txt, useBottomClearance,
@@ -47,6 +50,7 @@ export default function PeopleScreen() {
   const isDemo = isDemoGroup(activeGroup);
   const meId = user?.id ?? (isDemo ? DEMO_ME : null);
   const { openCreate, openJoin, sheets: groupSheets } = useGroupSheets();
+  const composer = usePlanComposer();
 
   const [people, setPeople] = useState<PersonEntry[]>([]);
   const [membersByGroup, setMembersByGroup] = useState<Record<string, Profile[]>>({});
@@ -54,7 +58,6 @@ export default function PeopleScreen() {
   const [loading, setLoading] = useState(false);
   const [selection, setSelection] = useState<Selection>(null);
   const [showAllPeople, setShowAllPeople] = useState(false);
-  const [showAllContacts, setShowAllContacts] = useState(false);
 
   // Person sheet (add / edit contact)
   const [personSheet, setPersonSheet] = useState<null | { editing: Contact | null }>(null);
@@ -168,10 +171,32 @@ export default function PeopleScreen() {
 
   useShortcut('n', () => openPersonSheet(null));
 
+  // People not on sheep get the app and a code to join your active group.
+  async function inviteToSheep(ct: Contact) {
+    const first = ct.name.split(' ')[0];
+    const code = activeGroup?.invite_code;
+    const message = `Hi ${first}! I’m using sheep to make plans with friends and family. Join me${code ? ` — our group code is ${code}` : ''}.`;
+    try {
+      if (Platform.OS === 'web' && !(navigator as any).share) {
+        await Clipboard.setStringAsync(message);
+        notify('Invite copied', `Paste it in a text or email to ${first}.`);
+        return;
+      }
+      await Share.share({ message });
+    } catch {
+      // Dismissed.
+    }
+  }
+
   // ─── List ──────────────────────────────────────────────────────────────────
   const isSel = (kind: string, id: string) => threeColumn && selection?.kind === kind && selection.id === id;
-  const shownPeople = showAllPeople ? people : people.slice(0, CHUNK);
-  const shownContacts = showAllContacts ? contacts : contacts.slice(0, CHUNK);
+  // Everyone, A–Z: sheep members and people you've added who aren't on it yet.
+  type Entry = { kind: 'person'; p: PersonEntry; name: string } | { kind: 'contact'; ct: Contact; name: string };
+  const everyone: Entry[] = [
+    ...people.map(p => ({ kind: 'person' as const, p, name: p.profile.full_name ?? p.profile.email ?? '' })),
+    ...contacts.map(ct => ({ kind: 'contact' as const, ct, name: ct.name })),
+  ].sort((a, b) => a.name.localeCompare(b.name));
+  const shownEveryone = showAllPeople ? everyone : everyone.slice(0, CHUNK);
 
   const addMenu = (
     <Menu
@@ -213,42 +238,37 @@ export default function PeopleScreen() {
           ) : null}
         </ListSection>
 
-        <ListSection header="Your people" separatorInset={64} footer={contacts.length === 0 ? 'People you add show up when you’re deciding who an idea is for.' : undefined}>
-          {shownContacts.map(ct => (
+        <ListSection
+          header="People"
+          separatorInset={64}
+          footer={everyone.length === 0 ? 'People in your groups show up here. Add anyone else you make plans with.' : undefined}
+        >
+          {shownEveryone.map(e => e.kind === 'person' ? (
             <ListRow
-              key={ct.id}
-              leading={<Avatar person={{ id: ct.id, full_name: ct.name }} size={32} />}
-              title={ct.name}
-              subtitle={ct.email ?? ct.note}
+              key={`u-${e.p.profile.id}`}
+              leading={<Avatar person={e.p.profile} size={32} />}
+              title={e.name}
+              subtitle={e.p.groups.map(g => g.name).join(', ')}
               chevron={!threeColumn}
-              selected={isSel('contact', ct.id)}
-              onPress={() => setSelection({ kind: 'contact', id: ct.id })}
+              selected={isSel('person', e.p.profile.id)}
+              onPress={() => setSelection({ kind: 'person', id: e.p.profile.id })}
+            />
+          ) : (
+            <ListRow
+              key={`c-${e.ct.id}`}
+              leading={<Avatar person={{ id: e.ct.id, full_name: e.ct.name }} size={32} />}
+              title={e.name}
+              subtitle={['Not on sheep yet', e.ct.note].filter(Boolean).join(' · ')}
+              trailing={<Button label="Invite" variant="gray" onPress={() => inviteToSheep(e.ct)} />}
+              selected={isSel('contact', e.ct.id)}
+              onPress={() => setSelection({ kind: 'contact', id: e.ct.id })}
             />
           ))}
-          {contacts.length > CHUNK ? (
-            <ListRow key="more" title={showAllContacts ? 'Show fewer' : `Show all ${contacts.length}`} tintTitle onPress={() => setShowAllContacts(x => !x)} />
+          {everyone.length > CHUNK ? (
+            <ListRow key="more" title={showAllPeople ? 'Show fewer' : `Show all ${everyone.length}`} tintTitle onPress={() => setShowAllPeople(x => !x)} />
           ) : null}
           <ListRow key="add" icon="person-add-outline" title="Add Person" tintTitle onPress={() => openPersonSheet(null)} />
         </ListSection>
-
-        {people.length > 0 && (
-          <ListSection header="People you plan with" separatorInset={64}>
-            {shownPeople.map(p => (
-              <ListRow
-                key={p.profile.id}
-                leading={<Avatar person={p.profile} size={32} />}
-                title={p.profile.full_name ?? p.profile.email}
-                subtitle={p.groups.map(g => g.name).join(', ')}
-                chevron={!threeColumn}
-                selected={isSel('person', p.profile.id)}
-                onPress={() => setSelection({ kind: 'person', id: p.profile.id })}
-              />
-            ))}
-            {people.length > CHUNK ? (
-              <ListRow key="more" title={showAllPeople ? 'Show fewer' : `Show all ${people.length}`} tintTitle onPress={() => setShowAllPeople(x => !x)} />
-            ) : null}
-          </ListSection>
-        )}
       </View>
     </ScrollView>
   );
@@ -281,9 +301,12 @@ export default function PeopleScreen() {
         {selContact.note ? (
           <ListSection header="Note"><View style={{ padding: space.m }}><Txt v="body">{selContact.note}</Txt></View></ListSection>
         ) : null}
+        <ListSection footer={`${selContact.name.split(' ')[0]} isn’t on sheep yet, so you can’t check their calendar or send them invites in the app.`}>
+          <ListRow icon="paper-plane-outline" title="Invite to sheep" tintTitle onPress={() => inviteToSheep(selContact)} />
+        </ListSection>
         <ListSection>
           <ListRow icon="create-outline" title="Edit" tintTitle onPress={() => { if (!threeColumn) setSelection(null); openPersonSheet(selContact); }} />
-          <ListRow icon="trash-outline" title="Remove from Your People" destructive onPress={() => removeContact(selContact)} />
+          <ListRow icon="trash-outline" title="Remove Person" destructive onPress={() => removeContact(selContact)} />
         </ListSection>
       </View>
     );
@@ -292,6 +315,18 @@ export default function PeopleScreen() {
     detailBody = (
       <View style={{ gap: space.l }}>
         <IdentityHeader person={selPerson.profile} title={selPerson.profile.full_name ?? selPerson.profile.email} subtitle={selPerson.profile.full_name ? selPerson.profile.email : null} />
+        <ListSection>
+          <ListRow
+            icon="sparkles-outline"
+            title={`Make Plans with ${(selPerson.profile.full_name ?? 'them').split(' ')[0]}`}
+            tintTitle
+            onPress={() => {
+              if (!threeColumn) setSelection(null);
+              const id = selPerson.profile.id;
+              setTimeout(() => composer.newPlan({ people: [id] }), threeColumn ? 0 : 450);
+            }}
+          />
+        </ListSection>
         <ListSection header="Shared groups">
           {selPerson.groups.map(g => <ListRow key={g.id} title={g.name} />)}
         </ListSection>

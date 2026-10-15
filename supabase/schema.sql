@@ -13,6 +13,7 @@ CREATE TABLE public.profiles (
   email       TEXT        NOT NULL,
   full_name   TEXT,
   avatar_url  TEXT,
+  birthday    TEXT        CHECK (birthday ~ '^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'),   -- MM-DD
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -47,6 +48,10 @@ CREATE TABLE public.events (
   recurrence  JSONB,
   invited_group_ids UUID[] NOT NULL DEFAULT '{}',
   assignments JSONB       NOT NULL DEFAULT '[]',
+  rsvps       JSONB       NOT NULL DEFAULT '{}',
+  rsvp_notes  JSONB       NOT NULL DEFAULT '{}',
+  cancelled_at TIMESTAMPTZ,
+  host_rotation UUID[]    NOT NULL DEFAULT '{}',   -- traditions: occurrence n hosted by [n mod len]
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT end_after_start CHECK (end_time > start_time)
 );
@@ -77,6 +82,7 @@ CREATE TABLE public.ideas (
   location              TEXT,
   target_date           DATE,
   proposed_slots        JSONB       NOT NULL DEFAULT '[]',
+  slot_votes            JSONB       NOT NULL DEFAULT '{}',
   event_id              UUID        REFERENCES public.events(id) ON DELETE SET NULL,
   planned_at            TIMESTAMPTZ,
   created_by            UUID        REFERENCES public.profiles(id) ON DELETE SET NULL,
@@ -97,7 +103,9 @@ CREATE TABLE public.notifications (
   id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id     UUID        NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
   actor_id    UUID        REFERENCES public.profiles(id) ON DELETE SET NULL,
-  kind        TEXT        NOT NULL CHECK (kind IN ('idea_proposed', 'dates_proposed', 'invite', 'assignment')),
+  kind        TEXT        NOT NULL CHECK (kind IN (
+                'idea_proposed', 'dates_proposed', 'invite', 'assignment',
+                'rsvp', 'event_changed', 'event_cancelled', 'date_votes', 'comment')),
   idea_id     UUID        REFERENCES public.ideas(id) ON DELETE CASCADE,
   event_id    UUID        REFERENCES public.events(id) ON DELETE CASCADE,
   title       TEXT        NOT NULL,
@@ -251,3 +259,110 @@ BEGIN
          OR e.group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid()));
 END;
 $$;
+
+-- Reply to an event you're invited to, without edit rights to the rest of it,
+-- optionally with a note ("Sick, so sorry!"). A new reply replaces your old
+-- note. Replies close when a one-off event starts (a repeating series stays
+-- open; the app closes each date as it starts).
+DROP FUNCTION IF EXISTS public.set_rsvp(UUID, TEXT);
+CREATE OR REPLACE FUNCTION public.set_rsvp(p_event UUID, p_status TEXT, p_note TEXT DEFAULT NULL)
+RETURNS VOID LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF p_status NOT IN ('going', 'maybe', 'declined') THEN
+    RAISE EXCEPTION 'Unknown reply %', p_status;
+  END IF;
+  UPDATE public.events
+  SET rsvps = rsvps || jsonb_build_object(auth.uid()::text, p_status),
+      rsvp_notes = CASE
+        WHEN NULLIF(btrim(p_note), '') IS NULL THEN rsvp_notes - auth.uid()::text
+        ELSE rsvp_notes || jsonb_build_object(auth.uid()::text, left(btrim(p_note), 280))
+      END
+  WHERE id = p_event AND auth.uid() = ANY(attendees)
+    AND cancelled_at IS NULL
+    AND (recurrence IS NOT NULL OR start_time > NOW());
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Replies are closed for this event';
+  END IF;
+END;
+$$;
+
+-- Say which proposed dates work for you. Replaces only your own answer.
+CREATE OR REPLACE FUNCTION public.set_slot_votes(p_idea UUID, p_starts TEXT[])
+RETURNS VOID LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  UPDATE public.ideas i
+  SET slot_votes = slot_votes || jsonb_build_object(auth.uid()::text, to_jsonb(p_starts))
+  WHERE i.id = p_idea
+    AND (auth.uid() = ANY(i.audience_user_ids)
+         OR i.group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid())
+         OR i.audience_group_ids && ARRAY(SELECT group_id FROM public.group_members WHERE user_id = auth.uid()));
+END;
+$$;
+
+-- Comments on plans ("Memories" once the event has happened)
+CREATE TABLE IF NOT EXISTS public.plan_comments (
+  id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  event_id    UUID        REFERENCES public.events(id) ON DELETE CASCADE,
+  idea_id     UUID        REFERENCES public.ideas(id) ON DELETE CASCADE,
+  user_id     UUID        NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  body        TEXT        NOT NULL DEFAULT '',
+  photo_urls  TEXT[]      NOT NULL DEFAULT '{}',   -- storage paths in the "memories" bucket
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT one_target CHECK ((event_id IS NULL) <> (idea_id IS NULL)),
+  CONSTRAINT plan_comments_body_check CHECK (length(body) <= 1000 AND (length(btrim(body)) > 0 OR cardinality(photo_urls) > 0)),
+  CONSTRAINT plan_comments_photo_count CHECK (cardinality(photo_urls) <= 12)
+);
+
+CREATE INDEX IF NOT EXISTS plan_comments_event ON public.plan_comments (event_id, created_at);
+CREATE INDEX IF NOT EXISTS plan_comments_idea  ON public.plan_comments (idea_id, created_at);
+
+ALTER TABLE public.plan_comments ENABLE ROW LEVEL SECURITY;
+
+-- Whoever can see the plan can read and join the conversation.
+CREATE OR REPLACE FUNCTION public.can_see_plan(p_event UUID, p_idea UUID)
+RETURNS BOOLEAN LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT CASE
+    WHEN p_event IS NOT NULL THEN EXISTS (
+      SELECT 1 FROM public.events e
+      WHERE e.id = p_event
+        AND (auth.uid() = ANY(e.attendees)
+             OR e.group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid())))
+    ELSE EXISTS (
+      SELECT 1 FROM public.ideas i
+      WHERE i.id = p_idea
+        AND (auth.uid() = ANY(i.audience_user_ids)
+             OR i.group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid())))
+  END;
+$$;
+
+CREATE POLICY "People on a plan can read its comments"
+  ON public.plan_comments FOR SELECT USING (public.can_see_plan(event_id, idea_id));
+CREATE POLICY "People on a plan can comment as themselves"
+  ON public.plan_comments FOR INSERT WITH CHECK (auth.uid() = user_id AND public.can_see_plan(event_id, idea_id));
+CREATE POLICY "Authors can delete their comments"
+  ON public.plan_comments FOR DELETE USING (auth.uid() = user_id);
+
+-- Memory photos
+-- Private bucket. Paths are "<event id>/<user id>/<file>".
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('memories', 'memories', false)
+ON CONFLICT (id) DO NOTHING;
+
+DROP POLICY IF EXISTS "People at an event can see its photos" ON storage.objects;
+CREATE POLICY "People at an event can see its photos"
+  ON storage.objects FOR SELECT
+  USING (bucket_id = 'memories' AND public.can_see_plan(((storage.foldername(name))[1])::uuid, NULL));
+
+DROP POLICY IF EXISTS "People at an event can add their own photos" ON storage.objects;
+CREATE POLICY "People at an event can add their own photos"
+  ON storage.objects FOR INSERT
+  WITH CHECK (
+    bucket_id = 'memories'
+    AND (storage.foldername(name))[2] = auth.uid()::text
+    AND public.can_see_plan(((storage.foldername(name))[1])::uuid, NULL)
+  );
+
+DROP POLICY IF EXISTS "People can remove their own photos" ON storage.objects;
+CREATE POLICY "People can remove their own photos"
+  ON storage.objects FOR DELETE
+  USING (bucket_id = 'memories' AND (storage.foldername(name))[2] = auth.uid()::text);

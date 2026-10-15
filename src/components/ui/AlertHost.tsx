@@ -49,7 +49,7 @@ export default function AlertHost() {
           <View style={{ flexDirection: 'row', gap: space.s, paddingHorizontal: space.m, paddingBottom: space.m }}>
             {isConfirm && (
               <Tappable feedback="opacity" onPress={() => close(false)} style={[styles.btn, { backgroundColor: c.fill }]}>
-                <Txt v="callout">Cancel</Txt>
+                <Txt v="callout">{current.cancelLabel ?? 'Cancel'}</Txt>
               </Tappable>
             )}
             <Tappable

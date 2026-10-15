@@ -1,8 +1,10 @@
-// New Idea sheet, and the Plan flow that turns an idea into a time.
+// New Plan sheet, and the flow that turns an idea into a time.
 //
 // Three steps in one sheet:
 //   compose  — describe it in a sentence (pre-fills the form) or fill it in:
-//              what, who, where, when, other details. Then Propose or Plan.
+//              what, who, where, when, other details. Then ask the group,
+//              find a time, or — already know when — hand off to the
+//              calendar's event sheet.
 //   prefs    — Plan asks about scheduling preferences first (time of day,
 //              how soon, which days, how long).
 //   options  — a few times that work for everyone; create & share an invite,
@@ -28,6 +30,7 @@ import {
 import { sendNotifications } from '../../lib/notifications';
 import { useWorkSchedules } from '../../lib/workSchedule';
 import { expandEvents } from '../../lib/recurrence';
+import { blocksTime } from '../../lib/rsvp';
 import { AppNotificationInsert, Contact, Event, Idea, Profile, TimeSlot } from '../../types';
 import { useGroup } from '../../contexts/GroupContext';
 import { useAuth } from '../../contexts/AuthContext';
@@ -39,6 +42,7 @@ import { space, useTheme } from '../../theme';
 import CalendarGrid from '../calendar/CalendarGrid';
 import { DescribeField } from '../calendar/EventViews';
 import { longDate, relativeDay, shortDate, todayKey } from '../calendar/dates';
+import type { PlanPrefill } from '../../components/PlanComposer';
 
 interface PersonInGroup {
   profile: Profile;
@@ -80,9 +84,12 @@ interface Props {
   /** Demo mode has no database; the saved idea comes back so the list can show it. */
   onSaved: (idea?: Idea) => void;
   entry?: PlanEntry | null;
+  prefill?: PlanPrefill;
+  /** "I know when": continue as a calendar event with what's filled in. */
+  onKnowWhen?: (prefill: PlanPrefill) => void;
 }
 
-export default function CreateIdeaSheet({ visible, onClose, onSaved, entry }: Props) {
+export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, prefill, onKnowWhen }: Props) {
   const { activeGroup, groups, fetchGroups } = useGroup();
   const { user, profile } = useAuth();
   const { c } = useTheme();
@@ -146,9 +153,9 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry }: Pr
         setChosen(i >= 0 ? i : proposed.length ? 0 : null);
       }
     } else {
-      setTitle(''); setDescription(''); setLocation(''); setDate(null);
-      setSelectedGroupIds(new Set()); setSelectedUserIds(new Set()); setSelectedContactIds(new Set());
-      setPrefs(defaultPrefs({}));
+      setTitle(prefill?.title ?? ''); setDescription(prefill?.notes ?? ''); setLocation(prefill?.location ?? ''); setDate(prefill?.date ?? null);
+      setSelectedGroupIds(new Set()); setSelectedUserIds(new Set(prefill?.people ?? [])); setSelectedContactIds(new Set());
+      setPrefs(defaultPrefs({ start: prefill?.start, end: prefill?.end, date: prefill?.date ?? null }));
       setStep('compose');
     }
     if (!isDemo) fetchGroups();
@@ -240,11 +247,13 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry }: Pr
 
   // ─── Who's involved ────────────────────────────────────────────────────────
   // App users we can notify and whose calendars we can check: picked people,
-  // members of picked groups, and (for an existing idea) anyone who said "I'm in".
+  // members of picked groups, and (for an existing idea) anyone who said "I'm in"
+  // or said some of its dates work.
   const participantIds = useMemo(() => {
     const ids = new Set(selectedUserIds);
     people.forEach(p => { if (p.groupIds.some(g => selectedGroupIds.has(g))) ids.add(p.profile.id); });
     existing?.idea_votes?.forEach(v => ids.add(v.user_id));
+    Object.entries(existing?.slot_votes ?? {}).forEach(([id, starts]) => { if (starts.length) ids.add(id); });
     if (meId) ids.delete(meId);
     return Array.from(ids);
   }, [selectedUserIds, selectedGroupIds, people, existing, meId]);
@@ -278,7 +287,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry }: Pr
   }
 
   /** Insert the new idea, or update the existing one. */
-  async function persist(fields: Pick<Idea, 'status' | 'proposed_slots' | 'event_id'>): Promise<Idea | null> {
+  async function persist(fields: Pick<Idea, 'status' | 'proposed_slots' | 'event_id'> & Pick<Partial<Idea>, 'slot_votes'>): Promise<Idea | null> {
     const planned_at = fields.status === 'planned' ? new Date().toISOString() : null;
     const extraGroupIds = Array.from(selectedGroupIds).filter(id => id !== storageGroupId);
     const row = {
@@ -338,9 +347,9 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry }: Pr
     await notifyAll(idea, 'idea_proposed', `${myName} proposed ${idea.title}`, bits || idea.description);
     setSaving(null);
     finish(idea);
-    notify('Proposed', participantIds.length
-      ? `${who(participantNames)} ${participantIds.length === 1 ? 'has' : 'have'} been notified. It’s under Proposed.`
-      : 'It’s under Proposed for your group to vote on.');
+    notify('Shared', participantIds.length
+      ? `${who(participantNames)} ${participantIds.length === 1 ? 'has' : 'have'} been asked. It’s in Plans so people can say they’re in.`
+      : 'It’s in Plans so your group can say they’re in.');
   }
 
   // ─── Planning ──────────────────────────────────────────────────────────────
@@ -358,7 +367,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry }: Pr
       rows = DEMO_EVENTS;
     } else {
       // One-off events in range, plus every repeating series (expanded below).
-      const cols = 'id, title, start_time, end_time, attendees, recurrence';
+      const cols = 'id, title, start_time, end_time, attendees, recurrence, rsvps, cancelled_at';
       const [oneOff, repeating] = await Promise.all([
         supabase.from('events').select(cols).overlaps('attendees', everyone).is('recurrence', null).lt('start_time', to).gt('end_time', from),
         supabase.from('events').select(cols).overlaps('attendees', everyone).not('recurrence', 'is', null).lt('start_time', to),
@@ -367,9 +376,10 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry }: Pr
       if (error) { notify('Couldn’t check calendars', error.message); return []; }
       rows = [...(oneOff.data ?? []), ...(repeating.data ?? [])] as Event[];
     }
-    return expandEvents(rows, new Date(from), new Date(to))
-      .filter(e => (e.attendees ?? []).some(a => everyone.includes(a)))
-      .map(e => ({ start: new Date(e.start_time).getTime(), end: new Date(e.end_time).getTime(), who: e.attendees[0] }));
+    // Busy = invited and not declined, on an event that's still on.
+    return expandEvents(rows, new Date(from), new Date(to)).flatMap(e =>
+      everyone.filter(id => blocksTime(e, id))
+        .map(id => ({ start: new Date(e.start_time).getTime(), end: new Date(e.end_time).getTime(), who: id })));
   }
 
   async function handleFindTimes() {
@@ -385,12 +395,13 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry }: Pr
 
   async function handleKeepProposed() {
     setSaving('keep');
-    const idea = await persist({ status: 'proposed', proposed_slots: slots, event_id: null });
+    // New options start a fresh vote; these all fit your calendar, so you're in on each.
+    const idea = await persist({ status: 'proposed', proposed_slots: slots, event_id: null, slot_votes: { [meId!]: slots.map(s => s.start) } });
     if (!idea) return setSaving(null);
     await notifyAll(idea, 'dates_proposed', `${myName} suggested times for ${idea.title}`, slots.map(slotLabel).join('\n'));
     setSaving(null);
     finish(idea);
-    notify('Kept in Proposed', `${slots.length} date option${slots.length === 1 ? '' : 's'} saved${participantIds.length ? ` and shared with ${who(participantNames)}` : ''}.`);
+    notify('Dates shared', `${slots.length} date option${slots.length === 1 ? '' : 's'} saved${participantIds.length ? ` and shared with ${who(participantNames)}` : ''}.`);
   }
 
   async function handleInvite() {
@@ -398,8 +409,13 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry }: Pr
     const slot = slots[chosen];
     setSaving('invite');
     const attendees = [meId!, ...participantIds];
+    // Anyone who already said this date works is going.
+    const rsvps = Object.fromEntries(participantIds
+      .filter(id => existing?.slot_votes?.[id]?.includes(slot.start))
+      .map(id => [id, 'going' as const]));
     let eventId: string | null = null;
     const eventRow = {
+      rsvps,
       title: title.trim(),
       description: description.trim() || null,
       location: location.trim() || null,
@@ -446,10 +462,22 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry }: Pr
   // ─── Render ────────────────────────────────────────────────────────────────
 
   const audienceCount = selectedGroupIds.size + selectedUserIds.size + selectedContactIds.size;
-  const shownPeople = showAllPeople ? people : people.slice(0, CHUNK);
+  // Whoever's already picked comes first, so a pre-filled plan shows who it's with.
+  const orderedPeople = [...people].sort((a, b) => Number(selectedUserIds.has(b.profile.id)) - Number(selectedUserIds.has(a.profile.id)));
+  const shownPeople = showAllPeople ? orderedPeople : orderedPeople.slice(0, CHUNK);
   const shownContacts = showAllContacts ? contacts : contacts.slice(0, CHUNK);
 
-  const sheetTitle = step === 'compose' ? 'New Idea' : step === 'prefs' ? 'Plan' : 'Pick a Time';
+  const sheetTitle = step === 'compose' ? 'New Plan' : step === 'prefs' ? 'Find a Time' : 'Pick a Time';
+
+  function knowWhen() {
+    if (!title.trim()) return notify('What’s the plan?', 'Give it a short description first.');
+    onKnowWhen?.({
+      title: title.trim(), location: location.trim() || undefined, notes: description.trim() || undefined,
+      people: participantIds, date, start: parsed?.start, end: parsed?.end,
+    });
+  }
+  // A sentence with a day and a time ("dinner Friday at 7") already knows when.
+  const timeKnown = !!(date && parsed?.start);
 
   return (
     <Sheet visible={visible} onClose={onClose} title={sheetTitle} cancelLabel="Cancel">
@@ -460,12 +488,12 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry }: Pr
             onChange={onDescribe}
             parsed={parsed}
             placeholder="Natasha and I want to try Lilia for dinner"
-            filledHint="Filled in below — adjust anything, then Propose or Plan."
+            filledHint="Filled in below — adjust anything, then choose how to plan it."
             emptyHint="Filled in below. A day, place, or who’s in helps, but it’s all optional."
-            accessibilityLabel="Describe the idea in your own words"
+            accessibilityLabel="Describe the plan in your own words"
           />
 
-          <Field label="What’s the idea?" value={title} onChangeText={setTitle} placeholder="Weekend camping trip, theme dinner…" accessibilityLabel="What’s the idea?" />
+          <Field label="What’s the plan?" value={title} onChangeText={setTitle} placeholder="Weekend camping trip, theme dinner…" accessibilityLabel="What’s the plan?" />
 
           <Txt v="headline" style={{ paddingHorizontal: space.m, marginBottom: -space.s }}>
             Who’s in?{audienceCount > 0 ? <Txt v="callout" tone="secondary">{`  ${audienceCount} selected`}</Txt> : null}
@@ -569,12 +597,19 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry }: Pr
           <Field label="Other details" value={description} onChangeText={setDescription} placeholder="Budget, reservations, what to bring… (optional)" multiline accessibilityLabel="Other details" />
 
           <View style={{ gap: space.s }}>
+            <Txt v="headline" style={{ paddingHorizontal: space.m }}>How do you want to plan it?</Txt>
+            {timeKnown && onKnowWhen ? (
+              <Button label="Add to Calendar" icon="calendar" onPress={knowWhen} disabled={!title.trim() || !!saving} block />
+            ) : null}
             <View style={{ flexDirection: 'row', gap: space.s }}>
-              <Button label="Propose" icon="paper-plane-outline" variant="gray" onPress={handlePropose} loading={saving === 'propose'} disabled={!title.trim() || !!saving} style={{ flex: 1 }} />
-              <Button label="Plan" icon="calendar-outline" onPress={startPlan} disabled={!title.trim() || !!saving} style={{ flex: 1 }} />
+              <Button label="Ask the Group" icon="chatbubbles-outline" variant="gray" onPress={handlePropose} loading={saving === 'propose'} disabled={!title.trim() || !!saving} style={{ flex: 1 }} />
+              <Button label="Find a Time" icon="search-outline" variant={timeKnown ? 'gray' : 'filled'} onPress={startPlan} disabled={!title.trim() || !!saving} style={{ flex: 1 }} />
             </View>
+            {!timeKnown && onKnowWhen ? (
+              <Button label="I Know When" icon="calendar-outline" variant="plain" onPress={knowWhen} disabled={!title.trim() || !!saving} />
+            ) : null}
             <Txt v="footnote" tone="secondary" style={{ paddingHorizontal: space.m }}>
-              Propose shares it with everyone you included. Plan checks their calendars and finds times that work.
+              Ask the Group shares it so people can say they’re in. Find a Time checks everyone’s calendars and suggests dates they can vote on.
             </Txt>
           </View>
         </>
@@ -681,7 +716,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry }: Pr
 
           {slots.length > 0 && (
             <View style={{ gap: space.s }}>
-              <Txt v="headline" style={{ paddingHorizontal: space.m }}>Send an invite, or keep it proposed?</Txt>
+              <Txt v="headline" style={{ paddingHorizontal: space.m }}>Send the invite now, or let everyone vote?</Txt>
               <Button
                 label={chosen !== null ? `Create & Share Invite` : 'Pick a time to invite'}
                 icon="send"
@@ -691,7 +726,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry }: Pr
                 block
               />
               <Button
-                label="Keep in Proposed with These Dates"
+                label="Let Everyone Vote on These Dates"
                 variant="gray"
                 onPress={handleKeepProposed}
                 loading={saving === 'keep'}
