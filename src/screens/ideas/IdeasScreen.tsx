@@ -1,39 +1,42 @@
 // Ideas
 //
-// One visible decision per view: the status segment (4 choices). The
+// One visible decision per view: the status segment (3 choices), or a
+// "Show all" check that lists every idea with its status labeled. The
 // audience filter — potentially dozens of groups and people — lives behind a
 // single Filter menu, with the active filter echoed as a removable row.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { notify } from '../../lib/alert';
-import { ActivityIndicator, FlatList, View } from 'react-native';
+import { ActivityIndicator, FlatList, Platform, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../../lib/supabase';
 import { DEMO_CONTACTS, DEMO_IDEAS, DEMO_MEMBERS, DEMO_ME, isDemoGroup } from '../../lib/demo';
 import { useShortcut } from '../../lib/shortcuts';
-import { Idea, Profile, Contact, Group } from '../../types';
+import { useNotifications } from '../../lib/notifications';
+import { AppNotification, Idea, Profile, Contact, Group, TimeSlot } from '../../types';
 import { useGroup } from '../../contexts/GroupContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { AvatarPerson } from '../../components/Avatar';
 import GroupSwitcher, { useVisibleGroups } from '../../components/GroupSwitcher';
 import {
-  EmptyState, IconButton, ListRow, Menu, MenuSection, PrimaryAction, ReadingColumn,
+  EmptyState, Icon, IconButton, ListRow, Tappable, Txt, Menu, MenuSection, PrimaryAction, ReadingColumn,
   ScreenHeader, Segmented, Sheet, SplitView, useBottomClearance,
 } from '../../components/ui';
 import { space, useLayout, useTheme } from '../../theme';
-import CreateIdeaSheet from './CreateIdeaScreen';
+import CreateIdeaSheet, { PlanEntry } from './CreateIdeaScreen';
 import { Sheep } from '../../components/Sheep';
-import { IdeaDetail, IdeaRow } from './IdeaViews';
+import { IdeaDetail, IdeaRow, NotificationList } from './IdeaViews';
 
-type StatusFilter = 'all' | Idea['status'];
 type AudienceFilter =
   | { kind: 'all' }
   | { kind: 'group'; id: string }
   | { kind: 'user'; id: string }
   | { kind: 'contact'; id: string };
 
-const STATUS_FILTERS: { key: StatusFilter; label: string }[] = [
-  { key: 'all', label: 'All' },
+// iOS can't present a sheet while another is still sliding away.
+const afterSheet = (fn: () => void) => setTimeout(fn, Platform.OS === 'ios' ? 450 : 0);
+
+const STATUS_FILTERS: { key: Idea['status']; label: string }[] = [
   { key: 'proposed', label: 'Proposed' },
   { key: 'planned', label: 'Planned' },
   { key: 'done', label: 'Done' },
@@ -52,11 +55,15 @@ export default function IdeasScreen() {
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [members, setMembers] = useState<Profile[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
-  const [filter, setFilter] = useState<StatusFilter>('all');
+  const [filter, setFilter] = useState<Idea['status']>('proposed');
+  const [showAll, setShowAll] = useState(false);
   const [audienceFilter, setAudienceFilter] = useState<AudienceFilter>({ kind: 'all' });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [composing, setComposing] = useState(false);
+  const [planEntry, setPlanEntry] = useState<PlanEntry | null>(null);
+  const [inboxOpen, setInboxOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  const inbox = useNotifications(meId, isDemo);
 
   const fetchAll = useCallback(async () => {
     if (!activeGroup) return;
@@ -106,7 +113,36 @@ export default function IdeasScreen() {
     setLoading(false);
   }, [activeGroup, groups, user, isDemo]);
 
-  useFocusEffect(useCallback(() => { fetchAll(); }, [fetchAll]));
+  useFocusEffect(useCallback(() => { fetchAll(); inbox.refresh(); }, [fetchAll, inbox.refresh]));
+
+  // Demo ideas live only in local state; real ones come back from the database.
+  function handleSaved(idea?: Idea) {
+    if (isDemo && idea) {
+      setIdeas(prev => (prev.some(i => i.id === idea.id) ? prev.map(i => (i.id === idea.id ? idea : i)) : [idea, ...prev]));
+    } else fetchAll();
+    if (idea) setFilter(idea.status);
+  }
+
+  // From the detail: open the planner (on compact, once the detail sheet is gone).
+  function openPlanner(idea: Idea, step: PlanEntry['step'], slot?: TimeSlot) {
+    if (threeColumn) return setPlanEntry({ idea, step, slot });
+    setSelectedId(null);
+    afterSheet(() => setPlanEntry({ idea, step, slot }));
+  }
+
+  function openNotification(n: AppNotification) {
+    inbox.markRead([n.id]);
+    setInboxOpen(false);
+    if (n.idea_id && ideas.some(i => i.id === n.idea_id)) {
+      setShowAll(true);
+      afterSheet(() => setSelectedId(n.idea_id));
+    }
+  }
+
+  function closeInbox() {
+    setInboxOpen(false);
+    inbox.markRead(inbox.items.filter(n => !n.read_at).map(n => n.id));
+  }
 
   const memberById = useMemo(() => new Map(members.map(p => [p.id, p])), [members]);
   const contactById = useMemo(() => new Map(contacts.map(ct => [ct.id, ct])), [contacts]);
@@ -158,21 +194,23 @@ export default function IdeasScreen() {
   }
 
   async function handleStatusChange(idea: Idea, status: Idea['status']) {
+    // Planned keeps its date through Done; going back to Proposed clears it.
+    const planned_at = status === 'planned' ? (idea.planned_at ?? new Date().toISOString()) : status === 'proposed' ? null : idea.planned_at;
     if (isDemo) {
-      setIdeas(prev => prev.map(i => (i.id === idea.id ? { ...i, status } : i)));
+      setIdeas(prev => prev.map(i => (i.id === idea.id ? { ...i, status, planned_at } : i)));
       return;
     }
-    await supabase.from('ideas').update({ status } as any).eq('id', idea.id);
+    await supabase.from('ideas').update({ status, planned_at } as any).eq('id', idea.id);
     fetchAll();
   }
 
   const filtered = useMemo(() => {
-    let list = filter === 'all' ? ideas : ideas.filter(i => i.status === filter);
+    let list = showAll ? ideas : ideas.filter(i => i.status === filter);
     if (audienceFilter.kind === 'group') list = list.filter(i => ideaGroupIds(i).includes(audienceFilter.id));
     else if (audienceFilter.kind === 'user') list = list.filter(i => i.audience_user_ids?.includes(audienceFilter.id));
     else if (audienceFilter.kind === 'contact') list = list.filter(i => i.audience_contact_ids?.includes(audienceFilter.id));
     return list;
-  }, [ideas, filter, audienceFilter]);
+  }, [ideas, filter, showAll, audienceFilter]);
 
   // Detail column: keep something selected when there's room to show it.
   useEffect(() => {
@@ -245,6 +283,17 @@ export default function IdeasScreen() {
             eyebrow={activeGroup?.name}
             trailing={
               <>
+                <View>
+                  <IconButton
+                    icon={inbox.unread ? 'notifications' : 'notifications-outline'}
+                    label={inbox.unread ? `Notifications, ${inbox.unread} new` : 'Notifications'}
+                    variant="gray"
+                    onPress={() => setInboxOpen(true)}
+                  />
+                  {inbox.unread ? (
+                    <View pointerEvents="none" style={{ position: 'absolute', top: 2, right: 2, width: 10, height: 10, borderRadius: 5, backgroundColor: c.tint, borderWidth: 2, borderColor: c.background }} />
+                  ) : null}
+                </View>
                 {filterButton}
                 {compact ? (
                   <GroupSwitcher>
@@ -257,7 +306,18 @@ export default function IdeasScreen() {
             }
           />
           <View style={{ paddingHorizontal: compact ? space.m : space.l, gap: space.s }}>
-            <Segmented options={STATUS_FILTERS} value={filter} onChange={setFilter} />
+            <Tappable
+              feedback="opacity"
+              onPress={() => setShowAll(v => !v)}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: showAll }}
+              accessibilityLabel="Show all ideas"
+              style={{ flexDirection: 'row', alignItems: 'center', gap: space.s, alignSelf: 'flex-start', minHeight: 32 }}
+            >
+              <Icon name={showAll ? 'checkbox' : 'square-outline'} size={20} color={showAll ? c.tint : c.secondaryLabel} />
+              <Txt v="callout">Show all</Txt>
+            </Tappable>
+            {!showAll && <Segmented options={STATUS_FILTERS} value={filter} onChange={setFilter} />}
             {audienceLabel ? (
               <View style={{ backgroundColor: c.fill, borderRadius: 12, overflow: 'hidden' }}>
                 <ListRow
@@ -274,7 +334,7 @@ export default function IdeasScreen() {
         <IdeaRow
           idea={item}
           voted={hasVoted(item)}
-          showStatus={filter === 'all'}
+          showStatus={showAll}
           audienceSummary={audienceSummary(item)}
           selected={threeColumn && item.id === selectedId}
           onVote={() => handleVote(item)}
@@ -305,6 +365,8 @@ export default function IdeasScreen() {
       meId={meId}
       onVote={() => handleVote(idea)}
       onStatusChange={(s) => handleStatusChange(idea, s)}
+      onPlan={() => openPlanner(idea, 'prefs')}
+      onPickSlot={(slot) => openPlanner(idea, 'options', slot)}
     />
   );
 
@@ -325,7 +387,15 @@ export default function IdeasScreen() {
         </Sheet>
       )}
       <PrimaryAction label="New Idea" onPress={() => setComposing(true)} />
-      <CreateIdeaSheet visible={composing} onClose={() => setComposing(false)} onSaved={fetchAll} />
+      <CreateIdeaSheet
+        visible={composing || !!planEntry}
+        entry={planEntry}
+        onClose={() => { setComposing(false); setPlanEntry(null); }}
+        onSaved={handleSaved}
+      />
+      <Sheet visible={inboxOpen} onClose={closeInbox} title="Notifications" cancelLabel="Done">
+        <NotificationList items={inbox.items} onOpen={openNotification} />
+      </Sheet>
     </>
   );
 }

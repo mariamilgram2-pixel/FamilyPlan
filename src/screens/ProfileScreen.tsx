@@ -21,6 +21,7 @@ import {
   Button, Field, Icon, IconButton, ListRow, ListSection, Menu, ReadingColumn,
   ScreenHeader, Screen, Sheet, Tappable, Toggle, Txt, useBottomClearance,
 } from '../components/ui';
+import { toRRule } from '../lib/recurrence';
 import { space, useLayout, useTheme } from '../theme';
 
 // User-chosen labels for their own events — content, not chrome.
@@ -134,6 +135,7 @@ export default function ProfileScreen() {
         `DTSTAMP:${stamp(new Date().toISOString())}`,
         `DTSTART:${stamp(e.start_time)}`,
         `DTEND:${stamp(e.end_time)}`,
+        e.recurrence ? toRRule(e.recurrence) : '',
         `SUMMARY:${esc(e.title || '')}`,
         e.location ? `LOCATION:${esc(e.location)}` : '',
         e.description ? `DESCRIPTION:${esc(e.description)}` : '',

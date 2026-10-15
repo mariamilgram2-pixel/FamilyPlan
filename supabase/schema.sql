@@ -44,6 +44,9 @@ CREATE TABLE public.events (
   location    TEXT,
   created_by  UUID        REFERENCES public.profiles(id) ON DELETE SET NULL,
   attendees   UUID[]      NOT NULL DEFAULT '{}',
+  recurrence  JSONB,
+  invited_group_ids UUID[] NOT NULL DEFAULT '{}',
+  assignments JSONB       NOT NULL DEFAULT '[]',
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT end_after_start CHECK (end_time > start_time)
 );
@@ -71,6 +74,11 @@ CREATE TABLE public.ideas (
   audience_group_ids    UUID[]      NOT NULL DEFAULT '{}',
   audience_user_ids     UUID[]      NOT NULL DEFAULT '{}',
   audience_contact_ids  UUID[]      NOT NULL DEFAULT '{}',
+  location              TEXT,
+  target_date           DATE,
+  proposed_slots        JSONB       NOT NULL DEFAULT '[]',
+  event_id              UUID        REFERENCES public.events(id) ON DELETE SET NULL,
+  planned_at            TIMESTAMPTZ,
   created_by            UUID        REFERENCES public.profiles(id) ON DELETE SET NULL,
   created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -84,6 +92,21 @@ CREATE TABLE public.idea_votes (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (idea_id, user_id)
 );
+
+CREATE TABLE public.notifications (
+  id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     UUID        NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  actor_id    UUID        REFERENCES public.profiles(id) ON DELETE SET NULL,
+  kind        TEXT        NOT NULL CHECK (kind IN ('idea_proposed', 'dates_proposed', 'invite', 'assignment')),
+  idea_id     UUID        REFERENCES public.ideas(id) ON DELETE CASCADE,
+  event_id    UUID        REFERENCES public.events(id) ON DELETE CASCADE,
+  title       TEXT        NOT NULL,
+  body        TEXT,
+  read_at     TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX notifications_user_created ON public.notifications (user_id, created_at DESC);
 
 -- ─── Trigger: auto-create profile on sign up ─────────────────
 
@@ -114,6 +137,7 @@ ALTER TABLE public.events       ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ideas        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.idea_votes   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.contacts     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
 
 -- profiles
 CREATE POLICY "Users can view any profile"
@@ -147,6 +171,8 @@ CREATE POLICY "Admins can manage members"
 CREATE POLICY "Group members can view events"
   ON public.events FOR SELECT
   USING (group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid()));
+CREATE POLICY "Invitees can view events they're invited to"
+  ON public.events FOR SELECT USING (auth.uid() = ANY(attendees));
 CREATE POLICY "Group members can create events"
   ON public.events FOR INSERT
   WITH CHECK (group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid()) AND auth.uid() = created_by);
@@ -195,3 +221,33 @@ CREATE POLICY "Users can update their own contacts"
   ON public.contacts FOR UPDATE USING (auth.uid() = owner_id);
 CREATE POLICY "Users can delete their own contacts"
   ON public.contacts FOR DELETE USING (auth.uid() = owner_id);
+
+-- notifications (in-app inbox; anyone can notify, only the recipient reads)
+CREATE POLICY "Users can view their own notifications"
+  ON public.notifications FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Users can send notifications as themselves"
+  ON public.notifications FOR INSERT WITH CHECK (auth.uid() = actor_id);
+CREATE POLICY "Users can mark their own notifications read"
+  ON public.notifications FOR UPDATE USING (auth.uid() = user_id);
+
+-- Claim or release an assignment ("I'll bring dessert") without edit rights
+-- to the rest of the event. Only fills an open slot, and only releases your own.
+CREATE OR REPLACE FUNCTION public.claim_assignment(p_event UUID, p_item TEXT, p_claim BOOLEAN)
+RETURNS VOID LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  UPDATE public.events e
+  SET assignments = (
+    SELECT COALESCE(jsonb_agg(
+      CASE
+        WHEN a->>'id' <> p_item THEN a
+        WHEN p_claim AND (a->>'assignee_id') IS NULL THEN jsonb_set(a, '{assignee_id}', to_jsonb(auth.uid()::text))
+        WHEN NOT p_claim AND a->>'assignee_id' = auth.uid()::text THEN jsonb_set(a, '{assignee_id}', 'null'::jsonb)
+        ELSE a
+      END ORDER BY ord), '[]'::jsonb)
+    FROM jsonb_array_elements(e.assignments) WITH ORDINALITY AS t(a, ord)
+  )
+  WHERE e.id = p_event
+    AND (auth.uid() = ANY(e.attendees)
+         OR e.group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid()));
+END;
+$$;

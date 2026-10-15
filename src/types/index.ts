@@ -10,6 +10,7 @@ export interface Database {
       ideas: { Row: Idea; Insert: IdeaInsert; Update: Partial<IdeaInsert> };
       idea_votes: { Row: IdeaVote; Insert: IdeaVoteInsert; Update: Partial<IdeaVoteInsert> };
       contacts: { Row: Contact; Insert: ContactInsert; Update: Partial<ContactInsert> };
+      notifications: { Row: AppNotification; Insert: AppNotificationInsert; Update: Partial<AppNotificationInsert> };
     };
   };
 }
@@ -57,12 +58,30 @@ export interface Event {
   location: string | null;
   created_by: string | null;
   attendees: string[];
+  recurrence?: Recurrence | null;    // repeating series; see lib/recurrence
+  invited_group_ids?: string[];      // groups invited as a whole (members are in attendees)
+  assignments?: Assignment[];        // who's bringing / doing what
   created_at: string;
   // joined relations
   profiles?: Pick<Profile, 'id' | 'full_name' | 'email'>;
+  // client-only: set on expanded occurrences of a repeating event
+  series_id?: string;
 }
 
-export type EventInsert = Omit<Event, 'id' | 'created_at' | 'profiles'>;
+export interface Assignment {
+  id: string;
+  item: string;                      // "Dessert", "Pick up ice"
+  assignee_id: string | null;        // null = up for grabs
+}
+
+export interface Recurrence {
+  freq: 'daily' | 'weekly' | 'monthly' | 'yearly';
+  interval: number;                  // every N days / weeks / months / years
+  weekdaysOnly?: boolean;            // daily, Mon–Fri
+  until: string | null;              // YYYY-MM-DD, inclusive; null = never ends
+}
+
+export type EventInsert = Omit<Event, 'id' | 'created_at' | 'profiles' | 'series_id'>;
 
 export interface Idea {
   id: string;
@@ -74,12 +93,19 @@ export interface Idea {
   audience_group_ids: string[];
   audience_user_ids: string[];
   audience_contact_ids: string[];
+  location: string | null;
+  target_date: string | null;        // YYYY-MM-DD, when the idea has a day in mind
+  proposed_slots: TimeSlot[];        // date options from Plan, or the booked time once planned
+  event_id: string | null;           // the calendar event created from this idea
+  planned_at: string | null;         // when it moved to Planned (proposed = created_at)
   created_by: string | null;
   created_at: string;
   // joined relations
   profiles?: Pick<Profile, 'id' | 'full_name' | 'email'>;
   idea_votes?: IdeaVote[];
 }
+
+export interface TimeSlot { start: string; end: string }   // ISO timestamps
 
 export type IdeaInsert = Omit<Idea, 'id' | 'votes' | 'created_at' | 'profiles' | 'idea_votes'>;
 
@@ -102,6 +128,23 @@ export interface IdeaVote {
 }
 
 export type IdeaVoteInsert = Omit<IdeaVote, 'id' | 'created_at'>;
+
+export interface AppNotification {
+  id: string;
+  user_id: string;                   // recipient
+  actor_id: string | null;           // who caused it
+  kind: 'idea_proposed' | 'dates_proposed' | 'invite' | 'assignment';
+  idea_id: string | null;
+  event_id: string | null;
+  title: string;
+  body: string | null;
+  read_at: string | null;
+  created_at: string;
+  // joined relations
+  profiles?: Pick<Profile, 'id' | 'full_name' | 'email'>;
+}
+
+export type AppNotificationInsert = Omit<AppNotification, 'id' | 'read_at' | 'created_at' | 'profiles'>;
 
 // ─── Navigation types ─────────────────────────────────────────────────────────
 

@@ -52,24 +52,48 @@ export const DEMO_EVENTS: Event[] = [
   ev('e7', 'Book club', 12, 19, 30, 90, 'Ana’s place', ['demo-ana', 'demo-dev']),
 ];
 
-function idea(id: string, title: string, description: string | null, status: Idea['status'], voters: string[], by: string, audienceUsers: string[] = []): Idea {
+// Family dinner shows off assignments: some claimed, one open.
+DEMO_EVENTS[1].assignments = [
+  { id: 'a1', item: 'Bread', assignee_id: 'demo-ben' },
+  { id: 'a2', item: 'Salad', assignee_id: 'demo-ana' },
+  { id: 'a3', item: 'Dessert', assignee_id: null },
+];
+
+/** Events created during a demo session (e.g. from a planned idea). */
+export function addDemoEvent(e: Omit<Event, 'id' | 'created_at' | 'group_id'>): Event {
+  const event: Event = { ...e, id: `e-${Date.now()}`, group_id: DEMO_GROUP_ID, created_at: new Date().toISOString() };
+  DEMO_EVENTS.push(event);
+  return event;
+}
+
+const daysAgo = (n: number) => new Date(Date.now() - n * 86400000).toISOString();
+
+function idea(id: string, title: string, description: string | null, status: Idea['status'], voters: string[], by: string, audienceUsers: string[] = [], proposedDaysAgo = 0, plannedDaysAgo: number | null = null): Idea {
   const author = DEMO_MEMBERS.find(m => m.id === by)!;
   return {
     id, group_id: DEMO_GROUP_ID, title, description, status,
     votes: voters.length,
     audience_group_ids: [], audience_user_ids: audienceUsers, audience_contact_ids: [],
-    created_by: by, created_at: now,
+    location: null, target_date: null, proposed_slots: [], event_id: null,
+    planned_at: plannedDaysAgo === null ? null : daysAgo(plannedDaysAgo),
+    created_by: by, created_at: daysAgo(proposedDaysAgo),
     profiles: { id: author.id, full_name: author.full_name, email: author.email },
     idea_votes: voters.map((u, i) => ({ id: `${id}-v${i}`, idea_id: id, user_id: u, created_at: now })),
   };
 }
 
 export const DEMO_IDEAS: Idea[] = [
-  idea('i1', 'Camping weekend at the lake', 'Two nights, tents or the cabins by the dock. Late spring when the bugs are manageable.', 'proposed', [DEMO_ME, 'demo-ana', 'demo-eli', 'demo-ben'], 'demo-eli'),
-  idea('i2', 'Taco night rotation', 'Each family hosts once a month and picks the theme.', 'proposed', ['demo-chloe', 'demo-dev'], 'demo-chloe'),
-  idea('i3', 'Pottery class', null, 'proposed', ['demo-ana'], DEMO_ME, ['demo-ana', 'demo-chloe']),
-  idea('i4', 'Visit the aquarium', 'Kids are asking. Weekday mornings are quieter.', 'planned', [DEMO_ME, 'demo-ben', 'demo-chloe'], 'demo-ben'),
-  idea('i5', 'Board game marathon', null, 'done', ['demo-dev', 'demo-eli'], 'demo-dev'),
+  idea('i1', 'Camping weekend at the lake', 'Two nights, tents or the cabins by the dock. Late spring when the bugs are manageable.', 'proposed', [DEMO_ME, 'demo-ana', 'demo-eli', 'demo-ben'], 'demo-eli', [], 6),
+  idea('i2', 'Taco night rotation', 'Each family hosts once a month and picks the theme.', 'proposed', ['demo-chloe', 'demo-dev'], 'demo-chloe', [], 12),
+  idea('i3', 'Pottery class', null, 'proposed', ['demo-ana'], DEMO_ME, ['demo-ana', 'demo-chloe'], 1),
+  idea('i4', 'Visit the aquarium', 'Kids are asking. Weekday mornings are quieter.', 'planned', [DEMO_ME, 'demo-ben', 'demo-chloe'], 'demo-ben', [], 20, 3),
+  idea('i5', 'Board game marathon', null, 'done', ['demo-dev', 'demo-eli'], 'demo-dev', [], 40, 30),
+];
+
+/** Extra demo groups, so the invite picker has more than one to choose from. */
+export const DEMO_EXTRA_GROUPS: { group: Group; memberIds: string[] }[] = [
+  { group: { id: 'demo-soccer', name: 'Soccer parents', description: null, invite_code: 'SOCCER01', created_by: 'demo-ben', created_at: now }, memberIds: ['demo-ben', 'demo-eli'] },
+  { group: { id: 'demo-books', name: 'Book club', description: null, invite_code: 'BOOKS001', created_by: 'demo-ana', created_at: now }, memberIds: ['demo-ana', 'demo-dev', DEMO_ME] },
 ];
 
 export const DEMO_CONTACTS: Contact[] = [

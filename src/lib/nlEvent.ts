@@ -8,6 +8,7 @@
 // for messier phrasing ("the Thursday after Ana's birthday").
 
 import { addDays, dateKey, parseKey } from '../screens/calendar/dates';
+import type { RepeatKey } from './recurrence';
 
 export interface NLMember { id: string; full_name?: string | null; email?: string | null }
 
@@ -17,6 +18,7 @@ export interface ParsedEvent {
   start?: string;         // HH:MM (24h)
   end?: string;           // HH:MM (24h)
   location?: string;
+  repeat?: RepeatKey;     // "every Tuesday", "weekly"
   inviteIds: string[];
   people: string[];       // display names that matched
 }
@@ -89,7 +91,23 @@ export function parseEventText(text: string, opts: { today: string; members: NLM
 
   const ctxPm = /\b(dinner|tonight|evening|night|drinks|happy hour|party|movie)\b/i.test(s) ? 'pm' : /\b(breakfast|morning|brunch)\b/i.test(s) ? 'am' : null;
 
-  // 2 · Dates.
+  // 2 · Repeats: "every Tuesday", "every other week", "each month", "weekly".
+  take(new RegExp(`\\b(?:every|each)\\s+(other\\s+)?(day|weekday|week|month|year|${WD})\\b`, 'i'), m => {
+    const other = !!m[1];
+    const w = m[2].toLowerCase();
+    if (w === 'day') out.repeat = 'daily';
+    else if (w === 'weekday') out.repeat = 'weekdays';
+    else if (w === 'week') out.repeat = other ? 'biweekly' : 'weekly';
+    else if (w === 'month') out.repeat = 'monthly';
+    else if (w === 'year') out.repeat = 'yearly';
+    else { out.repeat = other ? 'biweekly' : 'weekly'; out.date = upcoming(today, weekdayIndex(w)); }
+  });
+  take(/\b(daily|weekly|biweekly|monthly|yearly|annually)\b/i, m => {
+    const w = m[1].toLowerCase();
+    out.repeat ??= w === 'annually' ? 'yearly' : (w as RepeatKey);
+  });
+
+  // 3 · Dates.
   take(/\b(?:the\s+)?day\s+after\s+tomorrow\b/i, () => { out.date = addDays(today, 2); });
   let tonight = false;
   take(/\btonight\b/i, () => { out.date ??= today; tonight = true; });
@@ -137,14 +155,17 @@ export function parseEventText(text: string, opts: { today: string; members: NLM
   // "on the 20th"
   take(/\b(?:on\s+)?the\s+(\d{1,2})(?:st|nd|rd|th)\b/i, m => {
     const t = parseKey(today);
-    let d = resolveMD(t.getMonth(), Number(m[1]));
-    if (d && d < today) d = dateKey(new Date(t.getFullYear(), t.getMonth() + 1, Number(m[1])));
-    if (!d) return false; out.date ??= d;
+    const n = Number(m[1]);
+    if (n < 1 || n > 31) return false;
+    // This month if it's still ahead, otherwise next month.
+    let d = dateKey(new Date(t.getFullYear(), t.getMonth(), n));
+    if (d < today) d = dateKey(new Date(t.getFullYear(), t.getMonth() + 1, n));
+    out.date ??= d;
   });
   // Bare weekday: "Tuesday", "on Fri"
   take(new RegExp(`\\b(?:on\\s+)?${WD}\\b`, 'i'), m => { out.date ??= upcoming(today, weekdayIndex(m[1])); });
 
-  // 3 · Times: ranges first, then single times, then parts of day.
+  // 4 · Times: ranges first, then single times, then parts of day.
   take(new RegExp(`\\b(?:from\\s+|between\\s+)?(${TIME})\\s*(?:-|–|to|until|till|and)\\s*(${TIME})\\b`, 'i'), m => {
     const endTok = toMinutes(m[2], ctxPm);
     const endMer = /p/i.test(m[2]) ? 'pm' : /a/i.test(m[2]) && !/noon/i.test(m[2]) ? 'am' : ctxPm;
@@ -185,7 +206,7 @@ export function parseEventText(text: string, opts: { today: string; members: NLM
     if (!out.start) out.start = ({ morning: '09:00', afternoon: '14:00', evening: '18:00' } as Record<string, string>)[m[1].toLowerCase()];
   });
 
-  // 4 · Duration: "for 2 hours", "for 90 min", "for an hour", "for half an hour".
+  // 5 · Duration: "for 2 hours", "for 90 min", "for an hour", "for half an hour".
   let duration: number | null = null;
   take(/\bfor\s+(half\s+an?|an?|one|\d+(?:\.\d+)?)\s*(hours?|hrs?|h|minutes?|mins?|m)\b/i, m => {
     const n = /half/i.test(m[1]) ? 0.5 : /^(an?|one)$/i.test(m[1]) ? 1 : Number(m[1]);
@@ -200,7 +221,7 @@ export function parseEventText(text: string, opts: { today: string; members: NLM
     out.end = hm(h * 60 + m + (duration ?? (meal ? MEALS[meal][1] : 60)));
   }
 
-  // 5 · People: "with Ana", "with Ana and Ben", "with Ana, Ben & Chloe".
+  // 6 · People: "with Ana", "with Ana and Ben", "with Ana, Ben & Chloe".
   // Commas separate names here, so they don't end the phrase.
   const PEOPLE_STOP = STOP.replace('|[,.;!?]|', '|[.;!?]|');
   take(new RegExp(`\\bwith\\s+(.+?)${PEOPLE_STOP}`, 'i'), m => {
@@ -223,14 +244,14 @@ export function parseEventText(text: string, opts: { today: string; members: NLM
     return false;
   });
 
-  // 6 · Place: "at Joe's Pizza" (anything after "at" that isn't a time).
+  // 7 · Place: "at Joe's Pizza" (anything after "at" that isn't a time).
   take(new RegExp(`\\b(?:at|@)\\s+(?!${TIME}\\b)([^,.;!?]+?)${STOP}`, 'i'), m => {
     const place = m[1].trim();
     if (!place || /^(the\s+)?(same|usual)\s+time$/i.test(place)) return false;
     out.location = place.replace(/\s+/g, ' ');
   });
 
-  // 7 · Title: what's left, tidied.
+  // 8 · Title: what's left, tidied.
   let title = s
     .replace(/\b(on|at|@|for|from|by|around|in the|this|next)\s*(?=[,.;!?]|$)/gi, ' ')
     .replace(/\s+(on|at|@|for|from|by)\s+(?=(on|at|@|for|from|by|with)\b)/gi, ' ')

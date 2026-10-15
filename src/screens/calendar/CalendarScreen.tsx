@@ -10,11 +10,11 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, SectionList, View } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { supabase } from '../../lib/supabase';
 import { DEMO_EVENTS, DEMO_IDEAS, DEMO_MEMBERS, DEMO_ME, isDemoGroup } from '../../lib/demo';
 import { useShortcut } from '../../lib/shortcuts';
-import { Event, Profile } from '../../types';
+import { Assignment, Event, Profile } from '../../types';
 import { useGroup } from '../../contexts/GroupContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { AvatarPerson } from '../../components/Avatar';
@@ -29,13 +29,17 @@ import { space, tabularNums, useLayout, useTheme } from '../../theme';
 import CalendarGrid from './CalendarGrid';
 import { EventComposer, EventDetail, WorkLine } from './EventViews';
 import { useWorkSchedules, workOn } from '../../lib/workSchedule';
+import { expandEvents } from '../../lib/recurrence';
+import { useCircle } from '../../lib/people';
+import { notify } from '../../lib/alert';
+import { sendNotifications } from '../../lib/notifications';
 import { keyOf, longDate, relativeDay, shortDate, timeParts, todayKey } from './dates';
 
 type DaySection = { key: string; title: string; subtitle: string; data: Event[] };
 
 export default function CalendarScreen() {
   const { activeGroup } = useGroup();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const { c } = useTheme();
   const { compact, threeColumn } = useLayout();
   const navigation = useNavigation<any>();
@@ -53,10 +57,16 @@ export default function CalendarScreen() {
   const [loading, setLoading] = useState(false);
 
   // ─── Data ──────────────────────────────────────────────────────────────────
+  // Repeating events become one entry per occurrence, a year either side of today.
+  const withOccurrences = (list: Event[]) => {
+    const now = Date.now(), year = 366 * 86400000;
+    return expandEvents(list, new Date(now - year), new Date(now + year));
+  };
+
   const fetchAll = useCallback(async () => {
     if (!activeGroup) return;
     if (isDemo) {
-      setEvents(DEMO_EVENTS);
+      setEvents(withOccurrences(DEMO_EVENTS));   // new array: planned ideas add to the demo list
       setWaitingIdeas(DEMO_IDEAS.filter(i => i.status === 'proposed').length);
       setMembers(DEMO_MEMBERS);
       return;
@@ -70,16 +80,67 @@ export default function CalendarScreen() {
       supabase.from('group_members').select('profiles(id, full_name, email, avatar_url)')
         .eq('group_id', activeGroup.id),
     ]);
-    setEvents((eventData as Event[]) ?? []);
+    setEvents(withOccurrences((eventData as Event[]) ?? []));
     setWaitingIdeas(count ?? 0);
     setMembers(((memberRows ?? []).map((r: any) => r.profiles).filter(Boolean)) as Profile[]);
     setLoading(false);
   }, [activeGroup, isDemo]);
 
-  useEffect(() => { fetchAll(); }, [fetchAll]);
+  // Refetch on focus: planning an idea adds events from the Ideas tab.
+  useFocusEffect(useCallback(() => { fetchAll(); }, [fetchAll]));
 
   // ─── Derived ───────────────────────────────────────────────────────────────
-  const memberById = useMemo(() => new Map(members.map(p => [p.id, p])), [members]);
+  // Names for attendees from any of your groups (invites can cross groups).
+  const circle = useCircle(true, meId);
+  const memberById = useMemo(() => new Map<string, Profile>([
+    ...circle.people.map(p => [p.profile.id, p.profile] as [string, Profile]),
+    ...members.map(p => [p.id, p] as [string, Profile]),
+  ]), [members, circle.people]);
+
+  // People you're at events with most often, best first.
+  const suggestedIds = useMemo(() => {
+    const counts = new Map<string, number>();
+    events.forEach(e => {
+      if (!meId || !e.attendees?.includes(meId)) return;
+      e.attendees.forEach(id => { if (id !== meId) counts.set(id, (counts.get(id) ?? 0) + 1); });
+    });
+    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]).map(([id]) => id);
+  }, [events, meId]);
+
+  // Organizer edits: save the list, and tell anyone newly given something.
+  async function handleAssign(event: Event, items: Assignment[]) {
+    const id = event.series_id ?? event.id;
+    const before = new Map((event.assignments ?? []).map(a => [a.id, a.assignee_id]));
+    const newlyAssigned = items.filter(a => a.assignee_id && a.assignee_id !== meId && before.get(a.id) !== a.assignee_id);
+    if (isDemo) {
+      const base = DEMO_EVENTS.find(e => e.id === id);
+      if (base) base.assignments = items;
+      fetchAll();
+      return;
+    }
+    const { error } = await supabase.from('events').update({ assignments: items } as any).eq('id', id);
+    if (error) { notify('Couldn’t update', error.message); return; }
+    const me = (profile?.full_name ?? 'Someone').split(' ')[0];
+    await sendNotifications(newlyAssigned.map(a => ({
+      user_id: a.assignee_id!, actor_id: meId, kind: 'assignment' as const, idea_id: null, event_id: id,
+      title: `${me} assigned you ${a.item}`, body: `${event.title} · ${shortDate(keyOf(event.start_time))}`,
+    })), false);
+    fetchAll();
+  }
+
+  // "I'll take it" / "Release" on an assignment. Applies to the whole series.
+  async function handleClaim(event: Event, itemId: string, claim: boolean) {
+    const id = event.series_id ?? event.id;
+    if (isDemo) {
+      const base = DEMO_EVENTS.find(e => e.id === id);
+      if (base) base.assignments = (base.assignments ?? []).map(a => (a.id !== itemId ? a : { ...a, assignee_id: claim ? meId : null }));
+      fetchAll();
+      return;
+    }
+    const { error } = await supabase.rpc('claim_assignment', { p_event: id, p_item: itemId, p_claim: claim } as any);
+    if (error) notify('Couldn’t update', error.message);
+    fetchAll();
+  }
   const attendeesOf = useCallback(
     (e: Event) => (e.attendees ?? []).map(id => memberById.get(id)).filter(Boolean) as AvatarPerson[],
     [memberById],
@@ -202,7 +263,7 @@ export default function CalendarScreen() {
 
   const detail = selectedEvent ? (
     <ReadingColumn>
-      <EventDetail event={selectedEvent} attendees={attendeesOf(selectedEvent)} meId={meId} group={activeGroup} />
+      <EventDetail event={selectedEvent} attendees={attendeesOf(selectedEvent)} meId={meId} group={activeGroup} onClaim={(item, claim) => handleClaim(selectedEvent, item, claim)} onAssign={(items) => handleAssign(selectedEvent, items)} />
     </ReadingColumn>
   ) : (
     <View style={{ flex: 1, justifyContent: 'center' }}>
@@ -223,7 +284,7 @@ export default function CalendarScreen() {
       {!threeColumn && (
         <Sheet visible={!!selectedEvent} onClose={() => setSelectedEventId(null)} title="Event" cancelLabel="Done">
           {selectedEvent ? (
-            <EventDetail event={selectedEvent} attendees={attendeesOf(selectedEvent)} meId={meId} group={activeGroup} />
+            <EventDetail event={selectedEvent} attendees={attendeesOf(selectedEvent)} meId={meId} group={activeGroup} onClaim={(item, claim) => handleClaim(selectedEvent, item, claim)} onAssign={(items) => handleAssign(selectedEvent, items)} />
           ) : null}
         </Sheet>
       )}
@@ -238,6 +299,7 @@ export default function CalendarScreen() {
         group={activeGroup}
         meId={meId}
         members={members}
+        suggestedIds={suggestedIds}
         isDemo={isDemo}
       />
     </>

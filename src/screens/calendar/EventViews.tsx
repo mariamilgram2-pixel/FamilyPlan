@@ -11,6 +11,11 @@ import CalendarGrid from './CalendarGrid';
 import { keyOf, longDate, relativeDay, shortDate, timeRange, todayKey } from './dates';
 import { ParsedEvent, parseEventText } from '../../lib/nlEvent';
 import { formatTime } from '../../lib/workSchedule';
+import { REPEAT_OPTIONS, RepeatKey, describeRecurrence, ruleFor, untilLabel } from '../../lib/recurrence';
+import { addDemoEvent } from '../../lib/demo';
+import { useCircle } from '../../lib/people';
+import { Assignment } from '../../types';
+import { AssignEditor, AssignmentList, InvitePicker } from './InviteViews';
 
 // ─── Detail ──────────────────────────────────────────────────────────────────
 
@@ -19,10 +24,13 @@ interface DetailProps {
   attendees: AvatarPerson[];
   meId: string | null;
   group: Group | null;
+  onClaim?: (itemId: string, claim: boolean) => void;
+  onAssign?: (items: Assignment[]) => void;   // organizer edits
 }
 
 /** Event content; the caller provides the scroll container (pane or sheet). */
-export function EventDetail({ event, attendees, meId, group }: DetailProps) {
+export function EventDetail({ event, attendees, meId, group, onClaim, onAssign }: DetailProps) {
+  const organizer = !!meId && event.created_by === meId;
   const going = !!meId && event.attendees?.includes(meId);
   const minutes = Math.round((new Date(event.end_time).getTime() - new Date(event.start_time).getTime()) / 60000);
   const duration = minutes >= 60 ? `${Math.floor(minutes / 60)} hr${minutes % 60 ? ` ${minutes % 60} min` : ''}` : `${minutes} min`;
@@ -40,6 +48,9 @@ export function EventDetail({ event, attendees, meId, group }: DetailProps) {
 
       <ListSection separatorInset={60}>
         <ListRow icon="time-outline" title={timeRange(event.start_time, event.end_time)} subtitle={duration} />
+        {event.recurrence ? (
+          <ListRow icon="repeat" title={describeRecurrence({ ...event.recurrence, until: null }, event.start_time)} subtitle={untilLabel(event.recurrence)} />
+        ) : null}
         {conflict ? <ListRow icon="briefcase-outline" title="During your work hours" subtitle={formatHours(conflict)} /> : null}
         {event.location ? <ListRow icon="location-outline" title={event.location} /> : null}
       </ListSection>
@@ -55,6 +66,21 @@ export function EventDetail({ event, attendees, meId, group }: DetailProps) {
           ))}
         </ListSection>
       )}
+
+      {organizer && onAssign ? (
+        // The organizer hands things out; everyone else claims what's open.
+        <AssignEditor
+          items={event.assignments ?? []}
+          onChange={onAssign}
+          people={attendees}
+          meId={meId}
+          eventTitle={event.title}
+          title="Who’s bringing what"
+          hint="You’re organizing — tap an item to assign it. Open items can be claimed by anyone invited."
+        />
+      ) : event.assignments?.length ? (
+        <AssignmentList items={event.assignments} people={attendees} meId={meId} canClaim={going} onClaim={onClaim} />
+      ) : null}
 
       {event.description ? (
         <ListSection header="Notes">
@@ -79,12 +105,13 @@ interface ComposerProps {
   group: Group | null;
   meId: string | null;
   members: Profile[];
+  suggestedIds: string[];
   isDemo: boolean;
 }
 
 const TIME_RE = /^([01]?\d|2[0-3]):([0-5]\d)$/;
 
-export function EventComposer({ visible, onClose, onSaved, initialDate, group, meId, members, isDemo }: ComposerProps) {
+export function EventComposer({ visible, onClose, onSaved, initialDate, group, meId, members, suggestedIds, isDemo }: ComposerProps) {
   const [title, setTitle] = useState('');
   const [date, setDate] = useState(initialDate);
   const [pickingDate, setPickingDate] = useState(false);
@@ -93,17 +120,24 @@ export function EventComposer({ visible, onClose, onSaved, initialDate, group, m
   const [location, setLocation] = useState('');
   const [notes, setNotes] = useState('');
   const [invited, setInvited] = useState<string[]>([]);
+  const [invitedGroups, setInvitedGroups] = useState<string[]>([]);
+  const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const circle = useCircle(visible, meId);
   const [saving, setSaving] = useState(false);
   const [describe, setDescribe] = useState('');
   const [parsed, setParsed] = useState<ParsedEvent | null>(null);
+  const [repeat, setRepeat] = useState<RepeatKey>('never');
+  const [repeatUntil, setRepeatUntil] = useState<string | null>(null);
+  const [picking, setPicking] = useState<'repeat' | 'until' | null>(null);
 
   // Fresh form each time the sheet opens.
   useEffect(() => {
     if (!visible) return;
     setTitle(''); setDate(initialDate); setPickingDate(false);
     setStartTime('09:00'); setEndTime('10:00');
-    setLocation(''); setNotes(''); setInvited([]);
+    setLocation(''); setNotes(''); setInvited([]); setInvitedGroups([]); setAssignments([]);
     setDescribe(''); setParsed(null);
+    setRepeat('never'); setRepeatUntil(null); setPicking(null);
   }, [visible, initialDate]);
 
   // The sentence drives the form: each edit rebuilds the fields from the
@@ -112,7 +146,8 @@ export function EventComposer({ visible, onClose, onSaved, initialDate, group, m
   function onDescribe(text: string) {
     setDescribe(text);
     if (!text.trim()) { setParsed(null); return; }
-    const p = parseEventText(text, { today: todayKey(), members, meId });
+    const everyone = circle.people.length ? circle.people.map(x => x.profile) : members;
+    const p = parseEventText(text, { today: todayKey(), members: everyone, meId });
     setParsed(p);
     setTitle(p.title);
     setDate(p.date ?? initialDate);
@@ -120,29 +155,45 @@ export function EventComposer({ visible, onClose, onSaved, initialDate, group, m
     setEndTime(p.end ?? '10:00');
     setLocation(p.location ?? '');
     setInvited(p.inviteIds);
+    setRepeat(p.repeat ?? 'never');
   }
 
-  const invitable = members.filter(m => m.id !== meId);
+  // Everyone coming: picked people plus members of picked groups.
+  const attendeeIds = Array.from(new Set([
+    ...invited,
+    ...circle.groups.filter(g => invitedGroups.includes(g.group.id)).flatMap(g => g.memberIds),
+  ])).filter(id => id !== meId);
+  const me = members.find(m => m.id === meId);
+  const assignable: AvatarPerson[] = [
+    ...(me ? [me] : meId ? [{ id: meId, full_name: 'You' }] : []),
+    ...attendeeIds.map(id => circle.people.find(p => p.profile.id === id)?.profile ?? members.find(m => m.id === id)).filter(Boolean) as AvatarPerson[],
+  ];
 
   async function save() {
     if (!title.trim()) return;
-    if (isDemo) return notify('Demo mode', 'Sign in to save events to your group.');
     if (!group || !meId) return notify('Not signed in', 'Sign in to save events.');
     if (!TIME_RE.test(startTime) || !TIME_RE.test(endTime)) return notify('Check the time', 'Use 24-hour times like 09:00 or 18:30.');
     const startIso = new Date(`${date}T${startTime.padStart(5, '0')}:00`).toISOString();
     const endIso = new Date(`${date}T${endTime.padStart(5, '0')}:00`).toISOString();
     if (new Date(endIso) <= new Date(startIso)) return notify('Check the time', 'End time must be after the start time.');
-    setSaving(true);
-    const { error } = await supabase.from('events').insert({
-      group_id: group.id,
+    if (repeat !== 'never' && repeatUntil && repeatUntil < date) return notify('Check the repeat', 'The repeat has to end on or after the first day.');
+    const row = {
       title: title.trim(),
       description: notes.trim() || null,
       location: location.trim() || null,
       start_time: startIso,
       end_time: endIso,
       created_by: meId,
-      attendees: [meId, ...invited],
-    } as any);
+      attendees: [meId, ...attendeeIds],
+      invited_group_ids: invitedGroups,
+      // Anyone dropped from the invite list loses their assignment.
+      assignments: assignments.map(a => (a.assignee_id && a.assignee_id !== meId && !attendeeIds.includes(a.assignee_id) ? { ...a, assignee_id: null } : a)),
+      recurrence: ruleFor(repeat, repeatUntil),
+    };
+    // Demo events live in memory so the calendar can show them.
+    if (isDemo) { addDemoEvent(row); onSaved(); onClose(); return; }
+    setSaving(true);
+    const { error } = await supabase.from('events').insert({ ...row, group_id: group.id } as any);
     setSaving(false);
     if (error) return notify('Couldn’t save', error.message);
     onSaved();
@@ -186,6 +237,55 @@ export function EventComposer({ visible, onClose, onSaved, initialDate, group, m
         </View>
       </View>
 
+      <ListSection>
+        <ListRow
+          icon="repeat"
+          title="Repeat"
+          value={REPEAT_OPTIONS.find(o => o.key === repeat)!.label}
+          chevron={picking !== 'repeat'}
+          onPress={() => setPicking(p => (p === 'repeat' ? null : 'repeat'))}
+        />
+        {picking === 'repeat' ? REPEAT_OPTIONS.map(o => (
+          <ListRow
+            key={o.key}
+            title={o.label}
+            checked={repeat === o.key}
+            onPress={() => { setRepeat(o.key); setPicking(null); }}
+            style={{ paddingLeft: space.m + 28 + space.m }}
+          />
+        )) : null}
+        {repeat !== 'never' ? (
+          <ListRow
+            icon="flag-outline"
+            title="End repeat"
+            value={repeatUntil ? shortDate(repeatUntil) : 'Never'}
+            chevron={picking !== 'until'}
+            onPress={() => setPicking(p => (p === 'until' ? null : 'until'))}
+          />
+        ) : null}
+        {repeat !== 'never' && picking === 'until' ? (
+          <>
+            <ListRow
+              title="Never"
+              checked={!repeatUntil}
+              onPress={() => { setRepeatUntil(null); setPicking(null); }}
+              style={{ paddingLeft: space.m + 28 + space.m }}
+            />
+            <CalendarGrid
+              selected={repeatUntil ?? date}
+              onSelect={(k) => { setRepeatUntil(k); setPicking(null); }}
+              marked={new Set()}
+              expanded
+            />
+          </>
+        ) : null}
+      </ListSection>
+      {repeat !== 'never' ? (
+        <Txt v="footnote" tone="secondary" style={{ paddingHorizontal: space.m, marginTop: -space.s }}>
+          {describeRecurrence(ruleFor(repeat, repeatUntil)!, new Date(`${date}T${TIME_RE.test(startTime) ? startTime.padStart(5, '0') : '09:00'}:00`).toISOString())}.
+        </Txt>
+      ) : null}
+
       <WorkHint
         date={date}
         startIso={TIME_RE.test(startTime) ? new Date(`${date}T${startTime.padStart(5, '0')}:00`).toISOString() : null}
@@ -194,25 +294,18 @@ export function EventComposer({ visible, onClose, onSaved, initialDate, group, m
 
       <Field label="Location" value={location} onChangeText={setLocation} placeholder="Optional" />
 
-      {invitable.length > 0 && (
-        <ListSection
-          header={invited.length ? `Invite · ${invited.length} selected` : 'Invite'}
-          separatorInset={64}
-        >
-          {invitable.map(m => {
-            const on = invited.includes(m.id);
-            return (
-              <ListRow
-                key={m.id}
-                leading={<Avatar person={m} size={32} />}
-                title={m.full_name ?? m.email}
-                checked={on}
-                onPress={() => setInvited(p => (on ? p.filter(x => x !== m.id) : [...p, m.id]))}
-              />
-            );
-          })}
-        </ListSection>
-      )}
+      <InvitePicker
+        people={circle.people}
+        groups={circle.groups}
+        meId={meId}
+        suggestedIds={suggestedIds}
+        userIds={invited}
+        groupIds={invitedGroups}
+        onChangeUsers={setInvited}
+        onChangeGroups={setInvitedGroups}
+      />
+
+      <AssignEditor items={assignments} onChange={setAssignments} people={assignable} meId={meId} eventTitle={title} />
 
       <Field label="Notes" value={notes} onChangeText={setNotes} placeholder="Optional" multiline />
     </Sheet>
@@ -258,8 +351,17 @@ function WorkHint({ date, startIso, endIso }: { date: string; startIso: string |
 
 // ─── Natural-language entry ──────────────────────────────────────────────────
 
-function DescribeField({ value, onChange, parsed, onSubmit }: {
-  value: string; onChange: (t: string) => void; parsed: ParsedEvent | null; onSubmit: () => void;
+type ParsedSummary = Pick<ParsedEvent, 'date' | 'start' | 'end' | 'location' | 'people' | 'repeat'>;
+
+export function DescribeField({
+  value, onChange, parsed, onSubmit,
+  placeholder = 'Dinner with Ana next Tuesday at 7pm',
+  filledHint = 'Filled in below — adjust anything, then Add.',
+  emptyHint = 'Add a day or time, like “Friday at 7”.',
+  accessibilityLabel = 'Describe the event in your own words',
+}: {
+  value: string; onChange: (t: string) => void; parsed: ParsedSummary | null; onSubmit?: () => void;
+  placeholder?: string; filledHint?: string; emptyHint?: string; accessibilityLabel?: string;
 }) {
   const { c } = useTheme();
   const chips: { icon: React.ComponentProps<typeof Icon>['name']; label: string }[] = [];
@@ -268,6 +370,7 @@ function DescribeField({ value, onChange, parsed, onSubmit }: {
     chips.push({ icon: 'calendar-outline', label: rel === 'Today' || rel === 'Tomorrow' ? rel : shortDate(parsed.date) });
   }
   if (parsed?.start) chips.push({ icon: 'time-outline', label: parsed.end ? `${formatTime(parsed.start, true)} – ${formatTime(parsed.end, true)}` : formatTime(parsed.start, true) });
+  if (parsed?.repeat) chips.push({ icon: 'repeat', label: REPEAT_OPTIONS.find(o => o.key === parsed.repeat)!.label });
   parsed?.people.forEach(p => chips.push({ icon: 'person-outline', label: p }));
   if (parsed?.location) chips.push({ icon: 'location-outline', label: parsed.location });
 
@@ -280,11 +383,11 @@ function DescribeField({ value, onChange, parsed, onSubmit }: {
       <Field
         value={value}
         onChangeText={onChange}
-        placeholder="Dinner with Ana next Tuesday at 7pm"
+        placeholder={placeholder}
         autoFocus
         returnKeyType="done"
         onSubmitEditing={onSubmit}
-        accessibilityLabel="Describe the event in your own words"
+        accessibilityLabel={accessibilityLabel}
         accessibilityHint="Fills in the title, date, time, people, and place below"
       />
       {parsed ? (
@@ -300,9 +403,7 @@ function DescribeField({ value, onChange, parsed, onSubmit }: {
             </View>
           ) : null}
           <Txt v="footnote" tone="secondary">
-            {parsed.date || parsed.start
-              ? 'Filled in below — adjust anything, then Add.'
-              : 'Add a day or time, like “Friday at 7”.'}
+            {parsed.date || parsed.start ? filledHint : emptyHint}
           </Txt>
         </View>
       ) : null}
