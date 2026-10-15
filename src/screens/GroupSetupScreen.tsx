@@ -1,146 +1,62 @@
 import React, { useState } from 'react';
-import {
-  View, Text, TextInput, TouchableOpacity, StyleSheet,
-  KeyboardAvoidingView, Platform, ActivityIndicator, Alert, ScrollView,
-} from 'react-native';
+import { View } from 'react-native';
 import { useGroup } from '../contexts/GroupContext';
 import { useAuth } from '../contexts/AuthContext';
+import { Button, Field, Segmented } from '../components/ui';
+import { space } from '../theme';
+import AuthLayout, { FormMessage } from './auth/AuthLayout';
+import { enterDemo } from './auth/LoginScreen';
 
-type Tab = 'create' | 'join';
+type Mode = 'create' | 'join';
 
 export default function GroupSetupScreen() {
-  const { createGroup, joinGroup } = useGroup();
+  const { createGroup, joinGroup, setActiveGroup } = useGroup();
   const { signOut } = useAuth();
-  const [tab, setTab] = useState<Tab>('create');
-
-  // Create form
+  const [mode, setMode] = useState<Mode>('create');
   const [groupName, setGroupName] = useState('');
   const [groupDesc, setGroupDesc] = useState('');
-
-  // Join form
   const [inviteCode, setInviteCode] = useState('');
-
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const ready = mode === 'create' ? !!groupName.trim() : !!inviteCode.trim();
 
-  async function handleCreate() {
-    if (!groupName.trim()) {
-      Alert.alert('Required', 'Please enter a group name.');
-      return;
-    }
+  async function submit() {
+    if (!ready || loading) return;
+    setError(null);
     setLoading(true);
-    const { error } = await createGroup(groupName.trim(), groupDesc.trim());
-    setLoading(false);
-    if (error) Alert.alert('Error', error.message);
-  }
-
-  async function handleJoin() {
-    if (!inviteCode.trim()) {
-      Alert.alert('Required', 'Please enter an invite code.');
-      return;
+    try {
+      const { error: err } = mode === 'create'
+        ? await createGroup(groupName.trim(), groupDesc.trim())
+        : await joinGroup(inviteCode.trim());
+      if (err) setError(err.message);
+    } catch (e: any) {
+      setError(e?.message ?? 'Something went wrong. Try again.');
+    } finally {
+      setLoading(false);
     }
-    setLoading(true);
-    const { error } = await joinGroup(inviteCode.trim());
-    setLoading(false);
-    if (error) Alert.alert('Error', error.message);
   }
 
   return (
-    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView contentContainerStyle={styles.inner} keyboardShouldPersistTaps="handled">
-        <Text style={styles.emoji}>🏠</Text>
-        <Text style={styles.title}>Welcome to FamilyPlan</Text>
-        <Text style={styles.subtitle}>Create a new group or join an existing one with an invite code</Text>
-
-        <View style={styles.tabRow}>
-          <TouchableOpacity
-            style={[styles.tabBtn, tab === 'create' && styles.tabBtnActive]}
-            onPress={() => setTab('create')}
-          >
-            <Text style={[styles.tabBtnText, tab === 'create' && styles.tabBtnTextActive]}>Create group</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.tabBtn, tab === 'join' && styles.tabBtnActive]}
-            onPress={() => setTab('join')}
-          >
-            <Text style={[styles.tabBtnText, tab === 'join' && styles.tabBtnTextActive]}>Join group</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.card}>
-          {tab === 'create' ? (
-            <>
-              <Text style={styles.label}>Group name *</Text>
-              <TextInput
-                style={styles.input}
-                value={groupName}
-                onChangeText={setGroupName}
-                placeholder="The Smith Family"
-                placeholderTextColor="#9CA3AF"
-              />
-              <Text style={styles.label}>Description (optional)</Text>
-              <TextInput
-                style={[styles.input, styles.textArea]}
-                value={groupDesc}
-                onChangeText={setGroupDesc}
-                placeholder="A short description of your group…"
-                placeholderTextColor="#9CA3AF"
-                multiline
-                numberOfLines={3}
-              />
-              <TouchableOpacity style={styles.primaryBtn} onPress={handleCreate} disabled={loading}>
-                {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Create group</Text>}
-              </TouchableOpacity>
-            </>
-          ) : (
-            <>
-              <Text style={styles.label}>Invite code</Text>
-              <TextInput
-                style={styles.input}
-                value={inviteCode}
-                onChangeText={setInviteCode}
-                placeholder="e.g. AB12CD34"
-                placeholderTextColor="#9CA3AF"
-                autoCapitalize="characters"
-                autoCorrect={false}
-              />
-              <TouchableOpacity style={styles.primaryBtn} onPress={handleJoin} disabled={loading}>
-                {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Join group</Text>}
-              </TouchableOpacity>
-            </>
-          )}
-        </View>
-
-        <TouchableOpacity onPress={signOut} style={styles.signOutBtn}>
-          <Text style={styles.signOutText}>Sign out</Text>
-        </TouchableOpacity>
-      </ScrollView>
-    </KeyboardAvoidingView>
+    <AuthLayout title="Your first group" subtitle="Groups share a calendar and a pool of ideas — a household, friends, a club.">
+      <Segmented
+        options={[{ key: 'create', label: 'Create' }, { key: 'join', label: 'Join with Code' }]}
+        value={mode}
+        onChange={(m) => { setMode(m); setError(null); }}
+      />
+      {mode === 'create' ? (
+        <>
+          <Field label="Group name" value={groupName} onChangeText={setGroupName} placeholder="The Smith Family" />
+          <Field label="Description" value={groupDesc} onChangeText={setGroupDesc} placeholder="Optional" />
+        </>
+      ) : (
+        <Field label="Invite code" value={inviteCode} onChangeText={setInviteCode} placeholder="AB12CD" autoCapitalize="characters" autoCorrect={false} mono />
+      )}
+      <FormMessage message={error} />
+      <Button label={mode === 'create' ? 'Create Group' : 'Join Group'} onPress={submit} loading={loading} disabled={!ready} block style={{ marginTop: space.s }} />
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+        <Button label="Sign Out" variant="plain" onPress={signOut} />
+        <Button label="Explore Demo" variant="plain" onPress={() => enterDemo(setActiveGroup)} />
+      </View>
+    </AuthLayout>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F9FAFB' },
-  inner: { flexGrow: 1, justifyContent: 'center', padding: 24 },
-  emoji: { textAlign: 'center', fontSize: 56, marginBottom: 12 },
-  title: { textAlign: 'center', fontSize: 24, fontWeight: '800', color: '#111827', marginBottom: 8 },
-  subtitle: { textAlign: 'center', fontSize: 14, color: '#6B7280', marginBottom: 28, lineHeight: 20 },
-  tabRow: {
-    flexDirection: 'row',
-    backgroundColor: '#E5E7EB',
-    borderRadius: 12,
-    padding: 4,
-    marginBottom: 20,
-  },
-  tabBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: 'center' },
-  tabBtnActive: { backgroundColor: '#fff', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 4, elevation: 2 },
-  tabBtnText: { fontSize: 14, fontWeight: '600', color: '#6B7280' },
-  tabBtnTextActive: { color: '#6366F1' },
-  card: { backgroundColor: '#fff', borderRadius: 20, padding: 24, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 2 },
-  label: { fontSize: 13, fontWeight: '600', color: '#374151', marginBottom: 6 },
-  input: { borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: '#111827', marginBottom: 16, backgroundColor: '#F9FAFB' },
-  textArea: { height: 80, textAlignVertical: 'top' },
-  primaryBtn: { backgroundColor: '#6366F1', borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 4 },
-  primaryBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  signOutBtn: { marginTop: 24, alignItems: 'center' },
-  signOutText: { color: '#9CA3AF', fontSize: 14 },
-});

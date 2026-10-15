@@ -1,0 +1,72 @@
+// A plan, from first idea to the day after.
+//
+// Ideas and events are stored separately, but people see one thing moving
+// through stages, and the stage follows from what's true rather than from a
+// status someone has to remember to change:
+//
+//   idea       — floated, no dates yet
+//   dates      — date options out, people saying which work
+//   on         — booked: there's an event on the calendar
+//   happened   — the event is over (or it was marked done)
+
+import { Event, Idea } from '../types';
+import { dateVoters } from './rsvp';
+
+export type Stage = 'idea' | 'dates' | 'on' | 'happened';
+
+export const STAGE_LABEL: Record<Stage, string> = {
+  idea: 'Idea',
+  dates: 'Picking a date',
+  on: 'Coming up',
+  happened: 'Happened',
+};
+
+const upcoming = (idea: Idea) => (idea.proposed_slots ?? []).filter(s => new Date(s.start).getTime() > Date.now());
+
+export function stageOf(idea: Idea): Stage {
+  if (idea.status === 'done') return 'happened';
+  if (idea.status === 'planned') {
+    const booked = idea.proposed_slots?.[0];
+    return booked && new Date(booked.end).getTime() < Date.now() ? 'happened' : 'on';
+  }
+  return upcoming(idea).length ? 'dates' : 'idea';
+}
+
+/** Date options still in the future. */
+export const openSlots = upcoming;
+
+/** You're asked about its dates and haven't answered. */
+export function awaitingYourDates(idea: Idea, meId: string | null) {
+  if (!meId || stageOf(idea) !== 'dates') return false;
+  const asked = dateVoters(idea).includes(meId) || (idea.audience_user_ids ?? []).includes(meId);
+  return asked && !idea.slot_votes?.[meId];
+}
+
+/** You proposed it, and everyone has answered on dates: time to send the invite. */
+export function readyToSend(idea: Idea, meId: string | null) {
+  if (!meId || idea.created_by !== meId || stageOf(idea) !== 'dates') return false;
+  const voters = dateVoters(idea);
+  return voters.length > 1 && voters.every(id => idea.slot_votes?.[id]);
+}
+
+// ─── Traditions ──────────────────────────────────────────────────────────────
+
+/** Who hosts this occurrence of a tradition, or null when hosts don't rotate. */
+export function hostOf(event: Event): string | null {
+  const order = event.host_rotation ?? [];
+  if (!order.length) return null;
+  return order[(event.occurrence ?? 0) % order.length];
+}
+
+/** Who hosts the next time after this one. */
+export function nextHostOf(event: Event): string | null {
+  const order = event.host_rotation ?? [];
+  if (!order.length) return null;
+  return order[((event.occurrence ?? 0) + 1) % order.length];
+}
+
+/** "4th" for the fourth time. */
+export function ordinal(n: number) {
+  const s = n % 100 >= 11 && n % 100 <= 13 ? 'th' : n % 10 === 1 ? 'st' : n % 10 === 2 ? 'nd' : n % 10 === 3 ? 'rd' : 'th';
+  return `${n}${s}`;
+}
