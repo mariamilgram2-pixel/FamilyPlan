@@ -6,8 +6,9 @@
 // every participant. Runs locally against data the app already has.
 
 import { TimeSlot } from '../types';
-import { addDays, dateKey, parseKey, todayKey } from '../screens/calendar/dates';
+import { addDays, dateKey, keyIn, parseKey, todayKey, wallTime } from '../screens/calendar/dates';
 import { WorkSchedule, workConflict } from './workSchedule';
+import { Candidate, MAX_OPTIONS, spreadPick } from './suggest';
 
 export type PartOfDay = 'morning' | 'daytime' | 'evening' | 'any';
 export type Horizon = 'soon' | 'twoWeeks' | 'later';
@@ -38,7 +39,6 @@ const HORIZONS: Record<Horizon, [number, number]> = {   // day offsets [from, to
 };
 
 const STEP = 30;
-const MAX_OPTIONS = 4;
 const LEAD_MS = 60 * 60 * 1000;   // nothing that starts within the hour
 
 const toMin = (hm: string) => { const [h, m] = hm.split(':').map(Number); return h * 60 + m; };
@@ -59,19 +59,24 @@ export function defaultPrefs(hint: { start?: string; end?: string; date?: string
 }
 
 /**
- * Up to four free options. `preferredStart` (HH:MM, e.g. from "dinner at 7")
- * is tried first on each day when it fits the chosen part of day.
+ * Every time worth considering, in the planning time zone: each allowed day
+ * in range, starts in the chosen part of day ordered by how natural they are
+ * (`preferredStart` first, then outward from the sweet spot). Leaves out
+ * times within the hour, your work hours, and whatever `skip` rules out;
+ * keeps the first `perDay` per day.
  */
-export function findSlots(opts: {
-  busy: Busy[];
+export function candidateSlots(opts: {
   prefs: PlanPrefs;
   work: WorkSchedule[];
   preferredStart?: string;
   now?: Date;
-}): TimeSlot[] {
-  const { busy, prefs, work, preferredStart } = opts;
+  timeZone?: string;           // whose clock "7pm" is on; the device's when omitted
+  skip?: (s: number, e: number) => boolean;
+  perDay?: number;
+}): Candidate[] {
+  const { prefs, work, preferredStart, timeZone, skip, perDay = Infinity } = opts;
   const now = (opts.now ?? new Date()).getTime();
-  const today = todayKey();
+  const today = keyIn(now, timeZone);
   const win = WINDOWS[prefs.partOfDay];
   const to = Math.max(win.to, win.from + prefs.duration);
 
@@ -98,26 +103,39 @@ export function findSlots(opts: {
     return true;
   });
 
-  const free: TimeSlot[] = [];
+  const out: Candidate[] = [];
   for (const day of days) {
-    const midnight = parseKey(day).getTime();
-    for (const m of starts) {
-      const s = midnight + m * 60000;
+    let kept = 0;
+    for (let order = 0; order < starts.length && kept < perDay; order++) {
+      // Wall-clock time, so a daylight-saving day doesn't shift every option by an hour.
+      const s = wallTime(day, starts[order], timeZone);
       const e = s + prefs.duration * 60000;
       if (s < now + LEAD_MS) continue;
-      if (busy.some(b => s < b.end && e > b.start)) continue;
+      if (skip?.(s, e)) continue;
       const slot = { start: new Date(s).toISOString(), end: new Date(e).toISOString() };
       if (workConflict(work, slot.start, slot.end)) continue;
-      free.push(slot);
-      break;
+      out.push({ slot, day, order });
+      kept++;
     }
   }
+  return out;
+}
 
-  // "Soon" means the earliest days; otherwise spread the options across the range.
-  if (prefs.horizon === 'soon' || free.length <= MAX_OPTIONS) return free.slice(0, MAX_OPTIONS);
-  const picked: TimeSlot[] = [];
-  for (let i = 0; i < MAX_OPTIONS; i++) picked.push(free[Math.round((i * (free.length - 1)) / (MAX_OPTIONS - 1))]);
-  return picked;
+/**
+ * Up to four options free for everyone in `busy`: each day's most natural
+ * free time, then the soonest days ("This week") or spread over the range.
+ */
+export function findSlots(opts: {
+  busy: Busy[];
+  prefs: PlanPrefs;
+  work: WorkSchedule[];
+  preferredStart?: string;
+  now?: Date;
+  timeZone?: string;
+}): TimeSlot[] {
+  const { busy, ...rest } = opts;
+  const free = candidateSlots({ ...rest, perDay: 1, skip: (s, e) => busy.some(b => s < b.end && e > b.start) });
+  return spreadPick(free.map(c => c.slot), MAX_OPTIONS, opts.prefs.horizon === 'soon');
 }
 
 /** Search range for busy-time queries: [from, to) as ISO. */

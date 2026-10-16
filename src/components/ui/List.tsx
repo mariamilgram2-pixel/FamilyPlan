@@ -68,6 +68,7 @@ export function SectionHeader({ title, action }: { title: string; action?: React
 interface RowProps {
   title: string;
   subtitle?: string | null;
+  detail?: string | null;     // a second secondary line, e.g. calendar fit under votes
   leading?: React.ReactNode;
   icon?: IconName;            // shorthand for a tinted leading glyph
   trailing?: React.ReactNode;
@@ -83,7 +84,7 @@ interface RowProps {
 }
 
 export function ListRow({
-  title, subtitle, leading, icon, trailing, value, chevron, checked, selected,
+  title, subtitle, detail, leading, icon, trailing, value, chevron, checked, selected,
   destructive, tintTitle, onPress, onLongPress, style,
 }: RowProps) {
   const { c } = useTheme();
@@ -105,6 +106,9 @@ export function ListRow({
         {subtitle ? (
           <Txt v={compact ? 'callout' : 'footnote'} tone="secondary" numberOfLines={1}>{subtitle}</Txt>
         ) : null}
+        {detail ? (
+          <Txt v="footnote" tone="secondary" numberOfLines={1}>{detail}</Txt>
+        ) : null}
       </View>
       {value ? <Txt v={compact ? 'body' : 'callout'} tone="secondary" numberOfLines={1}>{value}</Txt> : null}
       {trailing}
@@ -124,7 +128,7 @@ export function ListRow({
       onPress={onPress}
       onLongPress={onLongPress}
       selected={selected}
-      accessibilityLabel={subtitle ? `${title}, ${subtitle}` : title}
+      accessibilityLabel={[title, subtitle, detail].filter(Boolean).join(', ')}
       accessibilityState={{ selected, checked }}
       style={[base, style]}
     >

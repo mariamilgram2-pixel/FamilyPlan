@@ -71,6 +71,15 @@ export function dateVoters(idea: Idea): string[] {
   ]));
 }
 
+/**
+ * Whose answer the dates wait on: everyone asked, except the organizer until
+ * they answer. Proposing dates isn't a vote — the organizer may say which
+ * work for them, but nothing waits on it.
+ */
+export function awaitedVoters(idea: Idea): string[] {
+  return dateVoters(idea).filter(id => id !== idea.created_by || !!idea.slot_votes?.[id]);
+}
+
 export interface SlotTally { slot: TimeSlot; yes: string[] }
 
 /** Each upcoming slot with who it works for, best first on ties by date. */

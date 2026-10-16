@@ -15,7 +15,7 @@ import {
 } from '../../lib/demo';
 import { useShortcut } from '../../lib/shortcuts';
 import { sendNotifications } from '../../lib/notifications';
-import { dateVoters, tallySlots } from '../../lib/rsvp';
+import { awaitedVoters, dateVoters, tallySlots } from '../../lib/rsvp';
 import { slotLabel } from '../../lib/planner';
 import { Stage, awaitingYourDates, readyToSend, stageOf } from '../../lib/plans';
 import { Contact, Group, Idea, Profile } from '../../types';
@@ -187,8 +187,8 @@ export default function PlansScreen() {
     if (error) return notify('Couldn’t save', error.message);
     // Last answer in: tell whoever proposed it which date wins.
     const updated = { ...idea, slot_votes: next };
-    const everyone = dateVoters(updated);
-    const wasWaiting = dateVoters(idea).some(id => !idea.slot_votes?.[id]);
+    const everyone = awaitedVoters(updated);
+    const wasWaiting = awaitedVoters(idea).some(id => !idea.slot_votes?.[id]);
     if (wasWaiting && everyone.every(id => next[id]) && idea.created_by && idea.created_by !== meId) {
       const top = tallySlots(updated, idea.proposed_slots ?? []).sort((a, b) => b.yes.length - a.yes.length)[0];
       await sendNotifications([{

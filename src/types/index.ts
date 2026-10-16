@@ -1,19 +1,60 @@
 // ─── Supabase DB types ────────────────────────────────────────────────────────
 
-export interface Database {
+// supabase-js checks this against its GenericSchema: every table needs
+// Relationships, the schema needs Views and Functions, and rows must be plain
+// object types (interfaces don't satisfy Record<string, unknown>), or every
+// query's types collapse to `never`. Flatten re-maps an interface into one.
+type Flatten<T> = { [K in keyof T]: T[K] };
+type Table<Row, Insert, Relationships = []> = {
+  Row: Flatten<Row>;
+  Insert: Flatten<Insert>;
+  Update: Flatten<Partial<Insert>>;
+  Relationships: Relationships;
+};
+// Only the foreign keys that queries embed (e.g. `idea_votes(id, user_id)`).
+type ForeignKey<Name extends string, Column extends string, Ref extends string> = {
+  foreignKeyName: Name;
+  columns: [Column];
+  isOneToOne: false;
+  referencedRelation: Ref;
+  referencedColumns: ['id'];
+};
+type Rpc<Args, Returns = undefined> = { Args: Args; Returns: Returns };
+
+export type Database = {
   public: {
     Tables: {
-      profiles: { Row: Profile; Insert: ProfileInsert; Update: Partial<ProfileInsert> };
-      groups: { Row: Group; Insert: GroupInsert; Update: Partial<GroupInsert> };
-      group_members: { Row: GroupMember; Insert: GroupMemberInsert; Update: Partial<GroupMemberInsert> };
-      events: { Row: Event; Insert: EventInsert; Update: Partial<EventInsert> };
-      ideas: { Row: Idea; Insert: IdeaInsert; Update: Partial<IdeaInsert> };
-      idea_votes: { Row: IdeaVote; Insert: IdeaVoteInsert; Update: Partial<IdeaVoteInsert> };
-      contacts: { Row: Contact; Insert: ContactInsert; Update: Partial<ContactInsert> };
-      notifications: { Row: AppNotification; Insert: AppNotificationInsert; Update: Partial<AppNotificationInsert> };
+      profiles: Table<Profile, ProfileInsert>;
+      groups: Table<Group, GroupInsert>;
+      group_members: Table<GroupMember, GroupMemberInsert,
+        [ForeignKey<'group_members_user_id_fkey', 'user_id', 'profiles'>]>;
+      events: Table<Event, EventInsert>;
+      ideas: Table<Idea, IdeaInsert>;
+      idea_votes: Table<IdeaVote, IdeaVoteInsert,
+        [ForeignKey<'idea_votes_idea_id_fkey', 'idea_id', 'ideas'>]>;
+      contacts: Table<Contact, ContactInsert>;
+      notifications: Table<AppNotification, AppNotificationInsert>;
+      plan_comments: Table<PlanComment, PlanCommentInsert>;
+      categories: Table<Category, CategoryInsert>;
+      // Rows are created and synced by the server; the app reads and deletes.
+      calendar_connections: Table<CalendarConnection, Omit<CalendarConnection, 'id' | 'created_at'>>;
+      calendar_occurrences: Table<CalendarOccurrence, Omit<CalendarOccurrence, 'id' | 'updated_at'>>;
+      availability_preferences: Table<AvailabilityPreference,
+        Omit<AvailabilityPreference, 'updated_at' | 'quiet_weeknights'> & { quiet_weeknights?: boolean; updated_at?: string }>;
+    };
+    Views: { [_ in never]: never };
+    Functions: {
+      claim_assignment: Rpc<{ p_event: string; p_item: string; p_claim: boolean }>;
+      set_rsvp: Rpc<{ p_event: string; p_status: string; p_note?: string | null }>;
+      set_slot_votes: Rpc<{ p_idea: string; p_starts: string[] }>;
+      set_calendar_included: Rpc<{ p_connection: string; p_included: boolean }>;
+      availability_estimate: Rpc<
+        { p_member_ids: string[]; p_slots: EstimateSlot[]; p_timezone?: string },
+        { slot_start: string; slot_end: string; available_count: number; busy_count: number;
+          unknown_count: number; total_count: number; soft_penalty: number }[]>;
     };
   };
-}
+};
 
 // ─── Model types ──────────────────────────────────────────────────────────────
 
@@ -23,6 +64,7 @@ export interface Profile {
   full_name: string | null;
   avatar_url: string | null;
   birthday?: string | null;          // MM-DD
+  timezone?: string | null;          // IANA, e.g. "America/New_York"; null = use the device's
   created_at: string;
 }
 
@@ -71,6 +113,8 @@ export interface Event {
   rsvp_notes?: Record<string, string>;   // attendee id → why, when they changed their reply
   cancelled_at?: string | null;      // cancelled events stay visible, marked
   host_rotation?: string[];          // traditions: who hosts, in turn
+  timezone?: string | null;          // zone its wall-clock time is in; null = organizer's device
+  category_id?: string | null;       // a Category id, never a name or color
   created_at: string;
   // joined relations
   profiles?: Pick<Profile, 'id' | 'full_name' | 'email'>;
@@ -112,6 +156,7 @@ export interface Idea {
   slot_votes?: Record<string, string[]>;   // user id → starts of proposed slots that work for them ([] = none do)
   event_id: string | null;           // the calendar event created from this idea
   planned_at: string | null;         // when it moved to Planned (proposed = created_at)
+  category_id?: string | null;
   created_by: string | null;
   created_at: string;
   // joined relations
@@ -119,7 +164,7 @@ export interface Idea {
   idea_votes?: IdeaVote[];
 }
 
-export interface TimeSlot { start: string; end: string }   // ISO timestamps
+export interface TimeSlot { start: string; end: string; fit?: SlotFit }   // ISO timestamps; fit = calendar fit when suggested
 
 export type IdeaInsert = Omit<Idea, 'id' | 'votes' | 'created_at' | 'profiles' | 'idea_votes'>;
 
@@ -143,6 +188,83 @@ export interface PlanComment {
   photo_urls?: string[];             // storage paths (demo: image URIs)
   created_at: string;
 }
+
+export type PlanCommentInsert = Omit<PlanComment, 'id' | 'created_at'>;
+
+export interface Category {
+  id: string;                        // stable; filters and counts use this, not the name
+  name: string;
+  color: string;
+  icon: string | null;
+  is_default: boolean;               // built-in, shared by everyone
+  owner_id: string | null;           // personal category
+  group_id: string | null;           // a group's category
+  created_at: string;
+}
+
+export type CategoryInsert = Omit<Category, 'id' | 'created_at' | 'is_default'>;
+
+// ─── Connected calendars (private to their owner) ────────────────────────────
+
+export type CalendarProvider = 'google' | 'apple' | 'outlook' | 'ics';
+
+export interface CalendarConnection {
+  id: string;
+  user_id: string;
+  provider: CalendarProvider;
+  remote_calendar_id: string;
+  calendar_name: string | null;
+  account_label: string | null;
+  permissions: 'freebusy' | 'read';  // never write
+  sync_status: 'pending' | 'ok' | 'error' | 'revoked';
+  include_in_availability: boolean;
+  synced_from: string | null;        // window the last sync covered
+  synced_to: string | null;
+  last_synced_at: string | null;
+  last_error: string | null;
+  created_at: string;
+}
+
+export interface CalendarOccurrence {
+  id: string;
+  connection_id: string;
+  owner_user_id: string;
+  source: CalendarProvider;
+  external_id: string;
+  start_at: string;
+  end_at: string;
+  all_day: boolean;                  // start/end are local midnights in `timezone`
+  timezone: string | null;
+  busy_status: 'busy' | 'tentative' | 'free' | 'out_of_office';
+  visibility: 'default' | 'public' | 'private';
+  title: string | null;              // owner only
+  description: string | null;        // owner only
+  sheep_event_id: string | null;     // the same thing as this Sheep event
+  updated_at: string;
+}
+
+// Private and soft: they reorder suggestions, never block or answer for anyone.
+export type WeekendMode = 'any' | 'keep_one_free' | 'ask_first';
+
+export interface AvailabilityPreference {
+  user_id: string;
+  weekend_mode: WeekendMode;
+  spacing_enabled: boolean;          // avoid back-to-back plans
+  quiet_weeknights: boolean;         // reserved; not used yet
+  updated_at: string;
+}
+
+/** One candidate time as sent to availability_estimate(). */
+export interface EstimateSlot {
+  start: string;
+  end: string;
+  sheep_busy: string[];              // on a Sheep event then
+  nearby: Record<string, 1 | 2>;     // Sheep plan the day before/after (1) or same day (2)
+  weekend_taken: string[];           // Sheep plan on the other day of that weekend
+}
+
+/** Counts only: how candidate calendars looked when the time was suggested. */
+export interface SlotFit { available: number; busy: number; unknown: number; total: number }
 
 export interface IdeaVote {
   id: string;
