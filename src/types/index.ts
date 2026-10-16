@@ -1,19 +1,49 @@
 // ─── Supabase DB types ────────────────────────────────────────────────────────
 
-export interface Database {
+// supabase-js checks this against its GenericSchema: every table needs
+// Relationships, the schema needs Views and Functions, and rows must be plain
+// object types (interfaces don't satisfy Record<string, unknown>), or every
+// query's types collapse to `never`. Flatten re-maps an interface into one.
+type Flatten<T> = { [K in keyof T]: T[K] };
+type Table<Row, Insert, Relationships = []> = {
+  Row: Flatten<Row>;
+  Insert: Flatten<Insert>;
+  Update: Flatten<Partial<Insert>>;
+  Relationships: Relationships;
+};
+// Only the foreign keys that queries embed (e.g. `idea_votes(id, user_id)`).
+type ForeignKey<Name extends string, Column extends string, Ref extends string> = {
+  foreignKeyName: Name;
+  columns: [Column];
+  isOneToOne: false;
+  referencedRelation: Ref;
+  referencedColumns: ['id'];
+};
+type Rpc<Args> = { Args: Args; Returns: undefined };
+
+export type Database = {
   public: {
     Tables: {
-      profiles: { Row: Profile; Insert: ProfileInsert; Update: Partial<ProfileInsert> };
-      groups: { Row: Group; Insert: GroupInsert; Update: Partial<GroupInsert> };
-      group_members: { Row: GroupMember; Insert: GroupMemberInsert; Update: Partial<GroupMemberInsert> };
-      events: { Row: Event; Insert: EventInsert; Update: Partial<EventInsert> };
-      ideas: { Row: Idea; Insert: IdeaInsert; Update: Partial<IdeaInsert> };
-      idea_votes: { Row: IdeaVote; Insert: IdeaVoteInsert; Update: Partial<IdeaVoteInsert> };
-      contacts: { Row: Contact; Insert: ContactInsert; Update: Partial<ContactInsert> };
-      notifications: { Row: AppNotification; Insert: AppNotificationInsert; Update: Partial<AppNotificationInsert> };
+      profiles: Table<Profile, ProfileInsert>;
+      groups: Table<Group, GroupInsert>;
+      group_members: Table<GroupMember, GroupMemberInsert,
+        [ForeignKey<'group_members_user_id_fkey', 'user_id', 'profiles'>]>;
+      events: Table<Event, EventInsert>;
+      ideas: Table<Idea, IdeaInsert>;
+      idea_votes: Table<IdeaVote, IdeaVoteInsert,
+        [ForeignKey<'idea_votes_idea_id_fkey', 'idea_id', 'ideas'>]>;
+      contacts: Table<Contact, ContactInsert>;
+      notifications: Table<AppNotification, AppNotificationInsert>;
+      plan_comments: Table<PlanComment, PlanCommentInsert>;
+    };
+    Views: { [_ in never]: never };
+    Functions: {
+      claim_assignment: Rpc<{ p_event: string; p_item: string; p_claim: boolean }>;
+      set_rsvp: Rpc<{ p_event: string; p_status: string; p_note?: string | null }>;
+      set_slot_votes: Rpc<{ p_idea: string; p_starts: string[] }>;
     };
   };
-}
+};
 
 // ─── Model types ──────────────────────────────────────────────────────────────
 
@@ -143,6 +173,8 @@ export interface PlanComment {
   photo_urls?: string[];             // storage paths (demo: image URIs)
   created_at: string;
 }
+
+export type PlanCommentInsert = Omit<PlanComment, 'id' | 'created_at'>;
 
 export interface IdeaVote {
   id: string;
