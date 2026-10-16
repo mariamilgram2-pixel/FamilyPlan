@@ -30,7 +30,7 @@ const MAX_BYTES = 15 * 1024 * 1024;
 /** Photos library — where screenshots live on iPhone. */
 export async function pickScheduleImage(): Promise<ScheduleFile | null> {
   const res = await ImagePicker.launchImageLibraryAsync({
-    mediaTypes: ImagePicker.MediaTypeOptions.Images,
+    mediaTypes: ['images'],
     quality: 0.9,
     allowsMultipleSelection: false,
   });
