@@ -151,6 +151,7 @@ export interface MenuItem {
   key: string;
   label: string;
   icon?: IconName;
+  leading?: React.ReactNode;   // in place of the icon, e.g. a group's avatar
   checked?: boolean;
   destructive?: boolean;
   onSelect: () => void;
@@ -211,6 +212,7 @@ export function Menu({ sections, title, children }: MenuProps) {
                     <View style={{ width: 16, alignItems: 'center' }}>
                       {it.checked ? <Icon name="checkmark" size={14} color={c.tint} /> : null}
                     </View>
+                    {it.leading ?? null}
                     <Txt v="callout" tone={it.destructive ? 'danger' : 'primary'} numberOfLines={1} style={{ flex: 1 }}>{it.label}</Txt>
                     {it.icon ? <Icon name={it.icon} size={16} color={it.destructive ? c.danger : c.secondaryLabel} /> : null}
                   </Tappable>
@@ -237,7 +239,7 @@ export function Menu({ sections, title, children }: MenuProps) {
                     <React.Fragment key={it.key}>
                       {ii > 0 && <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: c.separator }} />}
                       <Tappable onPress={() => pick(it)} accessibilityRole="menuitem" style={styles.sheetItem}>
-                        {it.icon ? <Icon name={it.icon} size={22} color={it.destructive ? c.danger : c.tint} /> : null}
+                        {it.leading ?? (it.icon ? <Icon name={it.icon} size={22} color={it.destructive ? c.danger : c.tint} /> : null)}
                         <Txt v="body" tone={it.destructive ? 'danger' : 'tint'} style={{ flex: 1 }} numberOfLines={1}>{it.label}</Txt>
                         {it.checked ? <Icon name="checkmark" size={20} color={c.tint} /> : null}
                       </Tappable>

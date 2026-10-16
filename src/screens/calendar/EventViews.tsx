@@ -4,7 +4,7 @@ import { View } from 'react-native';
 import { supabase } from '../../lib/supabase';
 import { Event, Group, Profile } from '../../types';
 import Avatar, { AvatarPerson } from '../../components/Avatar';
-import { Button, Field, Icon, IconName, ListRow, ListSection, Sheet, Tag, Toggle, Txt } from '../../components/ui';
+import { Button, Field, Icon, IconName, ListRow, ListSection, Sheet, Tag, Tappable, Toggle, Txt } from '../../components/ui';
 import { WorkDay, formatHours, useWorkSchedules, workConflict, workOn } from '../../lib/workSchedule';
 import { space, useTheme } from '../../theme';
 import CalendarGrid from './CalendarGrid';
@@ -22,11 +22,32 @@ import { AssignEditor, AssignmentList, InvitePicker } from './InviteViews';
 
 // ─── Detail ──────────────────────────────────────────────────────────────────
 
+/** Which shared calendar an event belongs to; opens it when you're in the group. */
+function GroupBadge({ group, onPress }: { group: Group; onPress?: () => void }) {
+  const { c } = useTheme();
+  const body = (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.hair }}>
+      <Icon name="people-circle-outline" size={16} color={c.secondaryLabel} />
+      <Txt v="footnote" tone="secondary" semibold style={{ textTransform: 'uppercase', letterSpacing: 0.4 }}>{group.name}</Txt>
+      {onPress ? <Icon name="chevron-forward" size={12} color={c.secondaryLabel} /> : null}
+    </View>
+  );
+  if (!onPress) return <View style={{ flexDirection: 'row' }}>{body}</View>;
+  return (
+    <View style={{ flexDirection: 'row' }}>
+      <Tappable feedback="opacity" onPress={onPress} accessibilityLabel={`On the ${group.name} shared calendar. Open it`} style={{ paddingVertical: 2 }}>
+        {body}
+      </Tappable>
+    </View>
+  );
+}
+
 interface DetailProps {
   event: Event;
   attendees: AvatarPerson[];
   meId: string | null;
   group: Group | null;
+  onOpenGroup?: () => void;                    // open that group's shared calendar, if you're in it
   onClaim?: (itemId: string, claim: boolean) => void;
   onAssign?: (items: Assignment[]) => void;   // organizer edits
   onRsvp?: (reply: Rsvp, note?: string) => void;
@@ -46,7 +67,7 @@ const REPLY_OPTIONS: { key: Rsvp; label: string; icon: IconName }[] = [
 ];
 
 /** Event content; the caller provides the scroll container (pane or sheet). */
-export function EventDetail({ event, attendees, meId, group, onClaim, onAssign, onRsvp, onEdit, onCancel, onNudge, onDoAgain, onSamePeople, onAddMemories, conversation }: DetailProps) {
+export function EventDetail({ event, attendees, meId, group, onOpenGroup, onClaim, onAssign, onRsvp, onEdit, onCancel, onNudge, onDoAgain, onSamePeople, onAddMemories, conversation }: DetailProps) {
   const organizer = !!meId && event.created_by === meId;
   const reply = replyOf(event, meId);
   const cancelled = !!event.cancelled_at;
@@ -69,7 +90,7 @@ export function EventDetail({ event, attendees, meId, group, onClaim, onAssign, 
   return (
     <View style={{ gap: space.l }}>
       <View style={{ gap: space.s }}>
-        {group ? <Txt v="footnote" tone="secondary" semibold style={{ textTransform: 'uppercase', letterSpacing: 0.4 }}>{group.name}</Txt> : null}
+        {group ? <GroupBadge group={group} onPress={onOpenGroup} /> : null}
         <Txt v="title" accessibilityRole="header" style={cancelled ? { textDecorationLine: 'line-through' } : undefined}>{event.title}</Txt>
         <Txt v="callout" tone="secondary">{longDate(keyOf(event.start_time))}</Txt>
         {cancelled ? <View style={{ flexDirection: 'row' }}><Tag label="Cancelled" /></View>

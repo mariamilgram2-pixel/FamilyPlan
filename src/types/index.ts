@@ -35,6 +35,11 @@ export interface Group {
   invite_code: string;
   created_by: string | null;
   created_at: string;
+  // How the shared calendar looks. Not editable yet; when unset, GroupAvatar
+  // picks an emoji from the name and a color from the id.
+  avatar_emoji?: string | null;
+  avatar_color?: string | null;      // a GROUP_COLORS key
+  avatar_url?: string | null;        // a photo, like a group chat's
 }
 
 export type GroupInsert = Omit<Group, 'id' | 'invite_code' | 'created_at'>;

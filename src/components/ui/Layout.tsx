@@ -10,6 +10,7 @@ import React from 'react';
 import { ScrollView, ScrollViewProps, StyleSheet, View, ViewStyle, StyleProp } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Icon, IconName, Tappable, Txt } from './primitives';
+import { Menu, MenuSection } from './Overlays';
 import { LIST_WIDTH, radius, space, type, useLayout, useTheme, continuous } from '../../theme';
 
 export const TAB_BAR_HEIGHT = 56;
@@ -24,9 +25,13 @@ interface HeaderProps {
   /** Render as a column toolbar rather than a large title (desktop panes). */
   toolbar?: boolean;
   onTitlePress?: () => void;   // makes the title a menu trigger
+  /** Makes the title open this menu, anchored under it. */
+  titleMenu?: { sections: MenuSection[]; title?: string };
+  titleLeading?: React.ReactNode;   // a mark before the title (e.g. whose calendar)
+  titleAccessibilityLabel?: string;  // when the mark says something the title doesn't
 }
 
-export function ScreenHeader({ title, eyebrow, display, trailing, toolbar, onTitlePress }: HeaderProps) {
+export function ScreenHeader({ title, eyebrow, display, trailing, toolbar, onTitlePress, titleMenu, titleLeading, titleAccessibilityLabel }: HeaderProps) {
   const insets = useSafeAreaInsets();
   const { compact } = useLayout();
   const { c } = useTheme();
@@ -34,6 +39,7 @@ export function ScreenHeader({ title, eyebrow, display, trailing, toolbar, onTit
 
   const titleNode = (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.hair, flexShrink: 1 }}>
+      {titleLeading ? <View style={{ marginRight: space.s }}>{titleLeading}</View> : null}
       <Txt
         v={asToolbar ? 'title' : display ? 'display' : 'largeTitle'}
         numberOfLines={1}
@@ -42,7 +48,7 @@ export function ScreenHeader({ title, eyebrow, display, trailing, toolbar, onTit
       >
         {title}
       </Txt>
-      {onTitlePress ? <Icon name="chevron-down" size={asToolbar ? 16 : 20} color={c.secondaryLabel} style={{ marginTop: space.hair }} /> : null}
+      {onTitlePress || titleMenu ? <Icon name="chevron-down" size={asToolbar ? 16 : 20} color={c.secondaryLabel} style={{ marginTop: space.hair }} /> : null}
     </View>
   );
 
@@ -54,7 +60,17 @@ export function ScreenHeader({ title, eyebrow, display, trailing, toolbar, onTit
     }}>
       {eyebrow ? <Txt v="footnote" tone="secondary" semibold style={{ textTransform: 'uppercase', letterSpacing: 0.4 }}>{eyebrow}</Txt> : null}
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.s, minHeight: 44 }}>
-        {onTitlePress ? (
+        {titleMenu ? (
+          <View style={{ flexShrink: 1 }}>
+            <Menu sections={titleMenu.sections} title={titleMenu.title}>
+              {(open) => (
+                <Tappable feedback="opacity" onPress={open} accessibilityLabel={`${titleAccessibilityLabel ?? title}, switch`}>
+                  {titleNode}
+                </Tappable>
+              )}
+            </Menu>
+          </View>
+        ) : onTitlePress ? (
           <Tappable feedback="opacity" onPress={onTitlePress} accessibilityLabel={`${title}, switch`} style={{ flexShrink: 1 }}>
             {titleNode}
           </Tappable>
