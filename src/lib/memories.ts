@@ -12,7 +12,7 @@ export interface PickedPhoto { uri: string; mime: string }
 /** Let the person choose photos from their library (or files, on web). */
 export async function pickPhotos(limit: number): Promise<PickedPhoto[]> {
   const res = await ImagePicker.launchImageLibraryAsync({
-    mediaTypes: ImagePicker.MediaTypeOptions.Images,
+    mediaTypes: ['images'],
     allowsMultipleSelection: true,
     selectionLimit: limit,
     quality: 0.7,

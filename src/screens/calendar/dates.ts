@@ -48,3 +48,28 @@ export function timeRange(startIso: string, endIso: string) {
   const f = (iso: string) => new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
   return `${f(startIso)} – ${f(endIso)}`;
 }
+
+/**
+ * A date range short enough for a phone header: "Oct 18–24", "Oct 30–Nov 5",
+ * "Dec 28–Jan 3". The year appears only when neither end is in this year
+ * ("Mar 1–7, 2027"). `spoken` always has the full dates, for screen readers.
+ */
+export function rangeLabel(from: string, to: string, now = new Date()) {
+  const a = parseKey(from), b = parseKey(to);
+  const mon = (d: Date) => d.toLocaleDateString('en-US', { month: 'short' });
+  const thisYear = now.getFullYear();
+  const needsYear = a.getFullYear() !== thisYear && b.getFullYear() !== thisYear;
+  const crossYear = a.getFullYear() !== b.getFullYear();
+
+  let text = a.getMonth() === b.getMonth() && !crossYear
+    ? `${mon(a)} ${a.getDate()}–${b.getDate()}`
+    : `${mon(a)} ${a.getDate()}–${mon(b)} ${b.getDate()}`;
+  if (needsYear) {
+    text = crossYear
+      ? `${mon(a)} ${a.getDate()}, ${a.getFullYear()}–${mon(b)} ${b.getDate()}, ${b.getFullYear()}`
+      : `${text}, ${b.getFullYear()}`;
+  }
+
+  const full = (d: Date) => d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+  return { text, spoken: `${full(a)} to ${full(b)}` };
+}

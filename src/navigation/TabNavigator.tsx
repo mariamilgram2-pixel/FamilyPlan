@@ -43,8 +43,7 @@ export default function TabNavigator() {
   return (
     <PlanComposerProvider>
       <Tab.Navigator
-        screenOptions={{ headerShown: false }}
-        sceneContainerStyle={{ backgroundColor: c.background, marginLeft: hasSidebar ? SIDEBAR_WIDTH : 0 }}
+        screenOptions={{ headerShown: false, sceneStyle: { backgroundColor: c.background, marginLeft: hasSidebar ? SIDEBAR_WIDTH : 0 } }}
         tabBar={(props) => (hasSidebar ? <Sidebar {...props} /> : <TabBar {...props} />)}
       >
         <Tab.Screen name="Home" component={HomeScreen} />

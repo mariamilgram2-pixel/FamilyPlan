@@ -4,14 +4,19 @@
 // grid sits directly beneath it, and the agenda runs down the left edge with
 // the time column first so eyes can scan times vertically.
 //
-// compact:   header → week strip (expandable) → agenda; detail in a sheet;
-//            "New Event" capsule in the thumb zone.
+// Two ways to look: Calendar (a day timeline, a week of rows, or the month
+// grid, with what's coming up listed underneath) or List (every day with
+// something on it, from the selected day on).
+//
+// compact:   header → view → agenda; detail in a sheet; "New Plan" capsule
+//            in the thumb zone.
 // "My plans" shows everything you're invited to across all your groups; the
 // group view shows everything on the active group's calendar.
-// expanded:  [list column: header, month, agenda] | [event detail].
+// expanded:  [list column: header, view, agenda] | [event detail].
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Platform, SectionList, View } from 'react-native';
+import { ActivityIndicator, Platform, ScrollView, SectionList, View } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import { supabase } from '../../lib/supabase';
 import { DEMO_EVENTS, DEMO_EXTRA_GROUPS, DEMO_IDEAS, DEMO_MEMBERS, DEMO_ME, isDemoGroup } from '../../lib/demo';
@@ -21,14 +26,17 @@ import { useGroup } from '../../contexts/GroupContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { AvatarPerson } from '../../components/Avatar';
 import AvatarStack from '../../components/AvatarStack';
-import GroupSwitcher, { useVisibleGroups } from '../../components/GroupSwitcher';
+import { useGroupSheets, useVisibleGroups } from '../../components/GroupSwitcher';
 import { Sheep } from '../../components/Sheep';
+import GroupAvatar from '../../components/GroupAvatar';
 import {
-  Button, EmptyState, IconButton, ListRow, PrimaryAction, ReadingColumn, ScreenHeader,
-  Segmented, Sheet, SplitView, Tappable, Txt, useBottomClearance,
+  EmptyState, Icon, IconButton, ListRow, Menu, MenuSection, PrimaryAction, ReadingColumn, ScreenHeader,
+  Segmented, Sheet, SplitView, Tappable, Toggle, Txt, useBottomClearance,
 } from '../../components/ui';
 import { space, tabularNums, useLayout, useTheme } from '../../theme';
 import CalendarGrid from './CalendarGrid';
+import { DayTimeline, EventChip, Maybe, MineChip, PeriodBar, Row, WeekRows, isMaybe } from './CalendarViews';
+import { calendarEvents } from './calendarFilter';
 import { EventComposer, EventDetail, WorkLine } from './EventViews';
 import { usePlanComposer } from '../../components/PlanComposer';
 import CommentThread from '../../components/CommentThread';
@@ -40,20 +48,48 @@ import { useCircle } from '../../lib/people';
 import { confirmAction, notify } from '../../lib/alert';
 import { Reply, needsReply, repliesByStatus, replyOf, rsvpChangeNotice, rsvpNotice } from '../../lib/rsvp';
 import { sendNotifications } from '../../lib/notifications';
-import { keyOf, longDate, relativeDay, shortDate, timeParts, todayKey } from './dates';
+import { addDays, dateKey as dateKeyOf, keyOf, longDate, parseKey, rangeLabel, relativeDay, shortDate, timeParts, todayKey } from './dates';
 
-/** A date option on a plan still picking one: shown faintly, like a pencilled-in maybe. */
-type Maybe = { kind: 'maybe'; id: string; idea: Idea; slot: TimeSlot; start_time: string };
-type Row = Event | Maybe;
-const isMaybe = (r: Row): r is Maybe => (r as Maybe).kind === 'maybe';
 type DaySection = { key: string; title: string; subtitle: string; data: Row[] };
 type Scope = 'mine' | 'group';
+type CalView = 'day' | 'week' | 'month';
+const VIEWS: { key: CalView; label: string }[] = [
+  { key: 'day', label: 'Day' }, { key: 'week', label: 'Week' }, { key: 'month', label: 'Month' },
+];
+
+// How far "Coming up" looks ahead under the calendar; 0 hides it.
+const UPCOMING_OPTIONS = [
+  { days: 3, label: 'Next 3 days' },
+  { days: 7, label: 'Next week' },
+  { days: 14, label: 'Next 2 weeks' },
+  { days: 30, label: 'Next month' },
+  { days: 0, label: 'Don’t show' },
+];
+const VIEW_PREFS_KEY = 'calendar_view';
+
+const daySection = (key: string, data: Row[]): DaySection => {
+  const rel = relativeDay(key);
+  return { key, data, title: rel ?? shortDate(key), subtitle: rel ? shortDate(key) : '' };
+};
+
+const weekStart = (key: string, startsOn: 0 | 1) => addDays(key, -((parseKey(key).getDay() - startsOn + 7) % 7));
+const monthLabel = (key: string) => parseKey(key).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
+/** Same day of the month, n months on (clamped: Jan 31 → Feb 28). */
+function addMonths(key: string, n: number) {
+  const d = parseKey(key);
+  const target = new Date(d.getFullYear(), d.getMonth() + n, 1);
+  const last = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  target.setDate(Math.min(d.getDate(), last));
+  return dateKeyOf(target);
+}
+
 
 // iOS can't present a sheet while another is still sliding away.
 const afterSheet = (fn: () => void) => setTimeout(fn, Platform.OS === 'ios' ? 450 : 0);
 
 export default function CalendarScreen() {
-  const { activeGroup, groups } = useGroup();
+  const { activeGroup, groups, setActiveGroup } = useGroup();
   const visibleGroups = useVisibleGroups();
   const { user, profile } = useAuth();
   const { c } = useTheme();
@@ -74,8 +110,61 @@ export default function CalendarScreen() {
   const [members, setMembers] = useState<Profile[]>([]);
   const [selectedDate, setSelectedDate] = useState(todayKey());
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState(false);
+  const [view, setView] = useState<CalView>('week');
+  // Show the day, week or month as a list of plans instead of a calendar.
+  const [asList, setAsList] = useState(false);
+  // A starred view opens every time you come to the calendar. Without one,
+  // it opens however you left it.
+  type DefaultView = { view: CalView; asList: boolean };
+  const [defaultView, setDefaultView] = useState<DefaultView | null>(null);
+  const defaultRef = useRef<DefaultView | null>(null);
+  defaultRef.current = defaultView;
+  const [upcomingDays, setUpcomingDays] = useState(7);
+  const [weekStartsOn, setWeekStartsOn] = useState<0 | 1>(0);
+  // In a shared calendar, lay your own events over it for context. On by
+  // default; after that, whatever you last chose.
+  const [showMine, setShowMine] = useState(true);
+  const [mineHintSeen, setMineHintSeen] = useState(false);
+  // The demo can't switch its active group (that would leave demo mode), so
+  // it remembers which demo calendar is open here instead.
+  const [demoGroupId, setDemoGroupId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const groupSheets = useGroupSheets();
+
+  // Remember how you like to look at it: which calendar, which view, and the options.
+  const prefsLoaded = useRef(false);
+  useEffect(() => {
+    AsyncStorage.getItem(VIEW_PREFS_KEY)
+      .then(raw => {
+        const p = raw ? JSON.parse(raw) : {};
+        if (VIEWS.some(v => v.key === p.view)) setView(p.view);
+        if (p.view === 'list') { setView('week'); setAsList(true); }   // "List" used to be a fourth view
+        if (typeof p.asList === 'boolean') setAsList(p.asList);
+        const d = p.defaultView;
+        if (d && VIEWS.some(v => v.key === d.view) && typeof d.asList === 'boolean') {
+          setDefaultView({ view: d.view, asList: d.asList });
+          setView(d.view);
+          setAsList(d.asList);
+        }
+        if (p.scope === 'mine' || p.scope === 'group') setScope(p.scope);
+        if (UPCOMING_OPTIONS.some(o => o.days === p.upcomingDays)) setUpcomingDays(p.upcomingDays);
+        if (p.weekStartsOn === 0 || p.weekStartsOn === 1) setWeekStartsOn(p.weekStartsOn);
+        if (typeof p.showMine === 'boolean') setShowMine(p.showMine);
+        if (p.mineHintSeen === true) setMineHintSeen(true);
+      })
+      .catch(() => {})
+      .finally(() => { prefsLoaded.current = true; });
+  }, []);
+  useEffect(() => {
+    if (!prefsLoaded.current) return;
+    AsyncStorage.setItem(VIEW_PREFS_KEY, JSON.stringify({ view, asList, defaultView, scope, upcomingDays, weekStartsOn, showMine, mineHintSeen })).catch(() => {});
+  }, [view, asList, defaultView, scope, upcomingDays, weekStartsOn, showMine, mineHintSeen]);
+
+  // Coming back to the calendar tab opens the starred view.
+  useFocusEffect(useCallback(() => {
+    const d = defaultRef.current;
+    if (d) { setView(d.view); setAsList(d.asList); }
+  }, []));
 
   // ─── Data ──────────────────────────────────────────────────────────────────
   // Repeating events become one entry per occurrence, a year either side of today.
@@ -275,10 +364,23 @@ export default function CalendarScreen() {
     [memberById],
   );
 
-  // What this view shows: your plans everywhere, or the whole group's calendar.
-  const shown = useMemo(() => events.filter(e => scope === 'group'
-    ? e.group_id === activeGroup?.id
-    : !!meId && (e.created_by === meId || !!e.attendees?.includes(meId))), [events, scope, activeGroup, meId]);
+  // Shared calendars you can open: the groups you're in.
+  const sharedCalendars: Group[] = useMemo(() => isDemo
+    ? [...visibleGroups, ...DEMO_EXTRA_GROUPS.filter(g => g.memberIds.includes(DEMO_ME)).map(g => g.group)]
+    : visibleGroups, [isDemo, visibleGroups]);
+  const viewGroup = (isDemo ? sharedCalendars.find(g => g.id === demoGroupId) : null) ?? activeGroup;
+
+  function openCalendar(g: Group | null) {
+    if (!g) return setScope('mine');
+    if (isDemo) setDemoGroupId(g.id); else setActiveGroup(g);
+    setScope('group');
+  }
+
+  // What this view shows (see calendarFilter for the rules).
+  const shown = useMemo(
+    () => calendarEvents(events, { meId, groupId: scope === 'group' ? viewGroup?.id ?? null : null, showMine }),
+    [events, scope, viewGroup, meId, showMine],
+  );
 
   const marked = useMemo(() => new Set(shown.filter(e => !e.cancelled_at).map(e => keyOf(e.start_time))), [shown]);
 
@@ -292,43 +394,81 @@ export default function CalendarScreen() {
       return true;
     });
   }, [events, meId]);
+  const inviteKey = (e: Event) => e.series_id ?? e.id;
 
   // Selected day first (even if empty, so the answer to "what's on?" is
   // explicit), then every later day that has something.
   // Date options on plans you're part of (or the group's, in group view).
+  // An idea belongs to a shared calendar if it was made in that group or the whole group is invited.
+  const forViewGroup = (i: Idea) => i.group_id === viewGroup?.id || (i.audience_group_ids ?? []).includes(viewGroup?.id ?? '');
   const maybes: Maybe[] = useMemo(() => openIdeas
     .filter(i => stageOf(i) === 'dates')
     .filter(i => scope === 'group'
-      ? i.group_id === activeGroup?.id || (i.audience_group_ids ?? []).includes(activeGroup?.id ?? '')
+      ? forViewGroup(i)
       : !!meId && (dateVoters(i).includes(meId) || (i.audience_user_ids ?? []).includes(meId)))
     .flatMap(i => openSlots(i).map(slot => ({ kind: 'maybe' as const, id: `${i.id}#${slot.start}`, idea: i, slot, start_time: slot.start }))),
-  [openIdeas, scope, activeGroup, meId]);
-  const undated = openIdeas.filter(i => stageOf(i) === 'idea').length;
+  [openIdeas, scope, viewGroup, meId]);
+  // Ideas still needing a date: on a shared calendar, only that group's.
+  const undatedIdeas = openIdeas.filter(i => stageOf(i) === 'idea' && (scope !== 'group' || forViewGroup(i)));
+  const ideaKey = (i: Idea) => `idea:${i.id}`;
 
-  const sections: DaySection[] = useMemo(() => {
-    const byDay = new Map<string, Row[]>();
+
+  // Everything shown, by day, soonest first within each day.
+  const byDay = useMemo(() => {
+    const map = new Map<string, Row[]>();
     ([...shown, ...maybes] as Row[]).forEach(e => {
       const k = keyOf(e.start_time);
-      if (k < selectedDate) return;
-      if (!byDay.has(k)) byDay.set(k, []);
-      byDay.get(k)!.push(e);
+      if (!map.has(k)) map.set(k, []);
+      map.get(k)!.push(e);
     });
-    byDay.forEach(list => list.sort((a, b) => a.start_time.localeCompare(b.start_time)));
-    if (!byDay.has(selectedDate)) byDay.set(selectedDate, []);
-    return Array.from(byDay.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, data]) => {
-        const rel = relativeDay(key);
-        return { key, data, title: rel ?? shortDate(key), subtitle: rel ? shortDate(key) : '' };
-      });
-  }, [shown, maybes, selectedDate]);
+    map.forEach(list => list.sort((a, b) => a.start_time.localeCompare(b.start_time)));
+    return map;
+  }, [shown, maybes]);
+
+  // The days the view covers.
+  const week = weekStart(selectedDate, weekStartsOn);
+  const monthStart = dateKeyOf(new Date(parseKey(selectedDate).getFullYear(), parseKey(selectedDate).getMonth(), 1));
+  const nextMonthStart = addMonths(monthStart, 1);
+  const periodDays: string[] = useMemo(() => {
+    if (view === 'day') return [selectedDate];
+    if (view === 'week') return Array.from({ length: 7 }, (_, i) => addDays(week, i));
+    const days: string[] = [];
+    for (let k = monthStart; k < nextMonthStart; k = addDays(k, 1)) days.push(k);
+    return days;
+  }, [view, selectedDate, week, monthStart, nextMonthStart]);
+
+  // As a list: each day in view that has plans (the day view always shows its day).
+  const sections: DaySection[] = useMemo(() => periodDays
+    .filter(k => view === 'day' || (byDay.get(k)?.length ?? 0) > 0)
+    .map(k => daySection(k, byDay.get(k) ?? [])), [periodDays, byDay, view]);
+
+  // Plans visible in the view (the month grid itself lists none).
+  const periodRows: Row[] = useMemo(
+    () => (view === 'month' && !asList ? [] : periodDays.flatMap(k => byDay.get(k) ?? [])),
+    [view, asList, periodDays, byDay],
+  );
+
+  // Under the calendar: the next few days, picking up where the view above
+  // leaves off so nothing shows twice (the month grid lists nothing, so today).
+  const upcomingFrom = (() => {
+    const today = todayKey();
+    const after = view === 'day' ? addDays(selectedDate, 1)
+      : view === 'week' ? addDays(week, 7)
+      : asList ? nextMonthStart : today;
+    return after > today ? after : today;
+  })();
+  const upcomingTo = addDays(upcomingFrom, Math.max(upcomingDays, 1) - 1);
+  const upcoming: DaySection[] = useMemo(() => {
+    if (!upcomingDays) return [];
+    return Array.from(byDay.keys()).filter(k => k >= upcomingFrom && k <= upcomingTo).sort().map(k => daySection(k, byDay.get(k)!));
+  }, [byDay, upcomingDays, upcomingFrom, upcomingTo]);
 
   // Keep a sensible event selected for the detail column.
   useEffect(() => {
     if (!threeColumn) return;
-    const real = sections.flatMap(s => s.data.filter(r => !isMaybe(r)));
+    const real = [...periodRows, ...upcoming.flatMap(s => s.data)].filter(r => !isMaybe(r));
     if (!real.some(e => e.id === selectedEventId)) setSelectedEventId(real[0]?.id ?? null);
-  }, [sections, threeColumn]);
+  }, [upcoming, periodRows, threeColumn]);
 
   // Leaving the three-column layout shouldn't pop a sheet for the old selection.
   // (Skips the first render, so arriving with an event to open still opens it.)
@@ -346,112 +486,239 @@ export default function CalendarScreen() {
   const workSchedules = useWorkSchedules();
 
   // ─── Pieces ────────────────────────────────────────────────────────────────
-  const rel = relativeDay(selectedDate);
+  // Which calendar: yours (everything you're in, across groups) or one
+  // you share with a group. The title is the picker.
+  const calendarMenu: MenuSection[] = [
+    {
+      title: 'Yours',
+      items: [{ key: 'mine', label: 'My calendar', icon: 'person-circle-outline', checked: scope === 'mine', onSelect: () => openCalendar(null) }],
+    },
+    {
+      title: 'Shared calendars',
+      items: sharedCalendars.map(g => ({
+        key: g.id, label: g.name, leading: <GroupAvatar group={g} size={24} />,
+        checked: scope === 'group' && g.id === viewGroup?.id,
+        onSelect: () => openCalendar(g),
+      })),
+    },
+    {
+      items: [
+        { key: 'new', label: 'New Group…', icon: 'add-circle-outline', onSelect: groupSheets.openCreate },
+        { key: 'join', label: 'Join with Code…', icon: 'enter-outline', onSelect: groupSheets.openJoin },
+      ],
+    },
+  ];
+
+  // Set once, remembered: kept out of the way in one menu.
+  const optionsMenu: MenuSection[] = [
+    {
+      items: [{ key: 'as-list', label: 'Show as list', icon: 'list-outline', checked: asList, onSelect: () => setAsList(x => !x) }],
+    },
+    {
+      title: 'Coming up under the calendar',
+      items: UPCOMING_OPTIONS.map(o => ({
+        key: `up${o.days}`, label: o.label, checked: o.days === upcomingDays, onSelect: () => setUpcomingDays(o.days),
+      })),
+    },
+    {
+      title: 'Week starts on',
+      items: [
+        { key: 'sun', label: 'Sunday', checked: weekStartsOn === 0, onSelect: () => setWeekStartsOn(0) },
+        { key: 'mon', label: 'Monday', checked: weekStartsOn === 1, onSelect: () => setWeekStartsOn(1) },
+      ],
+    },
+  ];
+
+  // What's waiting on you: replies, and ideas without a date. It lives behind
+  // a bell by the menu, with a red dot while anything is waiting.
+  const openInvite = (e: Event) => { setScope('mine'); setSelectedDate(keyOf(e.start_time)); setSelectedEventId(e.id); };
+  const needsTargets = [
+    ...awaiting.map(e => ({ key: inviteKey(e), label: `Reply: ${e.title}`, icon: 'mail-unread-outline' as const, onSelect: () => openInvite(e) })),
+    ...undatedIdeas.map(i => ({ key: ideaKey(i), label: `Pick a date: ${i.title}`, icon: 'bulb-outline' as const, onSelect: () => navigation.navigate('Plans', { ideaId: i.id }) })),
+  ];
+  const needsCount = needsTargets.length;
+  const needsBell = (
+    <Menu
+      title={needsCount ? 'Needs you' : undefined}
+      sections={needsCount
+        ? [
+          { title: awaiting.length ? 'Waiting on your reply' : undefined, items: needsTargets.filter(t => !t.key.startsWith('idea:')) },
+          { title: undatedIdeas.length ? 'Ideas that need a date' : undefined, items: needsTargets.filter(t => t.key.startsWith('idea:')) },
+        ]
+        : [{ items: [{ key: 'none', label: 'You’re all caught up', icon: 'checkmark-circle-outline', onSelect: () => {} }] }]}
+    >
+      {(open) => (
+        <View>
+          <IconButton
+            icon={needsCount ? 'notifications' : 'notifications-outline'}
+            label={needsCount ? `Needs you: ${needsCount} item${needsCount === 1 ? '' : 's'}` : 'Needs you: nothing right now'}
+            variant="gray"
+            onPress={open}
+          />
+          {needsCount ? (
+            <View pointerEvents="none" style={{
+              position: 'absolute', top: 2, right: 2, width: 10, height: 10, borderRadius: 5,
+              backgroundColor: c.danger, borderWidth: 2, borderColor: c.background,
+            }} />
+          ) : null}
+        </View>
+      )}
+    </Menu>
+  );
+
   const header = (
     <ScreenHeader
-      eyebrow={rel ?? new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
-      title={compact ? shortDate(selectedDate) : longDate(selectedDate)}
+      title={scope === 'mine' ? 'My calendar' : viewGroup?.name ?? 'Shared calendar'}
+      titleAccessibilityLabel={scope === 'group' && viewGroup ? `${viewGroup.name}, shared calendar` : undefined}
+      titleLeading={scope === 'group' && viewGroup ? <GroupAvatar group={viewGroup} size={38} /> : undefined}
+      titleMenu={{ sections: calendarMenu, title: 'Show calendar' }}
       display
       trailing={
         <>
-          {selectedDate !== todayKey() && (
-            <Button label="Today" variant="gray" onPress={() => setSelectedDate(todayKey())} />
-          )}
-          {compact ? (
-            <GroupSwitcher>
-              {(open) => <IconButton icon="people-circle-outline" label={`Group: ${activeGroup?.name ?? 'none'}`} variant="gray" onPress={open} />}
-            </GroupSwitcher>
-          ) : (
-            <IconButton icon="add" label="New Plan (⌘N)" variant="gray" onPress={() => newPlan()} />
-          )}
+          {needsBell}
+          <Menu sections={optionsMenu} title="View options">
+            {(open) => <IconButton icon="ellipsis-horizontal" label="View options" variant="gray" onPress={open} />}
+          </Menu>
+          {!compact && <IconButton icon="add" label="New Plan (⌘N)" variant="gray" onPress={() => newPlan()} />}
         </>
       }
     />
   );
 
-  const scopePicker = (
-    <View style={{ paddingHorizontal: space.m, paddingBottom: space.s }}>
-      <Segmented
-        options={[{ key: 'mine', label: 'My plans' }, { key: 'group', label: activeGroup?.name ?? 'Group' }]}
-        value={scope}
-        onChange={setScope}
+  // ☆ beside the views: star what you're looking at (e.g. Week, or Week as a
+  // list) to open it every time; tap the filled star to unset.
+  const viewName = `${VIEWS.find(v => v.key === view)!.label}${asList ? ' as a list' : ''}`;
+  const starred = !!defaultView && defaultView.view === view && defaultView.asList === asList;
+  const viewPicker = (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.hair, paddingLeft: space.m, paddingRight: space.s, paddingBottom: space.s }}>
+      <Segmented options={VIEWS} value={view} onChange={setView} style={{ flex: 1 }} />
+      <IconButton
+        icon={starred ? 'star' : 'star-outline'}
+        label={starred ? `${viewName} is your default view. Tap to unset` : `Make ${viewName} your default view`}
+        onPress={() => setDefaultView(starred ? null : { view, asList })}
       />
     </View>
   );
 
-  const awaitingRow = awaiting.length > 0 ? (
-    <View style={{ marginTop: space.s, marginHorizontal: space.m, backgroundColor: c.tintSoft, borderRadius: 16, overflow: 'hidden' }}>
-      <ListRow
-        icon="mail-unread-outline"
-        title={awaiting.length === 1 ? `${awaiting[0].title} needs your reply` : `${awaiting.length} invites need your reply`}
-        subtitle={awaiting.length === 1 ? shortDate(keyOf(awaiting[0].start_time)) : awaiting.slice(0, 3).map(e => e.title).join(', ')}
-        chevron
-        onPress={() => {
-          const first = awaiting[0];
-          setScope('mine');
-          setSelectedDate(keyOf(first.start_time));
-          setSelectedEventId(first.id);
-        }}
-      />
+  // Only in a shared calendar: a chip on the date row lays your own events
+  // over it. The first time, one line says what it does.
+  const toggleMine = () => { setShowMine(x => !x); setMineHintSeen(true); };
+  const mineChip = scope === 'group' ? <MineChip on={showMine} onToggle={toggleMine} /> : undefined;
+  const mineHint = scope === 'group' && !mineHintSeen ? (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.s, paddingLeft: space.m, paddingRight: space.hair }}>
+      <Txt v="footnote" tone="secondary" style={{ flex: 1 }}>“Mine” adds your other plans here, outlined. Only you see them.</Txt>
+      <IconButton icon="close" label="Got it" onPress={() => setMineHintSeen(true)} />
     </View>
   ) : null;
 
-  const grid = (
-    <CalendarGrid
-      selected={selectedDate}
-      onSelect={setSelectedDate}
-      marked={marked}
-      expanded={compact ? expanded : true}
-      onToggleExpanded={compact ? () => setExpanded(x => !x) : undefined}
+
+  const openRow = (r: Row) => isMaybe(r)
+    ? navigation.navigate('Plans', { ideaId: r.idea.id })
+    : setSelectedEventId(r.id);
+
+  const sectionHeader = (section: DaySection) => (
+    <View style={{ paddingHorizontal: space.m, paddingTop: space.m, paddingBottom: space.s, backgroundColor: c.background }}>
+      <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: space.s }}>
+        <Txt v="headline" accessibilityRole="header">{section.title}</Txt>
+        {section.subtitle ? <Txt v="callout" tone="secondary">{section.subtitle}</Txt> : null}
+      </View>
+      <WorkLine day={workOn(workSchedules, section.key)} />
+    </View>
+  );
+
+  const rowView = (item: Row) => isMaybe(item) ? (
+    <MaybeRow key={item.id} item={item} meId={meId} onPress={() => openRow(item)} />
+  ) : (
+    <EventRow
+      key={item.id}
+      event={item}
+      attendees={attendeesOf(item)}
+      meId={meId}
+      hostName={(() => { const h = hostOf(item); return h ? (h === meId ? 'you' : memberById.get(h)?.full_name?.split(' ')[0] ?? null) : null; })()}
+      groupName={(scope === 'mine' && groupById.size > 1) || item.overlay ? groupById.get(item.group_id)?.name ?? null : null}
+      overlay={!!item.overlay}
+      selected={threeColumn && item.id === selectedEventId}
+      onPress={() => openRow(item)}
     />
   );
 
-  const list = (
-    <SectionList
-      sections={sections}
-      keyExtractor={e => e.id}
-      stickySectionHeadersEnabled
-      contentContainerStyle={{ paddingBottom: bottomClearance }}
-      ListHeaderComponent={<>{header}{scopePicker}{grid}{awaitingRow}</>}
-      renderSectionHeader={({ section }) => (
-        <View style={{ paddingHorizontal: space.m, paddingTop: space.m, paddingBottom: space.s, backgroundColor: c.background }}>
-          <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: space.s }}>
-            <Txt v="headline" accessibilityRole="header">{section.title}</Txt>
-            {section.subtitle ? <Txt v="callout" tone="secondary">{section.subtitle}</Txt> : null}
-          </View>
-          <WorkLine day={workOn(workSchedules, section.key)} />
+  const footer = loading ? <ActivityIndicator style={{ marginTop: space.l }} color={c.secondaryLabel} /> : null;
+
+  // ─── The view ──────────────────────────────────────────────────────────────
+  // Picking a day from the week or month opens that day.
+  const openDay = (key: string) => { setSelectedDate(key); setView('day'); };
+  const today = todayKey();
+  const goToday = () => setSelectedDate(today);
+
+  const weekRange = rangeLabel(week, addDays(week, 6));
+  const periodBar =
+    view === 'day' ? (
+      <PeriodBar label={longDate(selectedDate)} unit="day" accessory={mineChip} onStep={dir => setSelectedDate(addDays(selectedDate, dir))} onToday={selectedDate !== today ? goToday : undefined} />
+    ) : view === 'week' ? (
+      <PeriodBar label={weekRange.text} spoken={weekRange.spoken} unit="week" accessory={mineChip} onStep={dir => setSelectedDate(addDays(selectedDate, 7 * dir))} onToday={today < week || today > addDays(week, 6) ? goToday : undefined} />
+    ) : (
+      <PeriodBar label={monthLabel(selectedDate)} unit="month" accessory={mineChip} onStep={dir => setSelectedDate(addMonths(selectedDate, dir))} onToday={monthLabel(today) !== monthLabel(selectedDate) ? goToday : undefined} />
+    );
+
+  const listPeriod = (
+    <View>
+      {sections.map(s => (
+        <View key={s.key}>
+          {sectionHeader(s)}
+          {s.data.length ? s.data.map(rowView) : (
+            <ListRow title="Nothing planned" subtitle={scope === 'mine' ? 'Make plans for this day' : 'Add something for this day'} tintTitle={false} onPress={() => newPlan(s.key)} icon="add-circle-outline" />
+          )}
         </View>
-      )}
-      renderItem={({ item }) => isMaybe(item) ? (
-        <MaybeRow item={item} meId={meId} onPress={() => navigation.navigate('Plans', { ideaId: item.idea.id })} />
-      ) : (
-        <EventRow
-          event={item}
-          attendees={attendeesOf(item)}
-          meId={meId}
-          hostName={(() => { const h = hostOf(item); return h ? (h === meId ? 'you' : memberById.get(h)?.full_name?.split(' ')[0] ?? null) : null; })()}
-          groupName={scope === 'mine' && groupById.size > 1 ? groupById.get(item.group_id)?.name ?? null : null}
-          selected={threeColumn && item.id === selectedEventId}
-          onPress={() => setSelectedEventId(item.id)}
-        />
-      )}
-      renderSectionFooter={({ section }) => section.data.length === 0 ? (
-        <ListRow title="Nothing planned" subtitle={scope === 'mine' ? 'Make plans for this day' : 'Add something for this day'} tintTitle={false} onPress={() => newPlan(section.key)} icon="add-circle-outline" />
+      ))}
+      {sections.length === 0 ? (
+        <ListRow title={`Nothing planned this ${view}`} subtitle="Make plans" tintTitle={false} onPress={() => newPlan()} icon="add-circle-outline" />
       ) : null}
-      ListFooterComponent={
-        loading ? <ActivityIndicator style={{ marginTop: space.l }} color={c.secondaryLabel} /> :
-        undated > 0 ? (
-          <View style={{ marginTop: space.l, marginHorizontal: space.m, backgroundColor: c.fill, borderRadius: 16, overflow: 'hidden' }}>
-            <ListRow
-              icon="bulb-outline"
-              title={`${undated} idea${undated === 1 ? '' : 's'} still need${undated === 1 ? 's' : ''} a date`}
-              chevron
-              onPress={() => navigation.navigate('Plans')}
-            />
+    </View>
+  );
+
+  const period = asList ? listPeriod :
+    view === 'day' ? (
+      <DayTimeline
+        day={selectedDate}
+        rows={byDay.get(selectedDate) ?? []}
+        header={<View style={{ paddingHorizontal: space.m }}><WorkLine day={workOn(workSchedules, selectedDate)} /></View>}
+        onOpen={openRow}
+        onAdd={() => newPlan(selectedDate)}
+      />
+    ) : view === 'week' ? (
+      <WeekRows start={week} byDay={byDay} selected={selectedDate} onPickDay={openDay} onOpen={openRow} />
+    ) : (
+      <CalendarGrid selected={selectedDate} onSelect={openDay} marked={marked} expanded hideHeader weekStartsOn={weekStartsOn} />
+    );
+
+  const comingUp = upcomingDays > 0 ? (
+    <>
+      <View style={{ paddingHorizontal: space.m, paddingTop: space.l, flexDirection: 'row', alignItems: 'baseline', gap: space.s }}>
+        <Txt v="title" accessibilityRole="header">Coming up</Txt>
+        <Txt v="callout" tone="secondary" accessibilityLabel={rangeLabel(upcomingFrom, upcomingTo).spoken}>{rangeLabel(upcomingFrom, upcomingTo).text}</Txt>
+      </View>
+      {/* Same compact chips as the week, so the page reads as one calendar. */}
+      {upcoming.length ? upcoming.map(s => (
+        <View key={s.key} style={{ paddingHorizontal: space.m, paddingTop: space.m, gap: space.hair }}>
+          <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: space.s, paddingBottom: 2 }}>
+            <Txt v="callout" semibold accessibilityRole="header">{s.title}</Txt>
+            {s.subtitle ? <Txt v="footnote" tone="secondary">{s.subtitle}</Txt> : null}
           </View>
-        ) : null
-      }
-    />
+          <WorkLine day={workOn(workSchedules, s.key)} />
+          {s.data.map(r => <EventChip key={r.id} row={r} onPress={() => openRow(r)} />)}
+        </View>
+      )) : (
+        <Txt v="callout" tone="secondary" style={{ paddingHorizontal: space.m, paddingTop: space.s }}>Nothing else planned yet.</Txt>
+      )}
+    </>
+  ) : null;
+
+  const top = <>{header}{viewPicker}{periodBar}{mineHint}</>;
+
+  const list = (
+    <ScrollView contentContainerStyle={{ paddingBottom: bottomClearance }}>
+      {top}{period}{comingUp}{footer}
+    </ScrollView>
   );
 
   // After an event. Everyone who came (minus anyone who couldn't).
@@ -476,6 +743,11 @@ export default function CalendarScreen() {
       attendees={attendeesOf(e)}
       meId={meId}
       group={groupById.get(e.group_id) ?? null}
+      onOpenGroup={(() => {
+        const g = sharedCalendars.find(x => x.id === e.group_id);
+        if (!g || (scope === 'group' && g.id === viewGroup?.id)) return undefined;
+        return () => { if (!threeColumn) setSelectedEventId(null); openCalendar(g); };
+      })()}
       onClaim={(item, claim) => handleClaim(e, item, claim)}
       onAssign={(items) => handleAssign(e, items)}
       onRsvp={(reply, note) => handleRsvp(e, reply, note)}
@@ -526,6 +798,7 @@ export default function CalendarScreen() {
       )}
 
       <PrimaryAction label="New Plan" onPress={() => newPlan()} />
+      {groupSheets.sheets}
 
       {/* Editing only; new plans go through the shared New Plan sheet. */}
       <EventComposer
@@ -559,9 +832,12 @@ function timeLabel(e: Event) {
   return `${hm} ${ampm}`;
 }
 
-function EventRow({ event, attendees, meId, groupName, hostName, selected, onPress }: {
-  event: Event; attendees: AvatarPerson[]; meId: string | null; groupName: string | null; hostName: string | null; selected: boolean; onPress: () => void;
+function EventRow({ event, attendees, meId, groupName, hostName, overlay, selected, onPress }: {
+  event: Event; attendees: AvatarPerson[]; meId: string | null; groupName: string | null; hostName: string | null;
+  overlay: boolean;   // your own event laid over a shared calendar
+  selected: boolean; onPress: () => void;
 }) {
+  const { c } = useTheme();
   const { compact } = useLayout();
   const { hm, ampm } = timeParts(event.start_time);
   const cancelled = !!event.cancelled_at;
@@ -573,14 +849,16 @@ function EventRow({ event, attendees, meId, groupName, hostName, selected, onPre
     : reply ? REPLY_META[reply] : null;
   const strong = !cancelled && (reply === 'going' || reply === 'pending');
   const faded = cancelled || reply === 'declined';
-  const rest = [hostName && hostName !== 'you' ? `${hostName} hosting` : null, event.location, groupName].filter(Boolean).join(' · ');
+  const rest = [hostName && hostName !== 'you' ? `${hostName} hosting` : null, event.location].filter(Boolean).join(' · ');
   const meta = [status, rest].filter(Boolean).join(' · ');
+  // Where it comes from: its group, by icon and name (not color alone).
+  const source = overlay ? groupName ?? 'Your event' : groupName;
 
   return (
     <Tappable
       onPress={onPress}
       selected={selected}
-      accessibilityLabel={`${hm} ${ampm}, ${event.title}${meta ? `, ${meta}` : ''}`}
+      accessibilityLabel={`${hm} ${ampm}, ${event.title}${meta ? `, ${meta}` : ''}${overlay ? ', your event, not on this calendar' : groupName ? `, ${groupName} calendar` : ''}`}
       style={{
         flexDirection: 'row', alignItems: 'center', gap: space.m,
         paddingHorizontal: space.m, paddingVertical: space.s, minHeight: 64,
@@ -592,7 +870,7 @@ function EventRow({ event, attendees, meId, groupName, hostName, selected, onPre
         <Txt v="footnote" tone="secondary">{ampm}</Txt>
       </View>
       <View style={{ flex: 1, minWidth: 0 }}>
-        <Txt v="headline" numberOfLines={1} tone={faded ? 'secondary' : 'primary'} style={cancelled ? { textDecorationLine: 'line-through' } : undefined}>{event.title}</Txt>
+        <Txt v={overlay ? 'body' : 'headline'} numberOfLines={1} tone={faded || overlay ? 'secondary' : 'primary'} style={cancelled ? { textDecorationLine: 'line-through' } : undefined}>{event.title}</Txt>
         {meta ? (
           <Txt v="callout" tone="secondary" numberOfLines={1}>
             {status ? <Txt v="callout" tone={strong ? 'tint' : 'secondary'} semibold={strong}>{status}</Txt> : null}
@@ -600,8 +878,14 @@ function EventRow({ event, attendees, meId, groupName, hostName, selected, onPre
             {rest}
           </Txt>
         ) : null}
+        {source ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 1 }} importantForAccessibility="no-hide-descendants">
+            <Icon name={overlay ? 'person-outline' : 'people-circle-outline'} size={12} color={c.secondaryLabel} />
+            <Txt v="caption" tone="secondary" numberOfLines={1}>{source}</Txt>
+          </View>
+        ) : null}
       </View>
-      {attendees.length > 0 && !cancelled && <AvatarStack people={attendees} max={compact ? 3 : 2} size={compact ? 28 : 24} />}
+      {attendees.length > 0 && !cancelled && !overlay && <AvatarStack people={attendees} max={compact ? 3 : 2} size={compact ? 28 : 24} />}
     </Tappable>
   );
 }

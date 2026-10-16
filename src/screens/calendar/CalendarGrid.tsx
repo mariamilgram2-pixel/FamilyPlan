@@ -14,12 +14,16 @@ interface Props {
   marked: Set<string>;
   expanded: boolean;
   onToggleExpanded?: () => void;
+  /** Leave out the month label and paging (the screen drives them). */
+  hideHeader?: boolean;
+  /** 0 = Sunday, 1 = Monday. */
+  weekStartsOn?: 0 | 1;
 }
 
 const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-export default function CalendarGrid({ selected, onSelect, marked, expanded, onToggleExpanded }: Props) {
+export default function CalendarGrid({ selected, onSelect, marked, expanded, onToggleExpanded, hideHeader, weekStartsOn = 0 }: Props) {
   const { c } = useTheme();
   const { compact } = useLayout();
   const [anchor, setAnchor] = useState(selected);
@@ -33,18 +37,18 @@ export default function CalendarGrid({ selected, onSelect, marked, expanded, onT
 
   const weeks: (string | null)[][] = useMemo(() => {
     if (!expanded) {
-      const start = addDays(anchor, -anchorDate.getDay());
+      const start = addDays(anchor, -((anchorDate.getDay() - weekStartsOn + 7) % 7));
       return [Array.from({ length: 7 }, (_, i) => addDays(start, i))];
     }
     const first = new Date(anchorDate.getFullYear(), anchorDate.getMonth(), 1);
     const daysInMonth = new Date(anchorDate.getFullYear(), anchorDate.getMonth() + 1, 0).getDate();
-    const cells: (string | null)[] = Array(first.getDay()).fill(null);
+    const cells: (string | null)[] = Array((first.getDay() - weekStartsOn + 7) % 7).fill(null);
     for (let d = 1; d <= daysInMonth; d++) cells.push(dateKey(new Date(first.getFullYear(), first.getMonth(), d)));
     while (cells.length % 7) cells.push(null);
     const rows: (string | null)[][] = [];
     for (let i = 0; i < cells.length; i += 7) rows.push(cells.slice(i, i + 7));
     return rows;
-  }, [anchor, expanded]);
+  }, [anchor, expanded, weekStartsOn]);
 
   function step(dir: 1 | -1) {
     if (expanded) {
@@ -60,7 +64,7 @@ export default function CalendarGrid({ selected, onSelect, marked, expanded, onT
   return (
     <View style={{ paddingHorizontal: compact ? space.s : space.m, paddingBottom: space.s }}>
       {/* Month + paging */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', paddingLeft: compact ? space.s : 0, minHeight: 44 }}>
+      {!hideHeader && <View style={{ flexDirection: 'row', alignItems: 'center', paddingLeft: compact ? space.s : 0, minHeight: 44 }}>
         <Txt v="headline" style={{ flex: 1 }} accessibilityRole="header">{monthLabel}</Txt>
         <IconButton icon="chevron-back" label={expanded ? 'Previous month' : 'Previous week'} onPress={() => step(-1)} />
         <IconButton icon="chevron-forward" label={expanded ? 'Next month' : 'Next week'} onPress={() => step(1)} />
@@ -71,11 +75,11 @@ export default function CalendarGrid({ selected, onSelect, marked, expanded, onT
             onPress={onToggleExpanded}
           />
         ) : null}
-      </View>
+      </View>}
 
       {/* Weekday initials */}
       <View style={{ flexDirection: 'row', height: 24, alignItems: 'center' }} importantForAccessibility="no-hide-descendants">
-        {WEEKDAYS.map((d, i) => (
+        {[...WEEKDAYS.slice(weekStartsOn), ...WEEKDAYS.slice(0, weekStartsOn)].map((d, i) => (
           <Txt key={i} v="caption" tone="secondary" align="center" style={{ flex: 1 }}>{d}</Txt>
         ))}
       </View>

@@ -91,6 +91,14 @@ DEMO_EVENTS.push(
   DEMO_EVENTS.push(supper);
 }
 
+// Book club is a second shared calendar. One plan you're in (so it shows on
+// My calendar too, but only once on Book club's), and one you're not (so it
+// shows on Book club's calendar but not on yours).
+DEMO_EVENTS.push(
+  { ...ev('e11', 'Book club: pick the next book', 2, 20, 0, 60, 'Video call', ['demo-ana', 'demo-dev', DEMO_ME]), group_id: 'demo-books', rsvps: { 'demo-dev': 'going', [DEMO_ME]: 'going' } },
+  { ...ev('e12', 'Author talk at the library', 6, 18, 30, 90, 'Central Library', ['demo-ana', 'demo-dev']), group_id: 'demo-books', rsvps: { 'demo-dev': 'going' } },
+);
+
 // Family dinner shows off assignments: some claimed, one open.
 DEMO_EVENTS[1].assignments = [
   { id: 'a1', item: 'Bread', assignee_id: 'demo-ben' },
