@@ -7,8 +7,11 @@
 //              calendar's event sheet.
 //   prefs    — Plan asks about scheduling preferences first (time of day,
 //              how soon, which days, how long).
-//   options  — a few times that work for everyone; create & share an invite,
-//              or keep the idea in Proposed with those dates attached.
+//   options  — a few suggested times, ranked by calendar fit first and
+//              everyone's private preferences second (lib/suggest); create &
+//              share an invite, or let everyone vote on those dates. Each
+//              option shows its calendar fit ("3 of 4 calendars appear
+//              free"), which is a guess, never a vote.
 // Existing ideas enter at `prefs` ("Find a time") or `options` (a date that
 // was proposed earlier).
 //
@@ -24,14 +27,18 @@ import { supabase } from '../../lib/supabase';
 import { addDemoEvent, DEMO_CONTACTS, DEMO_EVENTS, DEMO_MEMBERS, DEMO_ME, isDemoGroup } from '../../lib/demo';
 import { parseIdeaText, ParsedIdea } from '../../lib/nlIdea';
 import {
-  Busy, DURATION_LABEL, DayKind, Horizon, PartOfDay, PlanPrefs,
-  defaultPrefs, findSlots, searchRange, slotDay, slotLabel, slotTime,
+  DURATION_LABEL, DayKind, Horizon, PartOfDay, PlanPrefs,
+  candidateSlots, defaultPrefs, searchRange, slotDay, slotLabel, slotTime,
 } from '../../lib/planner';
+import { Candidate, MIN_OPTIONS, Scored, SheepPlan, rankSuggestions, scoreLocally, sheepContext } from '../../lib/suggest';
+import { estimateLabel, fitKnown, fromRow } from '../../lib/availability';
+import { useMyPrefs } from '../../lib/availabilityPrefs';
 import { sendNotifications } from '../../lib/notifications';
 import { useWorkSchedules } from '../../lib/workSchedule';
 import { expandEvents } from '../../lib/recurrence';
 import { blocksTime } from '../../lib/rsvp';
 import { AppNotificationInsert, Contact, Event, Idea, Profile, TimeSlot } from '../../types';
+import type { EstimateRow } from '../../lib/availability';
 import { useGroup } from '../../contexts/GroupContext';
 import { useAuth } from '../../contexts/AuthContext';
 import Avatar from '../../components/Avatar';
@@ -95,6 +102,8 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
   const { c } = useTheme();
   const work = useWorkSchedules();
   const isDemo = isDemoGroup(activeGroup);
+  const { prefs: myPrefs } = useMyPrefs(user?.id ?? null);
+  const timeZone = profile?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
   const meId = user?.id ?? (isDemo ? DEMO_ME : null);
   const myName = (profile?.full_name ?? (isDemo ? DEMO_MEMBERS[0].full_name : null) ?? 'Someone').split(' ')[0];
   const existing = entry?.idea ?? null;
@@ -359,8 +368,8 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
     setStep('prefs');
   }
 
-  async function loadBusy(): Promise<Busy[]> {
-    const everyone = [meId!, ...participantIds];
+  /** Sheep events each person is going to, around the search range. */
+  async function loadPlans(everyone: string[]): Promise<SheepPlan[]> {
     const [from, to] = searchRange(prefs);
     let rows: Event[];
     if (isDemo) {
@@ -376,17 +385,50 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
       if (error) { notify('Couldn’t check calendars', error.message); return []; }
       rows = [...(oneOff.data ?? []), ...(repeating.data ?? [])] as Event[];
     }
-    // Busy = invited and not declined, on an event that's still on.
+    // Going = invited and not declined, on an event that's still on.
     return expandEvents(rows, new Date(from), new Date(to)).flatMap(e =>
       everyone.filter(id => blocksTime(e, id))
-        .map(id => ({ start: new Date(e.start_time).getTime(), end: new Date(e.end_time).getTime(), who: id })));
+        .map(id => ({ who: id, start: new Date(e.start_time).getTime(), end: new Date(e.end_time).getTime() })));
+  }
+
+  /**
+   * Calendar fit and preference fit for each candidate. Signed in, the server
+   * weighs everyone's connected calendars and private preferences and returns
+   * counts only; in the demo, or if that fails, it's Sheep events alone.
+   */
+  async function score(cands: Candidate[], everyone: string[], plans: SheepPlan[]): Promise<Scored[]> {
+    const ctxs = cands.map(c => sheepContext(c.slot, everyone, plans, timeZone));
+    const local = () => cands.map((c, i) => scoreLocally(c, ctxs[i], { people: everyone, meId: meId!, myPrefs, timeZone }));
+    if (isDemo || !user || !cands.length) return local();
+    const rows: EstimateRow[] = [];
+    for (let i = 0; i < ctxs.length; i += 60) {
+      const { data, error } = await supabase.rpc('availability_estimate', {
+        p_member_ids: everyone, p_slots: ctxs.slice(i, i + 60), p_timezone: timeZone,
+      });
+      if (error || !data) return local();
+      rows.push(...data);
+    }
+    const byStart = new Map(rows.map(r => [Date.parse(r.slot_start), r]));
+    const fallback = local();
+    return cands.map((c, i) => {
+      const r = byStart.get(Date.parse(c.slot.start));
+      return r ? { ...c, fit: fromRow(r), penalty: r.soft_penalty } : fallback[i];
+    });
   }
 
   async function handleFindTimes() {
     setSearching(true);
-    const busy = await loadBusy();
+    const everyone = [meId!, ...participantIds];
+    const plans = await loadPlans(everyone);
     const hint = parsed ?? parseIdeaText(title, { today: todayKey(), people: [] });
-    const found = findSlots({ busy, prefs, work, preferredStart: hint.start });
+    // Your own plans and work hours rule a time out; everyone else's only rank it lower.
+    const mine = plans.filter(p => p.who === meId);
+    const cands = candidateSlots({
+      prefs, work, preferredStart: hint.start, timeZone, perDay: 4,
+      skip: (s, e) => mine.some(p => s < p.end && e > p.start),
+    });
+    const ranked = rankSuggestions(await score(cands, everyone, plans), { soon: prefs.horizon === 'soon' });
+    const found = ranked.map(r => ({ start: r.slot.start, end: r.slot.end, fit: r.fit }));
     setSlots(found);
     setChosen(found.length ? 0 : null);
     setSearching(false);
@@ -395,8 +437,9 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
 
   async function handleKeepProposed() {
     setSaving('keep');
-    // New options start a fresh vote; these all fit your calendar, so you're in on each.
-    const idea = await persist({ status: 'proposed', proposed_slots: slots, event_id: null, slot_votes: { [meId!]: slots.map(s => s.start) } });
+    // New options start a fresh vote. Fitting your calendar isn't a vote, so
+    // nobody's answer is filled in — you can say which work like anyone else.
+    const idea = await persist({ status: 'proposed', proposed_slots: slots, event_id: null, slot_votes: {} });
     if (!idea) return setSaving(null);
     await notifyAll(idea, 'dates_proposed', `${myName} suggested times for ${idea.title}`, slots.map(slotLabel).join('\n'));
     setSaving(null);
@@ -676,23 +719,30 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
             <Txt v="title" accessibilityRole="header">{title}</Txt>
             <Txt v="callout" tone="secondary">
               {slots.length === 0
-                ? 'Nothing works for everyone in that range.'
+                ? 'Nothing fits in that range.'
                 : participantIds.length
-                  ? `These work for ${who(['you', ...participantNames])}.`
+                  ? 'Suggested from calendars first, then preferences. Nobody has answered yet.'
                   : 'These are open on your calendar.'}
             </Txt>
+            {slots.length > 0 && slots.length < MIN_OPTIONS ? (
+              <Txt v="footnote" tone="secondary">
+                Only {slots.length} {slots.length === 1 ? 'time fits' : 'times fit'} in that range. For more, try another time of day, more days, or a later range.
+              </Txt>
+            ) : null}
           </View>
 
           {slots.length > 0 ? (
-            <ListSection header="Date options" footer={`${DURATION_LABEL(prefs.duration)} each · checked against sheep calendars${work.length ? ' and your work hours' : ''}.`}>
+            <ListSection header="Date options">
               {slots.map((s, i) => {
                 const rel = relativeDay(slotDay(s));
+                const fit = participantIds.length && fitKnown(s.fit) ? estimateLabel(s.fit!) : '';
                 return (
                   <ListRow
                     key={s.start}
                     icon="calendar-outline"
                     title={rel ? `${rel} · ${shortDate(slotDay(s))}` : shortDate(slotDay(s))}
                     subtitle={slotTime(s)}
+                    detail={fit ? `Calendar fit: ${fit}` : null}
                     checked={chosen === i}
                     onPress={() => setChosen(i)}
                   />

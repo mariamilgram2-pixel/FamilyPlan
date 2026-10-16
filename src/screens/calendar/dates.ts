@@ -16,6 +16,40 @@ export function parseKey(key: string) {
   return new Date(y, m - 1, d);
 }
 
+/** Minutes `timeZone` is ahead of UTC at instant `ms` (-240 for New York in summer). */
+function zoneOffset(ms: number, timeZone: string) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone, hourCycle: 'h23',
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(new Date(ms));
+  const get = (t: string) => Number(parts.find(p => p.type === t)!.value);
+  const asUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
+  return (asUtc - Math.floor(ms / 1000) * 1000) / 60000;
+}
+
+/**
+ * The instant (epoch ms) a wall-clock time happens on a day: "7pm on Mar 8"
+ * stays 7pm across a daylight-saving change, unlike midnight + 19 hours.
+ * Without a zone, the device's. A time skipped when clocks spring forward
+ * lands an hour later; one repeated when they fall back is the first.
+ */
+export function wallTime(key: string, minutes: number, timeZone?: string) {
+  const [y, m, d] = key.split('-').map(Number);
+  if (!timeZone) return new Date(y, m - 1, d, 0, minutes).getTime();
+  const guess = Date.UTC(y, m - 1, d, 0, minutes);
+  const before = guess - zoneOffset(guess, timeZone) * 60000;
+  const after = guess - zoneOffset(before, timeZone) * 60000;
+  // `after` reads back as the asked-for time unless that time doesn't exist (a
+  // spring-forward gap); then `before` is the same clock reading an hour on.
+  return guess - zoneOffset(after, timeZone) * 60000 === after ? after : before;
+}
+
+/** Day key for an instant in a zone (the device's when omitted). */
+export function keyIn(ms: number, timeZone?: string) {
+  if (!timeZone) return dateKey(new Date(ms));
+  return new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms));
+}
+
 export function addDays(key: string, n: number) {
   const d = parseKey(key);
   d.setDate(d.getDate() + n);

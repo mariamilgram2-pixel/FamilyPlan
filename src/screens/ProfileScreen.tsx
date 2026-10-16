@@ -23,10 +23,20 @@ import {
   ScreenHeader, Screen, Sheet, Tappable, Toggle, Txt, useBottomClearance,
 } from '../components/ui';
 import { toRRule } from '../lib/recurrence';
+import { useMyPrefs } from '../lib/availabilityPrefs';
+import { SoftPrefs } from '../lib/availability';
+import { WeekendMode } from '../types';
 import { space, useLayout, useTheme } from '../theme';
 
 // User-chosen labels for their own events — content, not chrome.
 const CATEGORY_COLORS = ['#C0392B', '#D68910', '#B7950B', '#229954', '#17A589', '#2471A3', '#7D3C98', '#717D7E'];
+
+// "When should Sheep suggest plans?" — private, soft, optional.
+const WEEKEND_OPTIONS: { key: WeekendMode; label: string; detail: string }[] = [
+  { key: 'any', label: 'Any free time works', detail: 'Free weekend time can be suggested.' },
+  { key: 'keep_one_free', label: 'Keep one day free when possible', detail: 'Sheep avoids filling both days of a weekend.' },
+  { key: 'ask_first', label: 'Ask me before suggesting weekend times', detail: 'Others never see your weekends as free.' },
+];
 
 const REMINDER_OPTIONS = [
   { label: 'None', value: 0 },
@@ -70,7 +80,8 @@ export default function ProfileScreen() {
   const [defaultReminder, setDefaultReminder] = useState(15);
   const [exporting, setExporting] = useState(false);
 
-  const [sheet, setSheet] = useState<null | 'profile' | 'categories' | 'hidden'>(null);
+  const [sheet, setSheet] = useState<null | 'profile' | 'categories' | 'hidden' | 'availability'>(null);
+  const { prefs: suggestPrefs, save: saveSuggestPrefs } = useMyPrefs(user?.id ?? null);
   const workSchedules = useWorkSchedules();
   const hasOngoing = workSchedules.some(w => w.scope.kind === 'ongoing');
   const [workSheet, setWorkSheet] = useState<{ editing: WorkSchedule | null } | null>(null);
@@ -228,7 +239,13 @@ export default function ProfileScreen() {
           <ListRow title="Reminders" trailing={<Toggle label="Reminders" value={notifPrefs.reminders} onValueChange={v => setNotif('reminders', v)} />} />
         </ListSection>
 
-        <ListSection header="Calendar">
+        <ListSection header="Calendar & availability">
+          <ListRow
+            title="When Sheep suggests plans"
+            value={suggestPrefs.weekend_mode === 'any' && !suggestPrefs.spacing_enabled ? 'Any free time' : 'Custom'}
+            chevron
+            onPress={() => setSheet('availability')}
+          />
           <Menu
             title="Default reminder"
             sections={[{ items: REMINDER_OPTIONS.map(o => ({
@@ -279,6 +296,12 @@ export default function ProfileScreen() {
       />
       <WorkScheduleSheet visible={!!workSheet} onClose={() => setWorkSheet(null)} editing={workSheet?.editing ?? null} hasOngoing={hasOngoing} />
       <CategoriesSheet visible={sheet === 'categories'} onClose={() => setSheet(null)} categories={categories} onChange={setCats} />
+      <AvailabilitySheet
+        visible={sheet === 'availability'}
+        onClose={() => setSheet(null)}
+        prefs={suggestPrefs}
+        onChange={async next => { const error = await saveSuggestPrefs(next); if (error) notify('Couldn’t save', error); }}
+      />
       <HiddenSheet visible={sheet === 'hidden'} onClose={() => setSheet(null)} members={groupMembers} hidden={hiddenFriends} onChange={setHidden} />
     </Screen>
   );
@@ -388,6 +411,44 @@ function EditProfileSheet({ visible, onClose, isDemo, initialName, initialEmail,
         hint="Just the month and day. People you plan with get a nudge to celebrate."
       />
       <Field label="Email" value={email} onChangeText={setEmail} placeholder="you@example.com" keyboardType="email-address" autoCapitalize="none" hint="Changing your email sends a confirmation link." />
+    </Sheet>
+  );
+}
+
+// ─── When should Sheep suggest plans? ───────────────────────────────────────
+
+function AvailabilitySheet({ visible, onClose, prefs, onChange }: {
+  visible: boolean; onClose: () => void; prefs: SoftPrefs; onChange: (p: SoftPrefs) => void;
+}) {
+  return (
+    <Sheet visible={visible} onClose={onClose} title="Availability" cancelLabel="Done" width={480}>
+      <View style={{ gap: space.hair, paddingHorizontal: space.m }}>
+        <Txt v="title" accessibilityRole="header">When should Sheep suggest plans?</Txt>
+        <Txt v="callout" tone="secondary">Free time doesn’t always mean you’re up for plans.</Txt>
+      </View>
+
+      <ListSection header="My weekends">
+        {WEEKEND_OPTIONS.map(o => (
+          <ListRow
+            key={o.key}
+            title={o.label}
+            subtitle={o.detail}
+            checked={prefs.weekend_mode === o.key}
+            onPress={() => onChange({ ...prefs, weekend_mode: o.key })}
+          />
+        ))}
+      </ListSection>
+
+      <ListSection footer="Avoid recommending back-to-back social events when possible.">
+        <ListRow
+          title="Space out my plans"
+          trailing={<Toggle label="Space out my plans" value={prefs.spacing_enabled} onValueChange={v => onChange({ ...prefs, spacing_enabled: v })} />}
+        />
+      </ListSection>
+
+      <Txt v="footnote" tone="secondary" style={{ paddingHorizontal: space.m }}>
+        Only you can see these. They change which times Sheep suggests first. They never block a time, hide an invite, or answer for you.
+      </Txt>
     </Sheet>
   );
 }

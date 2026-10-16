@@ -41,6 +41,7 @@ import { EventComposer, EventDetail, WorkLine } from './EventViews';
 import { usePlanComposer } from '../../components/PlanComposer';
 import CommentThread from '../../components/CommentThread';
 import { dateVoters, tallySlots } from '../../lib/rsvp';
+import { votesLabel } from '../../lib/availability';
 import { hostOf, openSlots, stageOf } from '../../lib/plans';
 import { useWorkSchedules, workOn } from '../../lib/workSchedule';
 import { expandEvents } from '../../lib/recurrence';
@@ -897,14 +898,13 @@ function MaybeRow({ item, meId, onPress }: { item: Maybe; meId: string | null; o
   const { c } = useTheme();
   const { compact } = useLayout();
   const { hm, ampm } = timeParts(item.slot.start);
-  const voters = dateVoters(item.idea);
   const yes = tallySlots(item.idea, [item.slot])[0].yes;
   const mine = meId ? item.idea.slot_votes?.[meId] : undefined;
   const status = mine === undefined ? 'Maybe · vote on dates' : mine.includes(item.slot.start) ? 'Maybe · works for you' : 'Maybe';
   return (
     <Tappable
       onPress={onPress}
-      accessibilityLabel={`${hm} ${ampm}, ${item.idea.title}, date option, ${yes.length} of ${voters.length} can make it`}
+      accessibilityLabel={`${hm} ${ampm}, ${item.idea.title}, date option, ${votesLabel(yes.length)}`}
       style={{
         flexDirection: 'row', alignItems: 'center', gap: space.m,
         paddingHorizontal: space.m, paddingVertical: space.s, minHeight: 56,
@@ -919,7 +919,7 @@ function MaybeRow({ item, meId, onPress }: { item: Maybe; meId: string | null; o
       <View style={{ flex: 1, minWidth: 0 }}>
         <Txt v="headline" tone="secondary" numberOfLines={1}>{item.idea.title}</Txt>
         <Txt v="footnote" tone={mine === undefined ? 'tint' : 'secondary'} semibold={mine === undefined} numberOfLines={1}>
-          {`${status} · ${yes.length} of ${voters.length} can make it`}
+          {`${status} · ${votesLabel(yes.length)}`}
         </Txt>
       </View>
     </Tappable>

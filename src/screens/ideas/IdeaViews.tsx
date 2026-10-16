@@ -5,7 +5,8 @@ import Avatar, { AvatarPerson } from '../../components/Avatar';
 import { Button, Icon, ListRow, ListSection, Tag, Tappable, Txt } from '../../components/ui';
 import { continuous, radius, space, tabularNums, useTheme } from '../../theme';
 import { slotDay, slotLabel, slotTime } from '../../lib/planner';
-import { bestSlot, dateVoters, tallySlots } from '../../lib/rsvp';
+import { awaitedVoters, bestSlot, tallySlots } from '../../lib/rsvp';
+import { estimateLabel, fitKnown, votesLabel } from '../../lib/availability';
 import { STAGE_LABEL, awaitingYourDates, readyToSend, stageOf } from '../../lib/plans';
 import AvatarStack from '../../components/AvatarStack';
 import { shortDate } from '../calendar/dates';
@@ -79,7 +80,7 @@ export function IdeaRow({ idea, voted, meId, audienceSummary, selected, onVote, 
   const booked = scheduled(idea);
   const options = stage === 'dates' ? upcomingSlots(idea).length : 0;
   const answered = Object.keys(idea.slot_votes ?? {}).length;
-  const voters = dateVoters(idea).length;
+  const voters = awaitedVoters(idea).length;
   const needsYou = awaitingYourDates(idea, meId);
   const ready = readyToSend(idea, meId);
 
@@ -263,7 +264,7 @@ function DateVotes({ idea, options, meId, personOf, onSlotVotes, onPickSlot }: {
   const mine = meId ? idea.slot_votes?.[meId] : undefined;   // undefined = hasn't answered
   const tallies = tallySlots(idea, options);
   const best = bestSlot(tallies);
-  const everyone = dateVoters(idea);
+  const everyone = awaitedVoters(idea);
   const answered = everyone.filter(id => idea.slot_votes?.[id]);
   const waiting = everyone.filter(id => !idea.slot_votes?.[id]);
   const allIn = !!best && waiting.length === 0 && best.yes.length === everyone.length;
@@ -294,7 +295,8 @@ function DateVotes({ idea, options, meId, personOf, onSlotVotes, onPickSlot }: {
               key={slot.start}
               leading={<Icon name={checked ? 'checkmark-circle' : 'ellipse-outline'} size={24} color={checked ? c.tint : c.secondaryLabel} />}
               title={shortDate(slotDay(slot))}
-              subtitle={`${slotTime(slot)} · ${yes.length} of ${everyone.length} can make it${top && yes.length > 1 ? ' · best so far' : ''}`}
+              subtitle={`${slotTime(slot)} · ${votesLabel(yes.length)}${top && yes.length > 1 ? ' · best so far' : ''}`}
+              detail={fitKnown(slot.fit) ? `Calendar fit: ${estimateLabel(slot.fit!)}` : null}
               trailing={yes.length ? <AvatarStack people={yes.map(personOf)} max={3} size={24} ringColor={c.fill} /> : undefined}
               onPress={() => toggle(slot.start)}
             />

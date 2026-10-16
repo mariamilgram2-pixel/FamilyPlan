@@ -10,7 +10,7 @@
 //   happened   — the event is over (or it was marked done)
 
 import { Event, Idea } from '../types';
-import { dateVoters } from './rsvp';
+import { awaitedVoters, dateVoters } from './rsvp';
 
 export type Stage = 'idea' | 'dates' | 'on' | 'happened';
 
@@ -35,9 +35,9 @@ export function stageOf(idea: Idea): Stage {
 /** Date options still in the future. */
 export const openSlots = upcoming;
 
-/** You're asked about its dates and haven't answered. */
+/** You're asked about its dates and haven't answered. Not the organizer: proposing isn't being asked. */
 export function awaitingYourDates(idea: Idea, meId: string | null) {
-  if (!meId || stageOf(idea) !== 'dates') return false;
+  if (!meId || idea.created_by === meId || stageOf(idea) !== 'dates') return false;
   const asked = dateVoters(idea).includes(meId) || (idea.audience_user_ids ?? []).includes(meId);
   return asked && !idea.slot_votes?.[meId];
 }
@@ -45,8 +45,8 @@ export function awaitingYourDates(idea: Idea, meId: string | null) {
 /** You proposed it, and everyone has answered on dates: time to send the invite. */
 export function readyToSend(idea: Idea, meId: string | null) {
   if (!meId || idea.created_by !== meId || stageOf(idea) !== 'dates') return false;
-  const voters = dateVoters(idea);
-  return voters.length > 1 && voters.every(id => idea.slot_votes?.[id]);
+  const voters = awaitedVoters(idea);
+  return voters.some(id => id !== meId) && voters.every(id => idea.slot_votes?.[id]);
 }
 
 // ─── Traditions ──────────────────────────────────────────────────────────────
