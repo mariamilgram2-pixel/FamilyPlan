@@ -1,10 +1,13 @@
 // New Plan sheet, and the flow that turns an idea into a time.
 //
-// Three steps in one sheet:
-//   compose  — describe it in a sentence (pre-fills the form) or fill it in:
-//              what, who, where, when, other details. Then ask the group,
-//              find a time, or — already know when — hand off to the
-//              calendar's event sheet.
+// Steps in one sheet:
+//   describe — just a sentence ("dinner with Ana this week"), or a kind of
+//              plan to start from.
+//   compose  — what the sentence settled, and what's still to decide (who,
+//              when, where), each a tap away. One main action follows from
+//              what's known: find a time, or lock it in once the day and
+//              time are set; asking the group or saving the idea is always
+//              there.
 //   prefs    — Plan asks about scheduling preferences first (time of day,
 //              how soon, which days, how long).
 //   options  — a few suggested times, ranked by calendar fit first and
@@ -35,6 +38,11 @@ import { estimateLabel, fitKnown, fromRow } from '../../lib/availability';
 import { useMyPrefs } from '../../lib/availabilityPrefs';
 import { sendNotifications } from '../../lib/notifications';
 import { useWorkSchedules, workConflict } from '../../lib/workSchedule';
+import {
+  ANY_WHEN, DayChoice, PART_LABEL, RANGE_LABEL, TimeChoice, TimePart, When,
+  clockLabel, dayLabel, isExact, lockedSlot, parseClock, prefsFor, rangeDays, whenLabel,
+} from '../../lib/planWhen';
+import { daysCovered } from '../../lib/span';
 import { expandEvents } from '../../lib/recurrence';
 import { blocksTime } from '../../lib/rsvp';
 import { AppNotificationInsert, Contact, Event, Idea, Profile, TimeSlot } from '../../types';
@@ -43,12 +51,12 @@ import { useGroup } from '../../contexts/GroupContext';
 import { useAuth } from '../../contexts/AuthContext';
 import Avatar from '../../components/Avatar';
 import {
-  Button, Field, Icon, ListRow, ListSection, Menu, SectionHeader, Segmented, Sheet, Toggle, Txt,
+  Button, Field, Icon, IconName, ListRow, ListSection, Menu, MenuSection, SectionHeader, Segmented, Sheet, Tappable, Toggle, Txt,
 } from '../../components/ui';
 import { space, useTheme } from '../../theme';
 import CalendarGrid from '../calendar/CalendarGrid';
-import { DescribeField } from '../calendar/EventViews';
-import { longDate, relativeDay, shortDate, todayKey } from '../calendar/dates';
+import { addDays, keyOf, parseKey, relativeDay, shortDate, todayKey } from '../calendar/dates';
+import { Row, WeekRows } from '../calendar/CalendarViews';
 import type { PlanPrefill } from '../../components/PlanComposer';
 
 interface PersonInGroup {
@@ -57,7 +65,7 @@ interface PersonInGroup {
   groupNames: string[];
 }
 
-type Step = 'compose' | 'prefs' | 'options';
+type Step = 'describe' | 'compose' | 'prefs' | 'options';
 
 export interface PlanEntry {
   idea: Idea;
@@ -90,6 +98,16 @@ const HOUR_OPTIONS: { value: number | null; label: string }[] = [
 ];
 // A trip over your work days still shows (you can take time off), after ones that don't.
 const WORK_PENALTY = 2;
+// Kinds of plan to start from. Each only nudges: a trip runs several days.
+type Kind = 'food' | 'activity' | 'together' | 'trip';
+const KINDS: { key: Kind; label: string; icon: IconName; example: string }[] = [
+  { key: 'food', label: 'Food and drinks', icon: 'restaurant-outline', example: 'Dinner with Ana this week' },
+  { key: 'activity', label: 'Activity', icon: 'bicycle-outline', example: 'Bowling Saturday afternoon' },
+  { key: 'together', label: 'Get-together', icon: 'people-outline', example: 'Game night at ours next week' },
+  { key: 'trip', label: 'Trip', icon: 'compass-outline', example: 'Camping at the lake, two nights' },
+];
+const uniq = (list: (string | null | undefined)[]) => Array.from(new Set(list.map(x => x?.trim()).filter(Boolean) as string[]));
+
 const LENGTH_KIND: { key: 'one' | 'several'; label: string }[] = [{ key: 'one', label: '1 day' }, { key: 'several', label: 'Several days' }];
 
 interface Props {
@@ -99,11 +117,9 @@ interface Props {
   onSaved: (idea?: Idea) => void;
   entry?: PlanEntry | null;
   prefill?: PlanPrefill;
-  /** "I know when": continue as a calendar event with what's filled in. */
-  onKnowWhen?: (prefill: PlanPrefill) => void;
 }
 
-export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, prefill, onKnowWhen }: Props) {
+export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, prefill }: Props) {
   const { activeGroup, groups, fetchGroups } = useGroup();
   const { user, profile } = useAuth();
   const { c } = useTheme();
@@ -128,7 +144,22 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [location, setLocation] = useState('');
-  const [date, setDate] = useState<string | null>(null);
+  const [when, setWhen] = useState<When>(ANY_WHEN);
+  const date = when.day.kind === 'date' ? when.day.date : null;
+  const setDate = (k: string | null) => setWhen(w => ({ ...w, day: k ? { kind: 'date', date: k } : { kind: 'any' } }));
+  const [kind, setKind] = useState<Kind | null>(null);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [showWho, setShowWho] = useState(false);
+  const [showNotes, setShowNotes] = useState(false);
+  const [pickingTime, setPickingTime] = useState(false);
+  const [timeText, setTimeText] = useState('');
+  const [typingPlace, setTypingPlace] = useState(false);
+  const [typingLength, setTypingLength] = useState(false);
+  const [places, setPlaces] = useState<string[]>([]);       // where you've been lately, for Place
+  const [showRecent, setShowRecent] = useState(false);
+  const [placeDraft, setPlaceDraft] = useState('');
+  const [calView, setCalView] = useState<'mine' | 'all' | null>(null);
+  const [calEvents, setCalEvents] = useState<Event[]>([]);
   const [pickingDate, setPickingDate] = useState(false);
   const [selectedGroupIds, setSelectedGroupIds] = useState<Set<string>>(new Set());
   const [selectedUserIds, setSelectedUserIds] = useState<Set<string>>(new Set());
@@ -152,14 +183,16 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
 
   const [people, setPeople] = useState<PersonInGroup[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
-  const [saving, setSaving] = useState<'propose' | 'invite' | 'keep' | null>(null);
+  const [saving, setSaving] = useState<'propose' | 'save' | 'invite' | 'keep' | null>(null);
   const [loadingPeople, setLoadingPeople] = useState(false);
 
   // Reset + refetch groups each time the sheet opens so we never render
   // against a stale/empty list from an earlier failed fetch.
   useEffect(() => {
     if (!visible) return;
-    setDescribe(''); setParsed(null); setPickingDate(false);
+    setDescribe(''); setParsed(null); setPickingDate(false); setWhen(ANY_WHEN); setKind(null);
+    setEditingTitle(false); setShowWho(false); setShowNotes(false); setPickingTime(false); setTimeText('');
+    setTypingPlace(false); setTypingLength(false); setCalView(null); setShowRecent(false);
     setShowAllPeople(false); setShowAllContacts(false);
     setSlots([]); setChosen(null); setSaving(null);
     if (existing) {
@@ -181,7 +214,12 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
       setTitle(prefill?.title ?? ''); setDescription(prefill?.notes ?? ''); setLocation(prefill?.location ?? ''); setDate(prefill?.date ?? null);
       setSelectedGroupIds(new Set()); setSelectedUserIds(new Set(prefill?.people ?? [])); setSelectedContactIds(new Set());
       setPrefs(defaultPrefs({ start: prefill?.start, end: prefill?.end, date: prefill?.date ?? null }));
-      setStep('compose');
+      setWhen({
+        day: prefill?.date ? { kind: 'date', date: prefill.date } : { kind: 'any' },
+        time: prefill?.start ? { kind: 'exact', start: prefill.start, end: prefill.end } : { kind: 'any' },
+      });
+      // "Do it again", "Plan with Ana": what's known is already filled in.
+      setStep(prefill?.title ? 'compose' : 'describe');
     }
     if (!isDemo) fetchGroups();
   }, [visible]);
@@ -244,6 +282,50 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
     return () => { cancelled = true; };
   }, [visible, effectiveGroups, user, isDemo]);
 
+  // Places you've made plans lately, for Place.
+  useEffect(() => {
+    if (!visible) return;
+    if (isDemo) { setPlaces(uniq(DEMO_EVENTS.map(e => e.location)).slice(0, 5)); return; }
+    if (!meId) return;
+    supabase.from('events').select('location').contains('attendees', [meId]).not('location', 'is', null)
+      .order('start_time', { ascending: false }).limit(40)
+      .then(({ data }) => setPlaces(uniq((data ?? []).map((r: any) => r.location)).slice(0, 5)));
+  }, [visible]);
+
+  // "See on calendars": the week in question, yours or every shared calendar you can see.
+  // The week starts where the plan might go, and holds still while you pick a day in it.
+  const [calStart, setCalStart] = useState(todayKey());
+  const showCalendars = (view: 'mine' | 'all') => {
+    if (!calView) setCalStart(when.day.kind === 'range' ? rangeDays(when.day.range, todayKey())[0] : date ?? todayKey());
+    setCalView(view);
+  };
+  useEffect(() => {
+    if (!calView) return;
+    let cancelled = false;
+    const from = parseKey(calStart), to = parseKey(addDays(calStart, 7));
+    (async () => {
+      let list: Event[];
+      if (isDemo) {
+        list = DEMO_EVENTS;
+      } else {
+        const groupIds = effectiveGroups.map(g => g.id);
+        const base = () => {
+          const q = supabase.from('events').select('*');
+          return calView === 'mine' || !groupIds.length ? q.contains('attendees', [meId]) : q.or(`group_id.in.(${groupIds.join(',')}),attendees.cs.{${meId}}`);
+        };
+        const [oneOff, repeating] = await Promise.all([
+          base().is('recurrence', null).lt('start_time', to.toISOString()).gt('end_time', from.toISOString()),
+          base().not('recurrence', 'is', null),
+        ]);
+        list = [...((oneOff.data ?? []) as Event[]), ...((repeating.data ?? []) as Event[])];
+      }
+      const shown = expandEvents(list, from, to).filter(e =>
+        calView === 'all' || (e.attendees.includes(meId!) && e.rsvps?.[meId!] !== 'declined'));
+      if (!cancelled) setCalEvents(shown);
+    })();
+    return () => { cancelled = true; };
+  }, [calView, calStart]);
+
   function toggle(set: Set<string>, id: string, setter: (s: Set<string>) => void) {
     const next = new Set(set);
     if (next.has(id)) next.delete(id); else next.add(id);
@@ -264,10 +346,28 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
     setParsed(p);
     setTitle(p.title);
     setLocation(p.location ?? '');
-    setDate(p.date ?? null);
+    setWhen({
+      day: p.range ? { kind: 'range', range: p.range } : p.date ? { kind: 'date', date: p.date } : { kind: 'any' },
+      time: p.start ? { kind: 'exact', start: p.start, end: p.end } : p.part ? { kind: 'part', part: p.part } : { kind: 'any' },
+    });
     setSelectedUserIds(new Set(p.personIds.filter(id => !id.startsWith('contact:'))));
     setSelectedContactIds(new Set(p.personIds.filter(id => id.startsWith('contact:')).map(id => id.slice(8))));
-    setPrefs(defaultPrefs({ start: p.start, end: p.end, date: p.date }));
+    // "Camping weekend", "two nights", or a trip picked below: several days.
+    const span = spanHint(text) ?? (kind === 'trip' ? { spanDays: 3 } : null);
+    setPrefs({ ...defaultPrefs({ start: p.start, end: p.end, date: p.date }), ...span });
+  }
+
+  function pickKind(k: Kind | null) {
+    setKind(k);
+    if (k === 'trip' && spanOf(prefs) === 1) setPrefs(p => ({ ...p, spanDays: 3 }));
+    if (k !== 'trip' && kind === 'trip' && !spanHint(describe)) setPrefs(p => ({ ...p, spanDays: 1 }));
+  }
+
+  function toCompose() {
+    const text = describe.trim();
+    if (!text) return;
+    if (!title.trim()) setTitle(text[0].toUpperCase() + text.slice(1));
+    setStep('compose');
   }
 
   // ─── Who's involved ────────────────────────────────────────────────────────
@@ -377,19 +477,37 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
       : 'It’s in Plans so your group can say they’re in.');
   }
 
+  /** Into Plans without asking anyone, to pick up later. */
+  async function handleSave() {
+    if (!ready()) return;
+    setSaving('save');
+    const idea = await persist({ status: 'proposed', proposed_slots: [], event_id: null });
+    setSaving(null);
+    if (!idea) return;
+    finish(idea);
+    notify('Saved', 'It’s in Plans. No one’s been asked yet.');
+  }
+
   // ─── Planning ──────────────────────────────────────────────────────────────
 
-  function startPlan() {
+  /** From the summary: search whatever's still loose, keeping what's known. */
+  function findFromCompose() {
     if (!ready()) return;
-    // "Camping weekend", "two nights": start from several days.
-    const span = spanHint(`${title} ${description}`);
-    if (span && spanOf(prefs) === 1) setPrefs(p => ({ ...p, ...span }));
-    setStep('prefs');
+    const p = prefsFor(when, prefs, todayKey());
+    setPrefs(p);
+    handleFindTimes(p);
+  }
+
+  function lockIn() {
+    const slot = lockedSlot(when, prefs);
+    if (!slot || !ready()) return;
+    if (Date.parse(slot.start) < Date.now()) return notify('That time’s passed', 'Pick a later day or time.');
+    createInvite(slot);
   }
 
   /** Sheep events each person is going to, around the search range. */
-  async function loadPlans(everyone: string[]): Promise<SheepPlan[]> {
-    const [from, to] = searchRange(prefs);
+  async function loadPlans(everyone: string[], p: PlanPrefs): Promise<SheepPlan[]> {
+    const [from, to] = searchRange(p);
     let rows: Event[];
     if (isDemo) {
       rows = DEMO_EVENTS;
@@ -435,10 +553,11 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
     });
   }
 
-  async function handleFindTimes() {
+  async function handleFindTimes(p: PlanPrefs = prefs) {
     setSearching(true);
+    const multi = spanOf(p) > 1;
     const everyone = [meId!, ...participantIds];
-    const plans = await loadPlans(everyone);
+    const plans = await loadPlans(everyone, p);
     const hint = parsed ?? parseIdeaText(title, { today: todayKey(), people: [] });
     // Within a day, your own plans and work hours rule a time out; everyone
     // else's only rank it lower. A trip of several days will cross things, so
@@ -446,12 +565,12 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
     const mine = plans.filter(p => p.who === meId);
     setMyPlans(mine);
     const cands = candidateSlots({
-      prefs, work, preferredStart: hint.start, timeZone, perDay: 4,
+      prefs: p, work, preferredStart: when.time.kind === 'exact' ? when.time.start : hint.start, timeZone, perDay: 4,
       skip: multi ? undefined : (s, e) => mine.some(p => s < p.end && e > p.start),
     });
     const scored = (await score(cands, everyone, plans))
       .map(c => (multi && workConflict(work, c.slot.start, c.slot.end) ? { ...c, penalty: c.penalty + WORK_PENALTY } : c));
-    const ranked = rankSuggestions(scored, { soon: prefs.horizon === 'soon' });
+    const ranked = rankSuggestions(scored, { soon: p.horizon === 'soon' });
     const found = ranked.map(r => ({ start: r.slot.start, end: r.slot.end, fit: r.fit }));
     setSlots(found);
     setChosen(found.length ? 0 : null);
@@ -471,9 +590,13 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
     notify('Dates shared', `${slots.length} date option${slots.length === 1 ? '' : 's'} saved${participantIds.length ? ` and shared with ${who(participantNames)}` : ''}.`);
   }
 
-  async function handleInvite() {
+  function handleInvite() {
     if (chosen === null || !slots[chosen]) return;
-    const slot = slots[chosen];
+    createInvite(slots[chosen]);
+  }
+
+  /** On the calendar, everyone invited, and the share sheet for anyone not on sheep. */
+  async function createInvite(slot: TimeSlot) {
     setSaving('invite');
     const attendees = [meId!, ...participantIds];
     // Anyone who already said this date works is going.
@@ -534,38 +657,286 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
   const shownPeople = showAllPeople ? orderedPeople : orderedPeople.slice(0, CHUNK);
   const shownContacts = showAllContacts ? contacts : contacts.slice(0, CHUNK);
 
-  const sheetTitle = step === 'compose' ? 'New Plan' : step === 'prefs' ? 'Find a Time' : 'Pick a Time';
+  const sheetTitle = step === 'describe' || step === 'compose' ? 'New Plan' : step === 'prefs' ? 'Find a Time' : 'Pick a Time';
 
-  function knowWhen() {
-    if (!title.trim()) return notify('What’s the plan?', 'Give it a short description first.');
-    onKnowWhen?.({
-      title: title.trim(), location: location.trim() || undefined, notes: description.trim() || undefined,
-      people: participantIds, date, start: parsed?.start, end: parsed?.end,
-    });
-  }
-  // A sentence with a day and a time ("dinner Friday at 7") already knows when.
-  const timeKnown = !!(date && parsed?.start);
+  // ─── The summary ───────────────────────────────────────────────────────────
+  // Rows sit under "Still to decide" until they're settled, and stay put
+  // while you're changing one so it doesn't jump mid-edit.
+  const trip = spanOf(prefs) > 1;
+  const today = todayKey();
+  const audienceNames = [
+    ...effectiveGroups.filter(g => selectedGroupIds.has(g.id)).map(g => g.name),
+    ...people.filter(p => selectedUserIds.has(p.profile.id)).map(p => (p.profile.full_name ?? p.profile.email ?? 'Someone').split(' ')[0]),
+    ...contacts.filter(ct => selectedContactIds.has(ct.id)).map(ct => ct.name.split(' ')[0]),
+  ];
+  const whoValue = audienceNames.length ? `You and ${who(audienceNames)}` : 'Add people';
+  const whoSet = audienceNames.length > 0 && !showWho;
+  const whenValue = trip
+    ? [dayLabel(when.day), `${spanOf(prefs)} days`].filter(Boolean).join(' · ')
+    : whenLabel(when) ?? 'Add a day and time';
+  const whenSet = isExact(when, trip) && !pickingDate && !pickingTime && !typingLength;
+  const placeSet = !!location.trim() && !typingPlace;
+  const locked = isExact(when, trip);
+  const weekday = (k: string) => (k === today ? 'Today' : k === addDays(today, 1) ? 'Tomorrow' : parseKey(k).toLocaleDateString('en-US', { weekday: 'short' }));
+  const lockText = date ? (trip ? `${weekday(date)} · ${spanOf(prefs)} days` : when.time.kind === 'exact' ? `${weekday(date)} ${clockLabel(when.time.start)}` : '') : '';
+  const findText = when.day.kind === 'range' ? `Find a time ${RANGE_LABEL[when.day.range].toLowerCase()}`
+    : date ? `Find a time ${weekday(date) === 'Today' || weekday(date) === 'Tomorrow' ? weekday(date).toLowerCase() : `on ${weekday(date)}`}`
+    : 'Find a time';
+  const askText = `Ask ${audienceNames.length === 1 && selectedGroupIds.size === 0 ? audienceNames[0] : 'the group'}${locked ? ' first' : ''}`;
+
+  const setDay = (day: DayChoice) => { setWhen(w => ({ ...w, day })); setPickingDate(false); };
+  const setTime = (time: TimeChoice) => { setWhen(w => ({ ...w, time })); setPickingTime(false); };
+  const isDay = (k: string) => when.day.kind === 'date' && when.day.date === k;
+  const isRange = (r: string) => when.day.kind === 'range' && when.day.range === r;
+  const isPart = (pt: TimePart) => when.time.kind === 'part' && when.time.part === pt;
+  const pickedDate = date && date !== today && date !== addDays(today, 1) ? date : null;
+  const whenSections: MenuSection[] = [
+    {
+      title: trip ? 'Starting' : 'Day',
+      items: [
+        { key: 'any', label: trip ? 'Any time soon' : 'Any day', checked: when.day.kind === 'any', onSelect: () => setDay({ kind: 'any' }) },
+        ...(trip ? [] : [{ key: 'today', label: 'Today', checked: isDay(today), onSelect: () => setDay({ kind: 'date', date: today }) }]),
+        { key: 'tomorrow', label: 'Tomorrow', checked: isDay(addDays(today, 1)), onSelect: () => setDay({ kind: 'date', date: addDays(today, 1) }) },
+        ...(trip ? [] : [{ key: 'thisWeek', label: 'This week', checked: isRange('thisWeek'), onSelect: () => setDay({ kind: 'range', range: 'thisWeek' }) }]),
+        { key: 'thisWeekend', label: 'This weekend', checked: isRange('thisWeekend'), onSelect: () => setDay({ kind: 'range', range: 'thisWeekend' }) },
+        { key: 'nextWeek', label: 'Next week', checked: isRange('nextWeek'), onSelect: () => setDay({ kind: 'range', range: 'nextWeek' }) },
+        ...(trip ? [{ key: 'nextWeekend', label: 'Next weekend', checked: isRange('nextWeekend'), onSelect: () => setDay({ kind: 'range', range: 'nextWeekend' }) }] : []),
+        ...(pickedDate ? [{ key: 'picked', label: shortDate(pickedDate), checked: true, onSelect: () => {} }] : []),
+        { key: 'pick', label: 'Pick a date…', icon: 'calendar-outline' as IconName, onSelect: () => { setPickingTime(false); setTypingLength(false); setPickingDate(true); } },
+      ],
+    },
+    trip ? {
+      title: 'How long',
+      items: [
+        ...[2, 3, 4, 7].map(n => ({ key: `len${n}`, label: n === 7 ? 'A week' : `${n} days`, checked: spanOf(prefs) === n, onSelect: () => setPrefs(p => ({ ...p, spanDays: n })) })),
+        { key: 'other', label: 'Other…', icon: 'create-outline' as IconName, onSelect: () => { setPickingDate(false); setSpanText(`${spanOf(prefs)} days`); setTypingLength(true); } },
+      ],
+    } : {
+      title: 'Time',
+      items: [
+        { key: 'anyTime', label: 'Any time', checked: when.time.kind === 'any', onSelect: () => setTime({ kind: 'any' }) },
+        ...(['morning', 'daytime', 'evening'] as TimePart[]).map(pt => ({ key: pt, label: PART_LABEL[pt], checked: isPart(pt), onSelect: () => setTime({ kind: 'part', part: pt }) })),
+        ...(when.time.kind === 'exact' ? [{ key: 'exact', label: clockLabel(when.time.start), checked: true, onSelect: () => {} }] : []),
+        { key: 'pickTime', label: 'Pick a time…', icon: 'time-outline' as IconName, onSelect: () => {
+          setPickingDate(false);
+          setTimeText(when.time.kind === 'exact' ? clockLabel(when.time.start) : '');
+          setPickingTime(true);
+        } },
+      ],
+    },
+  ];
+  const typedTime = parseClock(timeText);
+  const typedSpan = parseSpan(spanText);
+
+  const chevron = (open = false) => <Icon name={open ? 'chevron-up' : 'chevron-down'} size={16} color={c.secondaryLabel} />;
+  const doneIcon = 'checkmark-circle' as IconName;
+  // A small ×, on any row with something in it, to clear just that.
+  const clear = (what: string, onPress: () => void) => (
+    <Tappable onPress={onPress} accessibilityLabel={`Remove ${what}`} hitSlop={8} style={{ padding: space.hair, borderRadius: 999 }}>
+      <Icon name="close-circle" size={18} color={c.secondaryLabel} />
+    </Tappable>
+  );
+  const trailing = (...nodes: React.ReactNode[]) => <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.s }}>{nodes}</View>;
+  const clearWho = () => { setSelectedGroupIds(new Set()); setSelectedUserIds(new Set()); setSelectedContactIds(new Set()); };
+  const clearWhen = () => { setWhen(ANY_WHEN); setPickingDate(false); setPickingTime(false); setTypingLength(false); };
+
+  const whoRow = (
+    <ListRow
+      key="who" icon={whoSet ? doneIcon : 'people-outline'} title="Who" value={whoValue} onPress={() => setShowWho(x => !x)}
+      trailing={trailing(audienceNames.length ? <React.Fragment key="x">{clear('everyone', clearWho)}</React.Fragment> : null, <React.Fragment key="c">{chevron(showWho)}</React.Fragment>)}
+    />
+  );
+  const whenRow = (
+    <React.Fragment key="when">
+      <Menu title="When" sections={whenSections}>
+        {open => (
+          <ListRow
+            icon={whenSet ? doneIcon : 'calendar-outline'} title="When" value={whenValue} onPress={open}
+            trailing={trailing(whenLabel(when) ? <React.Fragment key="x">{clear('when', clearWhen)}</React.Fragment> : null, <React.Fragment key="c">{chevron()}</React.Fragment>)}
+          />
+        )}
+      </Menu>
+      {pickingDate ? (
+        <CalendarGrid
+          selected={date ?? today}
+          onSelect={(k) => { if (k < today) return notify('Pick a later day', 'That day has passed.'); setDay({ kind: 'date', date: k }); }}
+          marked={new Set()}
+          expanded
+        />
+      ) : null}
+      {pickingTime ? (
+        <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: space.s, padding: space.s }}>
+          <View style={{ flex: 1 }}>
+            <Field
+              value={timeText}
+              onChangeText={setTimeText}
+              placeholder="7pm, 6:30, noon"
+              autoFocus
+              accessibilityLabel="Time"
+              style={{ backgroundColor: c.background }}
+              onSubmitEditing={() => typedTime && setTime({ kind: 'exact', start: typedTime })}
+              hint={timeText.trim() && !typedTime ? 'Try a time like 7pm or 18:30.' : undefined}
+            />
+          </View>
+          <Button label="Set" onPress={() => typedTime && setTime({ kind: 'exact', start: typedTime })} disabled={!typedTime} />
+        </View>
+      ) : null}
+      {typingLength ? (
+        <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: space.s, padding: space.s }}>
+          <View style={{ flex: 1 }}>
+            <Field
+              value={spanText}
+              onChangeText={setSpanText}
+              placeholder="10 days, 2 weeks"
+              autoFocus
+              accessibilityLabel="How many days"
+              style={{ backgroundColor: c.background }}
+              hint={spanText.trim() && !typedSpan ? `From 2 to ${MAX_SPAN_DAYS} days, like 10 or 2 weeks.` : undefined}
+            />
+          </View>
+          <Button label="Set" onPress={() => { if (typedSpan) { setPrefs(p => ({ ...p, spanDays: typedSpan })); setTypingLength(false); } }} disabled={!typedSpan} />
+        </View>
+      ) : null}
+    </React.Fragment>
+  );
+  // Place works like When: tap "Add where", type it (or fill it from a
+  // recent place), then Save.
+  const openPlace = () => {
+    if (typingPlace) { setTypingPlace(false); return; }
+    setPlaceDraft(location); setShowRecent(false); setTypingPlace(true);
+  };
+  const savePlace = () => { setLocation(placeDraft.trim()); setTypingPlace(false); };
+  const placeRow = (
+    <React.Fragment key="place">
+      <ListRow
+        icon={placeSet ? doneIcon : 'location-outline'} title="Place" value={location.trim() || 'Add where'} onPress={openPlace}
+        trailing={trailing(location.trim() ? <React.Fragment key="x">{clear('place', () => { setLocation(''); setTypingPlace(false); })}</React.Fragment> : null, <React.Fragment key="c">{chevron(typingPlace)}</React.Fragment>)}
+      />
+      {typingPlace ? (
+        <View style={{ padding: space.s, gap: space.s }}>
+          <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: space.s }}>
+            <View style={{ flex: 1 }}>
+              <Field
+                value={placeDraft}
+                onChangeText={setPlaceDraft}
+                placeholder="Lilia, Grandma’s house, the park…"
+                autoFocus
+                returnKeyType="done"
+                onSubmitEditing={savePlace}
+                accessibilityLabel="Where"
+                style={{ backgroundColor: c.background }}
+              />
+            </View>
+            <Button label="Save" onPress={savePlace} disabled={!placeDraft.trim() && !location.trim()} />
+          </View>
+          {places.length ? (
+            <Tappable
+              onPress={() => setShowRecent(x => !x)}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: showRecent }}
+              accessibilityLabel="Show recent"
+              style={{ flexDirection: 'row', alignItems: 'center', gap: space.s, paddingHorizontal: space.s, paddingVertical: space.hair, alignSelf: 'flex-start', borderRadius: 6 }}
+            >
+              <Icon name={showRecent ? 'checkbox' : 'square-outline'} size={16} color={showRecent ? c.tint : c.secondaryLabel} />
+              <Txt v="footnote" tone="secondary">Show recent</Txt>
+            </Tappable>
+          ) : null}
+          {showRecent ? places.map(pl => (
+            <ListRow key={pl} title={pl} checked={placeDraft.trim() === pl} onPress={() => setPlaceDraft(pl)} />
+          )) : null}
+        </View>
+      ) : null}
+    </React.Fragment>
+  );
+  const summaryRows = [
+    { key: 'who', set: whoSet, node: whoRow },
+    { key: 'when', set: whenSet, node: whenRow },
+    { key: 'place', set: placeSet, node: placeRow },
+  ];
+
+  // The week in "See on calendars", a plan running several days on each of them.
+  const calByDay = useMemo(() => {
+    const map = new Map<string, Row[]>();
+    calEvents.forEach(e => daysCovered(e.start_time, e.end_time).forEach(k => {
+      if (!map.has(k)) map.set(k, []);
+      map.get(k)!.push(e);
+    }));
+    map.forEach(list => list.sort((x, y) => x.start_time.localeCompare(y.start_time)));
+    return map;
+  }, [calEvents]);
+
 
   return (
     <Sheet visible={visible} onClose={onClose} title={sheetTitle} cancelLabel="Cancel">
+      {step === 'describe' && (
+        <>
+          <Txt v="title" accessibilityRole="header" style={{ paddingHorizontal: space.m }}>What do you want to do?</Txt>
+          <Field
+            value={describe}
+            onChangeText={onDescribe}
+            placeholder={KINDS.find(k => k.key === kind)?.example ?? 'Dinner with Ana this week'}
+            multiline
+            autoFocus
+            blurOnSubmit
+            onSubmitEditing={toCompose}
+            accessibilityLabel="Describe the plan in your own words"
+            style={{ minHeight: 88 }}
+          />
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.s, paddingHorizontal: space.m }}>
+            {KINDS.map(k => {
+              const on = kind === k.key;
+              return (
+                <Tappable
+                  key={k.key}
+                  onPress={() => pickKind(on ? null : k.key)}
+                  accessibilityLabel={k.label}
+                  accessibilityState={{ selected: on }}
+                  style={{
+                    flexDirection: 'row', alignItems: 'center', gap: space.hair + 2,
+                    paddingHorizontal: space.m, paddingVertical: space.s, borderRadius: 999,
+                    backgroundColor: on ? c.tintSoft : c.fill,
+                  }}
+                >
+                  <Icon name={k.icon} size={16} color={on ? c.tint : c.secondaryLabel} />
+                  <Txt v="footnote" tone={on ? 'tint' : 'primary'} semibold={on}>{k.label}</Txt>
+                </Tappable>
+              );
+            })}
+          </View>
+          <Button label="Next" onPress={toCompose} disabled={!describe.trim()} block />
+        </>
+      )}
+
       {step === 'compose' && (
         <>
-          <DescribeField
-            value={describe}
-            onChange={onDescribe}
-            parsed={parsed}
-            placeholder="Natasha and I want to try Lilia for dinner"
-            filledHint="Filled in below — adjust anything, then choose how to plan it."
-            emptyHint="Filled in below. A day, place, or who’s in helps, but it’s all optional."
-            accessibilityLabel="Describe the plan in your own words"
-          />
+          {editingTitle ? (
+            <Field
+              value={title}
+              onChangeText={setTitle}
+              autoFocus
+              onBlur={() => setEditingTitle(false)}
+              onSubmitEditing={() => setEditingTitle(false)}
+              accessibilityLabel="What’s the plan?"
+            />
+          ) : (
+            <Tappable
+              onPress={() => setEditingTitle(true)}
+              accessibilityLabel={`${title || 'Untitled plan'}. Rename`}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: space.s, paddingHorizontal: space.m }}
+            >
+              <Txt v="title" accessibilityRole="header" style={{ flexShrink: 1 }}>{title || 'Untitled plan'}</Txt>
+              <Icon name="pencil" size={16} color={c.secondaryLabel} />
+            </Tappable>
+          )}
 
-          <Field label="What’s the plan?" value={title} onChangeText={setTitle} placeholder="Weekend camping trip, theme dinner…" accessibilityLabel="What’s the plan?" />
-
-          <Txt v="headline" style={{ paddingHorizontal: space.m, marginBottom: -space.s }}>
-            Who’s in?{audienceCount > 0 ? <Txt v="callout" tone="secondary">{`  ${audienceCount} selected`}</Txt> : null}
-          </Txt>
-
+          {[summaryRows.filter(r => r.set), summaryRows.filter(r => !r.set)].map((list, i) => list.length ? (
+            <React.Fragment key={i}>
+              <ListSection header={i === 1 ? 'Still to decide' : undefined} separatorInset={52}>
+                {list.map(r => r.node)}
+              </ListSection>
+              {showWho && list.some(r => r.key === 'who') ? (
+                loadingPeople ? <ActivityIndicator color={c.secondaryLabel} /> : (
+                  <>
           {effectiveGroups.length > 0 && (
             <ListSection
               header="Groups"
@@ -639,45 +1010,63 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
             </>
           )}
 
-          <Field label="Where" value={location} onChangeText={setLocation} placeholder="Optional" accessibilityLabel="Location" />
+                  </>
+                )
+              ) : null}
+            </React.Fragment>
+          ) : null)}
 
-          <ListSection header="When">
-            <ListRow
-              icon="calendar-outline"
-              title={date ? longDate(date) : 'Any day'}
-              value={pickingDate ? 'Done' : date ? 'Change' : 'Optional'}
-              onPress={() => setPickingDate(p => !p)}
-            />
-            {pickingDate ? (
-              <CalendarGrid
-                selected={date ?? todayKey()}
-                onSelect={(k) => { setDate(k); setPrefs(p => ({ ...p, onlyDate: k })); setPickingDate(false); }}
-                marked={new Set()}
-                expanded
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Button label={showNotes ? 'Hide notes' : 'Add notes'} icon={showNotes ? 'remove' : 'add'} variant="plain" onPress={() => setShowNotes(x => !x)} />
+            <Menu
+              title="See on calendars"
+              sections={[{ items: [
+                { key: 'mine', label: 'Just my calendar', checked: calView === 'mine', onSelect: () => showCalendars('mine') },
+                { key: 'all', label: 'All calendars', checked: calView === 'all', onSelect: () => showCalendars('all') },
+              ] }]}
+            >
+              {open => <Button label="See on calendars" icon="calendar-outline" variant="plain" onPress={open} />}
+            </Menu>
+          </View>
+
+          {showNotes || description.trim() ? (
+            <Field label="Notes" value={description} onChangeText={setDescription} placeholder="Budget, reservations, what to bring…" multiline accessibilityLabel="Notes" />
+          ) : null}
+
+          {calView ? (
+            <View>
+              <SectionHeader
+                title={`${calView === 'mine' ? 'Your calendar' : 'All calendars'} · ${shortDate(calStart)} – ${shortDate(addDays(calStart, 6))}`}
+                action={<Button label="Hide" variant="plain" onPress={() => setCalView(null)} />}
               />
-            ) : null}
-            {date ? (
-              <ListRow title="Clear date" tintTitle onPress={() => { setDate(null); setPrefs(p => ({ ...p, onlyDate: null })); }} />
-            ) : null}
-          </ListSection>
-
-          <Field label="Other details" value={description} onChangeText={setDescription} placeholder="Budget, reservations, what to bring… (optional)" multiline accessibilityLabel="Other details" />
+              <View style={{ backgroundColor: c.fill, borderRadius: 12, overflow: 'hidden' }}>
+                <WeekRows
+                  start={calStart}
+                  byDay={calByDay}
+                  selected={date ?? ''}
+                  onPickDay={(k) => { if (k < today) return; setDay({ kind: 'date', date: k }); }}
+                  onOpen={(r) => { const k = keyOf(r.start_time); if (k >= today) setDay({ kind: 'date', date: k }); }}
+                />
+              </View>
+              <Txt v="footnote" tone="secondary" style={{ paddingHorizontal: space.m, paddingTop: space.s }}>
+                {calView === 'all' ? 'Shared calendars you can see. ' : ''}Tap a day to plan it then.
+              </Txt>
+            </View>
+          ) : null}
 
           <View style={{ gap: space.s }}>
-            <Txt v="headline" style={{ paddingHorizontal: space.m }}>How do you want to plan it?</Txt>
-            {timeKnown && onKnowWhen ? (
-              <Button label="Add to Calendar" icon="calendar" onPress={knowWhen} disabled={!title.trim() || !!saving} block />
-            ) : null}
+            {locked ? (
+              <Button label={`Lock it in · ${lockText}`} icon="lock-closed" onPress={lockIn} loading={saving === 'invite'} disabled={!!saving} block />
+            ) : (
+              <Button label={findText} icon="search" onPress={findFromCompose} loading={searching} disabled={!!saving} block />
+            )}
             <View style={{ flexDirection: 'row', gap: space.s }}>
-              <Button label="Ask the Group" icon="chatbubbles-outline" variant="gray" onPress={handlePropose} loading={saving === 'propose'} disabled={!title.trim() || !!saving} style={{ flex: 1 }} />
-              <Button label="Find a Time" icon="search-outline" variant={timeKnown ? 'gray' : 'filled'} onPress={startPlan} disabled={!title.trim() || !!saving} style={{ flex: 1 }} />
+              <Button label={askText} icon="chatbubbles-outline" variant="gray" onPress={handlePropose} loading={saving === 'propose'} disabled={!!saving || searching} style={{ flex: 1 }} />
+              <Button label="Save idea" icon="bookmark-outline" variant="gray" onPress={handleSave} loading={saving === 'save'} disabled={!!saving || searching} style={{ flex: 1 }} />
             </View>
-            {!timeKnown && onKnowWhen ? (
-              <Button label="I Know When" icon="calendar-outline" variant="plain" onPress={knowWhen} disabled={!title.trim() || !!saving} />
+            {!existing && !prefill?.title ? (
+              <Button label="Describe it again" variant="plain" onPress={() => setStep('describe')} disabled={!!saving || searching} />
             ) : null}
-            <Txt v="footnote" tone="secondary" style={{ paddingHorizontal: space.m }}>
-              Ask the Group shares it so people can say they’re in. Find a Time checks everyone’s calendars and suggests dates they can vote on.
-            </Txt>
           </View>
         </>
       )}
@@ -757,7 +1146,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
             <>
               <View>
                 <SectionHeader title="How soon" />
-                <Segmented options={HORIZON_OPTIONS} value={prefs.horizon} onChange={k => setPrefs(p => ({ ...p, horizon: k }))} />
+                <Segmented options={HORIZON_OPTIONS} value={prefs.horizon} onChange={k => setPrefs(p => ({ ...p, horizon: k, range: null }))} />
                 {prefs.horizon === 'later' ? (
                   <ListSection>
                     <Menu
@@ -795,7 +1184,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
 
           <View style={{ flexDirection: 'row', gap: space.s }}>
             {!existing && <Button label="Back" variant="gray" onPress={() => setStep('compose')} style={{ flex: 1 }} />}
-            <Button label="Find Times" icon="search" onPress={handleFindTimes} loading={searching} disabled={multi && !spanTyped} style={{ flex: 2 }} />
+            <Button label="Find Times" icon="search" onPress={() => handleFindTimes()} loading={searching} disabled={multi && !spanTyped} style={{ flex: 2 }} />
           </View>
         </>
       )}
