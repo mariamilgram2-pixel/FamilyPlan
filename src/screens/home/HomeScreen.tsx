@@ -58,7 +58,7 @@ function nextBirthday(mmdd: string): string {
 export default function HomeScreen() {
   const { user, profile } = useAuth();
   const { activeGroup, groups } = useGroup();
-  const { c } = useTheme();
+  const { c, isDark, toggleColorScheme } = useTheme();
   const { compact } = useLayout();
   const navigation = useNavigation<any>();
   const composer = usePlanComposer();
@@ -347,6 +347,12 @@ export default function HomeScreen() {
             display
             trailing={
               <>
+                <IconButton
+                  icon={isDark ? 'sunny-outline' : 'moon-outline'}
+                  label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+                  variant="gray"
+                  onPress={toggleColorScheme}
+                />
                 <View>
                   <IconButton
                     icon={inbox.unread ? 'notifications' : 'notifications-outline'}

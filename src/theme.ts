@@ -6,7 +6,8 @@
 // All text/background pairs below clear WCAG AA (4.5:1).
 
 import { useMemo } from 'react';
-import { Platform, StyleSheet, TextStyle, useColorScheme, useWindowDimensions, ViewStyle } from 'react-native';
+import { Platform, StyleSheet, TextStyle, useWindowDimensions, ViewStyle } from 'react-native';
+import { useThemePreference } from './contexts/ThemeContext';
 
 export type Palette = {
   tint: string;            // the one brand color: primary actions, selection, today
@@ -27,7 +28,7 @@ export type Palette = {
 const light: Palette = {
   tint: '#3A7A3A',
   onTint: '#FFFFFF',
-  background: '#FFFFFF',
+  background: '#f7f7f7',
   fill: '#F2F2F7',
   label: '#1C1C1E',
   secondaryLabel: '#6C6C70',
@@ -102,9 +103,9 @@ export const tabularNums = tabular;
 // ─── Hooks ───────────────────────────────────────────────────────────────────
 
 export function useTheme() {
-  const scheme = useColorScheme();
-  const isDark = scheme === 'dark';
-  return { c: isDark ? dark : light, isDark };
+  const { resolved, toggleColorScheme } = useThemePreference();
+  const isDark = resolved === 'dark';
+  return { c: isDark ? dark : light, isDark, toggleColorScheme };
 }
 
 /**
