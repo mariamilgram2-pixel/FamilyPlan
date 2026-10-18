@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { isAllDay, isMultiDay, spanLabel, spanLength } from '../../lib/span';
+import { splitPlace } from '../../lib/places';
 import { notify } from '../../lib/alert';
 import { View } from 'react-native';
 import { supabase } from '../../lib/supabase';
@@ -122,7 +123,7 @@ export function EventDetail({ event, attendees, meId, group, onOpenGroup, onClai
           <ListRow icon="repeat" title={describeRecurrence({ ...event.recurrence, until: null }, event.start_time)} subtitle={untilLabel(event.recurrence)} />
         ) : null}
         {conflict && !cancelled ? <ListRow icon="briefcase-outline" title="During your work hours" subtitle={formatHours(conflict)} /> : null}
-        {event.location ? <ListRow icon="location-outline" title={event.location} /> : null}
+        {event.location ? <ListRow icon="location-outline" title={splitPlace(event.location).name} subtitle={splitPlace(event.location).address} /> : null}
         {host ? (
           <ListRow
             icon="home-outline"

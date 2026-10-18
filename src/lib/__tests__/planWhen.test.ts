@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem: async () => null, setItem: async () => {} } }));
 const { parseIdeaText } = await import('../nlIdea');
-const { isExact, lockedSlot, parseClock, prefsFor, rangeDays, whenLabel } = await import('../planWhen');
+const { isExact, lockedSlot, parseClock, parseClockRange, prefsFor, rangeDays, readOther, whenLabel } = await import('../planWhen');
 const { candidateSlots, defaultPrefs } = await import('../planner');
 
 const SUN = '2026-10-18', WED = '2026-10-21', SAT = '2026-10-24';
@@ -76,5 +76,41 @@ describe('when', () => {
     expect(lockedSlot(exact, prefs)).toEqual({ start: at(SAT, '19:00'), end: at(SAT, '21:00') });
     // A trip needs only its first day.
     expect(lockedSlot({ day: exact.day, time: { kind: 'any' } }, { ...prefs, spanDays: 2 })).toEqual({ start: at(SAT), end: at('2026-10-26') });
+  });
+});
+
+describe('the calendar’s “Other…”', () => {
+  it('a day shows its week', () => {
+    expect(readOther('Nov 3', WED)).toEqual({ kind: 'days', from: '2026-11-01', to: '2026-11-07' });
+  });
+  it('months, by name or next', () => {
+    expect(readOther('next month', WED)).toEqual({ kind: 'month', month: '2026-11-01' });
+    expect(readOther('december', WED)).toEqual({ kind: 'month', month: '2026-12-01' });
+    expect(readOther('march', WED)).toEqual({ kind: 'month', month: '2027-03-01' });
+  });
+  it('a range, or nothing it can read', () => {
+    expect(readOther('next weekend', WED)).toEqual({ kind: 'days', from: '2026-10-31', to: '2026-11-01' });
+    expect(readOther('whenever', WED)).toBeNull();
+  });
+});
+
+describe('more details', () => {
+  it('reads a start and an end', () => {
+    expect(parseClockRange('7-9pm')).toEqual({ start: '19:00', end: '21:00' });
+    expect(parseClockRange('11am – 1pm')).toEqual({ start: '11:00', end: '13:00' });
+    expect(parseClockRange('6:30 to 8')).toEqual({ start: '18:30', end: '20:00' });
+    expect(parseClockRange('7pm')).toEqual({ start: '19:00' });
+    expect(parseClockRange('9pm-7pm')).toBeNull();
+  });
+  it('labels a range', () => {
+    expect(whenLabel({ day: { kind: 'date', date: SAT }, time: { kind: 'exact', start: '19:00', end: '21:00' } })).toBe('Sat, Oct 24 · 7 – 9 PM');
+  });
+  it('all day is exact enough to lock in', () => {
+    const w = { day: { kind: 'date' as const, date: SAT }, time: { kind: 'allDay' as const } };
+    expect(isExact(w)).toBe(true);
+    expect(lockedSlot(w, defaultPrefs({}))).toEqual({ start: at(SAT), end: at('2026-10-25') });
+  });
+  it('a repeat comes through from the sentence', () => {
+    expect(parseIdeaText('family dinner every sunday at 6', { today: WED, people: [] }).repeat).toBe('weekly');
   });
 });

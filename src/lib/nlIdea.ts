@@ -8,6 +8,7 @@
 
 import { NLMember, parseEventText } from './nlEvent';
 import type { DayRange, TimePart } from './planWhen';
+import type { RepeatKey } from './recurrence';
 
 export interface ParsedIdea {
   title: string;
@@ -16,6 +17,7 @@ export interface ParsedIdea {
   end?: string;
   range?: DayRange;        // "this week", "next weekend" — a stretch to look in, not one day
   part?: TimePart;         // "dinner", "tonight", "morning" — part of the day, no exact time
+  repeat?: RepeatKey;      // "every Tuesday", "monthly"
   location?: string;
   personIds: string[];     // ids from `people` that matched
   people: string[];        // display names that matched
@@ -123,6 +125,7 @@ export function parseIdeaText(text: string, opts: { today: string; people: NLMem
     end: said ? ev.end : undefined,
     range,
     part,
+    repeat: ev.repeat,
     location: ev.location,
     personIds,
     people: names,

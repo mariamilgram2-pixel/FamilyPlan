@@ -4,13 +4,16 @@
 // to lock in. Find a Time takes whatever's loose and fills it.
 
 import { TimeSlot } from '../types';
-import { addDays, parseKey, relativeDay, shortDate } from '../screens/calendar/dates';
+import { addDays, dateKey, parseKey, relativeDay, shortDate } from '../screens/calendar/dates';
+import { parseIdeaText } from './nlIdea';
 import { PartOfDay, PlanPrefs, durationOf, spanOf } from './planner';
 
 export type DayRange = 'thisWeek' | 'thisWeekend' | 'nextWeek' | 'nextWeekend';
 export type DayChoice = { kind: 'any' } | { kind: 'range'; range: DayRange } | { kind: 'date'; date: string };
 export type TimePart = Exclude<PartOfDay, 'any'>;
-export type TimeChoice = { kind: 'any' } | { kind: 'part'; part: TimePart } | { kind: 'exact'; start: string; end?: string };
+export type TimeChoice =
+  | { kind: 'any' } | { kind: 'allDay' } | { kind: 'part'; part: TimePart }
+  | { kind: 'exact'; start: string; end?: string };   // end: a stated finish ("7–9pm"); else the usual length
 export interface When { day: DayChoice; time: TimeChoice }
 
 export const ANY_WHEN: When = { day: { kind: 'any' }, time: { kind: 'any' } };
@@ -70,8 +73,35 @@ export function dayLabel(day: DayChoice) {
 
 export function timeLabel(time: TimeChoice) {
   if (time.kind === 'any') return null;
+  if (time.kind === 'allDay') return 'all day';
   if (time.kind === 'part') return PART_LABEL[time.part].toLowerCase();
-  return clockLabel(time.start);
+  return time.end ? clockRangeLabel(time.start, time.end) : clockLabel(time.start);
+}
+
+/** "7 – 9 PM", "11 AM – 1 PM". */
+export function clockRangeLabel(start: string, end: string) {
+  const a = clockLabel(start), b = clockLabel(end);
+  return a.slice(-2) === b.slice(-2) ? `${a.slice(0, -3)} – ${b}` : `${a} – ${b}`;
+}
+
+/**
+ * "7pm", "7–9pm", "6:30 to 8", "11am-1pm" → start, and end when one's given.
+ * A bare start takes the end's am/pm ("7-9pm" is 7 to 9 in the evening).
+ */
+export function parseClockRange(text: string): { start: string; end?: string } | null {
+  const parts = text.trim().toLowerCase().split(/\s*(?:-|–|—|\bto\b|\buntil\b|\btill\b)\s*/).filter(Boolean);
+  if (parts.length === 1) { const start = parseClock(parts[0]); return start ? { start } : null; }
+  if (parts.length !== 2) return null;
+  const endMer = parts[1].match(/(am|pm|a|p)\.?$/)?.[1];
+  const startHasMer = /(am|pm|a|p)\.?$/.test(parts[0]);
+  const start = parseClock(startHasMer || !endMer ? parts[0] : `${parts[0]}${endMer}`);
+  let end = parseClock(parts[1]);
+  // "6:30 to 8": a bare end before the start is later the same day.
+  if (start && end && !endMer && end <= start && Number(end.slice(0, 2)) < 12) {
+    end = `${String(Number(end.slice(0, 2)) + 12).padStart(2, '0')}${end.slice(2)}`;
+  }
+  if (!start || !end || end <= start) return null;
+  return { start, end };
 }
 
 /** "This week · evening", "Fri, Oct 23 · 7 PM", "Any day · evening"; null when nothing's set. */
@@ -84,7 +114,7 @@ export function whenLabel(when: When, trip = false) {
 
 /** Known down to the minute (or, for several days, the first day): ready to lock in. */
 export const isExact = (when: When, trip = false) =>
-  when.day.kind === 'date' && (trip || when.time.kind === 'exact');
+  when.day.kind === 'date' && (trip || when.time.kind === 'exact' || when.time.kind === 'allDay');
 
 /** Find a Time preferences that keep what's known and search the rest. */
 export function prefsFor(when: When, base: PlanPrefs, today: string): PlanPrefs {
@@ -113,6 +143,7 @@ export function lockedSlot(when: When, prefs: PlanPrefs): TimeSlot | null {
   if (span > 1) {
     return { start: parseKey(day).toISOString(), end: parseKey(addDays(day, span)).toISOString() };
   }
+  if (when.time.kind === 'allDay') return { start: parseKey(day).toISOString(), end: parseKey(addDays(day, 1)).toISOString() };
   if (when.time.kind !== 'exact') return null;
   const start = new Date(`${day}T${when.time.start}:00`);
   const end = when.time.end && when.time.end > when.time.start
@@ -120,3 +151,31 @@ export function lockedSlot(when: When, prefs: PlanPrefs): TimeSlot | null {
     : new Date(start.getTime() + durationOf(prefs) * 60000);
   return { start: start.toISOString(), end: end.toISOString() };
 }
+
+// ─── The calendar in When ────────────────────────────────────────────────────
+
+/** What When's calendar shows: a run of days (whole weeks drawn), or a month (YYYY-MM-01). */
+export type CalendarView = { kind: 'days'; from: string; to: string } | { kind: 'month'; month: string };
+
+export const startOfWeek = (k: string) => addDays(k, -parseKey(k).getDay());
+const monthOf = (k: string) => `${k.slice(0, 7)}-01`;
+
+/** "Nov 3", "next month", "in 3 weeks", "december" → what to show. Null when it can't be read. */
+export function readOther(text: string, today: string): CalendarView | null {
+  const t = text.trim().toLowerCase();
+  if (!t) return null;
+  const m = t.match(/^(?:in\s+)?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*$/);
+  if (m) {
+    const idx = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'].indexOf(m[1]);
+    const now = parseKey(today);
+    const year = idx < now.getMonth() ? now.getFullYear() + 1 : now.getFullYear();
+    return { kind: 'month', month: dateKey(new Date(year, idx, 1)) };
+  }
+  if (/^next\s+month$/.test(t)) { const d = parseKey(today); return { kind: 'month', month: dateKey(new Date(d.getFullYear(), d.getMonth() + 1, 1)) }; }
+  if (/^this\s+month$/.test(t)) return { kind: 'month', month: monthOf(today) };
+  const p = parseIdeaText(text, { today, people: [] });
+  if (p.range) { const [from, to] = rangeDays(p.range, today); return { kind: 'days', from, to }; }
+  if (p.date) { const from = startOfWeek(p.date); return { kind: 'days', from, to: addDays(from, 6) }; }
+  return null;
+}
+
