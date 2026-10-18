@@ -177,7 +177,9 @@ interface FieldProps extends TextInputProps {
   mono?: boolean;
 }
 
-export function Field({ label, hint, mono, multiline, style, ...rest }: FieldProps) {
+export const Field = React.forwardRef<TextInput, FieldProps>(function Field(
+  { label, hint, mono, multiline, style, ...rest }, ref,
+) {
   const { c } = useTheme();
   const { compact } = useLayout();
   const [focused, setFocused] = useState(false);
@@ -185,6 +187,7 @@ export function Field({ label, hint, mono, multiline, style, ...rest }: FieldPro
     <View style={{ gap: space.s }}>
       {label ? <Txt v="footnote" tone="secondary" semibold style={{ paddingHorizontal: space.m }}>{label}</Txt> : null}
       <TextInput
+        ref={ref}
         placeholderTextColor={c.secondaryLabel}
         multiline={multiline}
         {...rest}
@@ -211,7 +214,7 @@ export function Field({ label, hint, mono, multiline, style, ...rest }: FieldPro
       {hint ? <Txt v="footnote" tone="secondary" style={{ paddingHorizontal: space.m }}>{hint}</Txt> : null}
     </View>
   );
-}
+});
 
 // ─── Segmented control ───────────────────────────────────────────────────────
 

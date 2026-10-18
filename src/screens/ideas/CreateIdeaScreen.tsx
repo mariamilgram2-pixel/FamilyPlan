@@ -19,7 +19,7 @@
 // lists show five at a time with an explicit "Show all" to keep each chunk
 // scannable.
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { notify } from '../../lib/alert';
 import { ActivityIndicator, Platform, Share, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
@@ -138,11 +138,16 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [saving, setSaving] = useState<'propose' | 'invite' | 'keep' | null>(null);
   const [loadingPeople, setLoadingPeople] = useState(false);
+  const describeInput = useRef<React.ElementRef<typeof Field>>(null);
 
   // Reset + refetch groups each time the sheet opens so we never render
   // against a stale/empty list from an earlier failed fetch.
   useEffect(() => {
-    if (!visible) return;
+    if (!visible) {
+      setDescribe('');
+      setParsed(null);
+      return;
+    }
     setDescribe(''); setParsed(null); setPickingDate(false);
     setShowAllPeople(false); setShowAllContacts(false);
     setSlots([]); setChosen(null); setSaving(null);
@@ -253,6 +258,22 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
     setSelectedContactIds(new Set(p.personIds.filter(id => id.startsWith('contact:')).map(id => id.slice(8))));
     setPrefs(defaultPrefs({ start: p.start, end: p.end, date: p.date }));
   }
+
+  // Home (and any other entry) can hand over a sentence already being typed.
+  // Parse it the same way a keystroke in this field would. If names load a
+  // moment later, parse again — unless the sentence was edited in the meantime.
+  const describeRef = useRef('');
+  describeRef.current = describe;
+  useEffect(() => {
+    if (!visible || existing) return;
+    const sentence = prefill?.sentence;
+    if (!sentence) return;
+    const current = describeRef.current;
+    if (current && current !== sentence) return;
+    onDescribe(sentence);
+    const focus = setTimeout(() => describeInput.current?.focus(), 50);
+    return () => clearTimeout(focus);
+  }, [visible, prefill?.sentence, nlPeople]);
 
   // ─── Who's involved ────────────────────────────────────────────────────────
   // App users we can notify and whose calendars we can check: picked people,
@@ -527,6 +548,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
       {step === 'compose' && (
         <>
           <DescribeField
+            inputRef={describeInput}
             value={describe}
             onChange={onDescribe}
             parsed={parsed}
