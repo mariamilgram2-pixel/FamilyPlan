@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { isAllDay, isMultiDay, spanLabel, spanLength } from '../../lib/span';
 import { notify } from '../../lib/alert';
 import { View } from 'react-native';
 import { supabase } from '../../lib/supabase';
@@ -8,7 +9,7 @@ import { Button, Field, Icon, IconName, ListRow, ListSection, Sheet, Tag, Tappab
 import { WorkDay, formatHours, useWorkSchedules, workConflict, workOn } from '../../lib/workSchedule';
 import { space, useTheme } from '../../theme';
 import CalendarGrid from './CalendarGrid';
-import { keyOf, longDate, relativeDay, shortDate, timeRange, todayKey } from './dates';
+import { addDays, keyOf, longDate, parseKey, relativeDay, shortDate, timeRange, todayKey } from './dates';
 import { ParsedEvent, parseEventText } from '../../lib/nlEvent';
 import { formatTime } from '../../lib/workSchedule';
 import { REPEAT_OPTIONS, RepeatKey, describeRecurrence, keyFor, ruleFor, untilLabel } from '../../lib/recurrence';
@@ -72,8 +73,9 @@ export function EventDetail({ event, attendees, meId, group, onOpenGroup, onClai
   const reply = replyOf(event, meId);
   const cancelled = !!event.cancelled_at;
   const open = repliesOpen(event);   // replies close when it starts
-  const minutes = Math.round((new Date(event.end_time).getTime() - new Date(event.start_time).getTime()) / 60000);
-  const duration = minutes >= 60 ? `${Math.floor(minutes / 60)} hr${minutes % 60 ? ` ${minutes % 60} min` : ''}` : `${minutes} min`;
+  const duration = spanLength(event.start_time, event.end_time);
+  const multiDay = isMultiDay(event.start_time, event.end_time);
+  const allDay = isAllDay(event.start_time, event.end_time);
   const creator = attendees.find(a => a.id === event.created_by) ?? event.profiles;
   const conflict = workConflict(useWorkSchedules(), event.start_time, event.end_time);
   const byStatus = repliesByStatus(event);
@@ -92,7 +94,7 @@ export function EventDetail({ event, attendees, meId, group, onOpenGroup, onClai
       <View style={{ gap: space.s }}>
         {group ? <GroupBadge group={group} onPress={onOpenGroup} /> : null}
         <Txt v="title" accessibilityRole="header" style={cancelled ? { textDecorationLine: 'line-through' } : undefined}>{event.title}</Txt>
-        <Txt v="callout" tone="secondary">{longDate(keyOf(event.start_time))}</Txt>
+        <Txt v="callout" tone="secondary">{multiDay ? spanLabel(event.start_time, event.end_time) : longDate(keyOf(event.start_time))}</Txt>
         {cancelled ? <View style={{ flexDirection: 'row' }}><Tag label="Cancelled" /></View>
           : organizer ? <View style={{ flexDirection: 'row' }}><Tag label="You’re organizing" tone="tint" /></View>
           : reply && reply !== 'pending' ? <View style={{ flexDirection: 'row' }}><Tag label={reply === 'going' ? 'You’re going' : RSVP_LABEL[reply]} tone={reply === 'going' ? 'tint' : 'secondary'} /></View>
@@ -111,7 +113,11 @@ export function EventDetail({ event, attendees, meId, group, onOpenGroup, onClai
       ) : null}
 
       <ListSection separatorInset={60}>
-        <ListRow icon="time-outline" title={timeRange(event.start_time, event.end_time)} subtitle={duration} />
+        <ListRow
+          icon="time-outline"
+          title={allDay ? (multiDay ? 'All day, every day' : 'All day') : multiDay ? spanLabel(event.start_time, event.end_time) : timeRange(event.start_time, event.end_time)}
+          subtitle={duration}
+        />
         {event.recurrence ? (
           <ListRow icon="repeat" title={describeRecurrence({ ...event.recurrence, until: null }, event.start_time)} subtitle={untilLabel(event.recurrence)} />
         ) : null}
@@ -354,6 +360,10 @@ export function EventComposer({ visible, onClose, onSaved, initialDate, group, m
   const [title, setTitle] = useState('');
   const [date, setDate] = useState(initialDate);
   const [pickingDate, setPickingDate] = useState(false);
+  // Several days in a row: the last day (inclusive), and whether times matter.
+  const [endDate, setEndDate] = useState(initialDate);
+  const [pickingEnd, setPickingEnd] = useState(false);
+  const [allDay, setAllDay] = useState(false);
   const [startTime, setStartTime] = useState('09:00');
   const [endTime, setEndTime] = useState('10:00');
   const [location, setLocation] = useState('');
@@ -373,9 +383,12 @@ export function EventComposer({ visible, onClose, onSaved, initialDate, group, m
   // Fresh form each time the sheet opens, or the event being edited.
   useEffect(() => {
     if (!visible) return;
-    setPickingDate(false); setDescribe(''); setParsed(null); setPicking(null);
+    setPickingDate(false); setPickingEnd(false); setDescribe(''); setParsed(null); setPicking(null);
     if (editing) {
+      const whole = isAllDay(editing.start_time, editing.end_time);
       setTitle(editing.title); setDate(keyOf(editing.start_time));
+      setAllDay(whole);
+      setEndDate(keyOf(whole ? new Date(Date.parse(editing.end_time) - 1).toISOString() : editing.end_time));
       setStartTime(hhmm(editing.start_time)); setEndTime(hhmm(editing.end_time));
       setLocation(editing.location ?? ''); setNotes(editing.description ?? '');
       setInvited((editing.attendees ?? []).filter(id => id !== meId));
@@ -386,6 +399,7 @@ export function EventComposer({ visible, onClose, onSaved, initialDate, group, m
       return;
     }
     setTitle(prefill?.title ?? ''); setDate(prefill?.date ?? initialDate);
+    setEndDate(prefill?.date ?? initialDate); setAllDay(false);
     setStartTime(prefill?.start ?? '18:00'); setEndTime(prefill?.end ?? (prefill?.start ? addHour(prefill.start, 2) : '20:00'));
     setLocation(prefill?.location ?? ''); setNotes(prefill?.notes ?? '');
     setInvited((prefill?.people ?? []).filter(id => id !== meId)); setInvitedGroups([]); setAssignments([]);
@@ -403,6 +417,7 @@ export function EventComposer({ visible, onClose, onSaved, initialDate, group, m
     setParsed(p);
     setTitle(p.title);
     setDate(p.date ?? initialDate);
+    setEndDate(p.date ?? initialDate);
     setStartTime(p.start ?? '18:00');
     setEndTime(p.end ?? (p.start ? addHour(p.start, 2) : '20:00'));
     setLocation(p.location ?? '');
@@ -421,12 +436,30 @@ export function EventComposer({ visible, onClose, onSaved, initialDate, group, m
     ...attendeeIds.map(id => circle.people.find(p => p.profile.id === id)?.profile ?? members.find(m => m.id === id)).filter(Boolean) as AvatarPerson[],
   ];
 
+  /** Moving the first day keeps the plan the same number of days long. */
+  function pickStart(k: string) {
+    const length = Math.round((parseKey(endDate).getTime() - parseKey(date).getTime()) / 86400000);
+    setDate(k);
+    setEndDate(addDays(k, Math.max(0, length)));
+  }
+
+  /** Start and end as ISO, or null while a time is unreadable. All-day: midnight to midnight after the last day. */
+  function span(): [string, string] | null {
+    if (allDay) return [new Date(`${date}T00:00:00`).toISOString(), new Date(`${addDays(endDate, 1)}T00:00:00`).toISOString()];
+    if (!TIME_RE.test(startTime) || !TIME_RE.test(endTime)) return null;
+    return [
+      new Date(`${date}T${startTime.padStart(5, '0')}:00`).toISOString(),
+      new Date(`${endDate}T${endTime.padStart(5, '0')}:00`).toISOString(),
+    ];
+  }
+
   async function save() {
     if (!title.trim()) return;
     if (!group || !meId) return notify('Not signed in', 'Sign in to save events.');
-    if (!TIME_RE.test(startTime) || !TIME_RE.test(endTime)) return notify('Check the time', 'Use 24-hour times like 09:00 or 18:30.');
-    const startIso = new Date(`${date}T${startTime.padStart(5, '0')}:00`).toISOString();
-    const endIso = new Date(`${date}T${endTime.padStart(5, '0')}:00`).toISOString();
+    const times = span();
+    if (!times) return notify('Check the time', 'Use 24-hour times like 09:00 or 18:30.');
+    const [startIso, endIso] = times;
+    if (endDate < date) return notify('Check the days', 'The last day can’t be before the first.');
     if (new Date(endIso) <= new Date(startIso)) return notify('Check the time', 'End time must be after the start time.');
     if (repeat !== 'never' && repeatUntil && repeatUntil < date) return notify('Check the repeat', 'The repeat has to end on or after the first day.');
     // A new time asks everyone again; other edits keep their replies.
@@ -460,7 +493,9 @@ export function EventComposer({ visible, onClose, onSaved, initialDate, group, m
     const before = new Set(editing?.attendees ?? []);
     const added = attendeeIds.filter(id => !before.has(id));
     const kept = attendeeIds.filter(id => before.has(id));
-    const when = `${shortDate(date)} · ${timeRange(startIso, endIso)}`;
+    const when = isMultiDay(startIso, endIso) ? spanLabel(startIso, endIso)
+      : allDay ? `${shortDate(date)} · All day`
+      : `${shortDate(date)} · ${timeRange(startIso, endIso)}`;
     const changes = editing ? [
       timeChanged ? 'new time' : null,
       (editing.location ?? '') !== (row.location ?? '') ? 'new place' : null,
@@ -516,27 +551,51 @@ export function EventComposer({ visible, onClose, onSaved, initialDate, group, m
         <ListRow
           icon="calendar-outline"
           title={longDate(date)}
+          subtitle={endDate > date ? 'First day' : null}
           value={pickingDate ? 'Done' : 'Change'}
-          onPress={() => setPickingDate(p => !p)}
+          onPress={() => { setPickingDate(p => !p); setPickingEnd(false); }}
         />
         {pickingDate ? (
           <CalendarGrid
             selected={date}
-            onSelect={(k) => { setDate(k); setPickingDate(false); }}
+            onSelect={(k) => { pickStart(k); setPickingDate(false); }}
             marked={new Set()}
             expanded
           />
         ) : null}
+        <ListRow
+          icon="arrow-forward-circle-outline"
+          title={endDate > date ? longDate(endDate) : 'Same day'}
+          subtitle={endDate > date ? `Last day · ${Math.round((parseKey(endDate).getTime() - parseKey(date).getTime()) / 86400000) + 1} days` : 'Runs several days? Pick the last day'}
+          value={pickingEnd ? 'Done' : 'Change'}
+          onPress={() => { setPickingEnd(p => !p); setPickingDate(false); }}
+        />
+        {pickingEnd ? (
+          <>
+            {endDate > date ? (
+              <ListRow title="Same day" onPress={() => { setEndDate(date); setPickingEnd(false); }} style={{ paddingLeft: space.m + 28 + space.m }} />
+            ) : null}
+            <CalendarGrid
+              selected={endDate}
+              onSelect={(k) => { if (k < date) return notify('Pick a later day', 'The last day can’t be before the first.'); setEndDate(k); setPickingEnd(false); }}
+              marked={new Set()}
+              expanded
+            />
+          </>
+        ) : null}
+        <ListRow icon="sunny-outline" title="All day" trailing={<Toggle label="All day" value={allDay} onValueChange={setAllDay} />} />
       </ListSection>
 
-      <View style={{ flexDirection: 'row', gap: space.m }}>
-        <View style={{ flex: 1 }}>
-          <Field label="Starts" value={startTime} onChangeText={setStartTime} placeholder="09:00" keyboardType="numbers-and-punctuation" />
+      {allDay ? null : (
+        <View style={{ flexDirection: 'row', gap: space.m }}>
+          <View style={{ flex: 1 }}>
+            <Field label={endDate > date ? `Starts ${shortDate(date).split(',')[0]}` : 'Starts'} value={startTime} onChangeText={setStartTime} placeholder="09:00" keyboardType="numbers-and-punctuation" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Field label={endDate > date ? `Ends ${shortDate(endDate).split(',')[0]}` : 'Ends'} value={endTime} onChangeText={setEndTime} placeholder="10:00" keyboardType="numbers-and-punctuation" />
+          </View>
         </View>
-        <View style={{ flex: 1 }}>
-          <Field label="Ends" value={endTime} onChangeText={setEndTime} placeholder="10:00" keyboardType="numbers-and-punctuation" />
-        </View>
-      </View>
+      )}
 
       <ListSection>
         <ListRow
@@ -595,11 +654,7 @@ export function EventComposer({ visible, onClose, onSaved, initialDate, group, m
         </ListSection>
       ) : null}
 
-      <WorkHint
-        date={date}
-        startIso={TIME_RE.test(startTime) ? new Date(`${date}T${startTime.padStart(5, '0')}:00`).toISOString() : null}
-        endIso={TIME_RE.test(endTime) ? new Date(`${date}T${endTime.padStart(5, '0')}:00`).toISOString() : null}
-      />
+      <WorkHint date={date} startIso={span()?.[0] ?? null} endIso={span()?.[1] ?? null} />
 
       <Field label="Location" value={location} onChangeText={setLocation} placeholder="Optional" />
 

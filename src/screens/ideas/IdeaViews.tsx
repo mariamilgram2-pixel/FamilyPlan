@@ -4,7 +4,7 @@ import { AppNotification, Idea, TimeSlot } from '../../types';
 import Avatar, { AvatarPerson } from '../../components/Avatar';
 import { Button, Icon, ListRow, ListSection, Tag, Tappable, Txt } from '../../components/ui';
 import { continuous, radius, space, tabularNums, useTheme } from '../../theme';
-import { slotDay, slotLabel, slotTime } from '../../lib/planner';
+import { slotDay, slotLabel, slotTime, slotTitle } from '../../lib/planner';
 import { awaitedVoters, bestSlot, tallySlots } from '../../lib/rsvp';
 import { estimateLabel, fitKnown, votesLabel } from '../../lib/availability';
 import { STAGE_LABEL, awaitingYourDates, readyToSend, stageOf } from '../../lib/plans';
@@ -294,7 +294,7 @@ function DateVotes({ idea, options, meId, personOf, onSlotVotes, onPickSlot }: {
             <ListRow
               key={slot.start}
               leading={<Icon name={checked ? 'checkmark-circle' : 'ellipse-outline'} size={24} color={checked ? c.tint : c.secondaryLabel} />}
-              title={shortDate(slotDay(slot))}
+              title={slotTitle(slot)}
               subtitle={`${slotTime(slot)} · ${votesLabel(yes.length)}${top && yes.length > 1 ? ' · best so far' : ''}`}
               detail={fitKnown(slot.fit) ? `Calendar fit: ${estimateLabel(slot.fit!)}` : null}
               trailing={yes.length ? <AvatarStack people={yes.map(personOf)} max={3} size={24} ringColor={c.fill} /> : undefined}

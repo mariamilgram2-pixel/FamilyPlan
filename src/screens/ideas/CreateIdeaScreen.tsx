@@ -28,13 +28,13 @@ import { addDemoEvent, DEMO_CONTACTS, DEMO_EVENTS, DEMO_MEMBERS, DEMO_ME, isDemo
 import { parseIdeaText, ParsedIdea } from '../../lib/nlIdea';
 import {
   DURATION_LABEL, DayKind, Horizon, PartOfDay, PlanPrefs,
-  candidateSlots, defaultPrefs, searchRange, slotDay, slotLabel, slotTime,
+  MAX_SPAN_DAYS, candidateSlots, defaultPrefs, laterMonths, parseSpan, searchRange, slotDay, slotLabel, slotTime, slotTitle, spanHint, spanOf,
 } from '../../lib/planner';
 import { Candidate, MIN_OPTIONS, Scored, SheepPlan, rankSuggestions, scoreLocally, sheepContext } from '../../lib/suggest';
 import { estimateLabel, fitKnown, fromRow } from '../../lib/availability';
 import { useMyPrefs } from '../../lib/availabilityPrefs';
 import { sendNotifications } from '../../lib/notifications';
-import { useWorkSchedules } from '../../lib/workSchedule';
+import { useWorkSchedules, workConflict } from '../../lib/workSchedule';
 import { expandEvents } from '../../lib/recurrence';
 import { blocksTime } from '../../lib/rsvp';
 import { AppNotificationInsert, Contact, Event, Idea, Profile, TimeSlot } from '../../types';
@@ -43,7 +43,7 @@ import { useGroup } from '../../contexts/GroupContext';
 import { useAuth } from '../../contexts/AuthContext';
 import Avatar from '../../components/Avatar';
 import {
-  Button, Field, Icon, ListRow, ListSection, SectionHeader, Segmented, Sheet, Toggle, Txt,
+  Button, Field, Icon, ListRow, ListSection, Menu, SectionHeader, Segmented, Sheet, Toggle, Txt,
 } from '../../components/ui';
 import { space, useTheme } from '../../theme';
 import CalendarGrid from '../calendar/CalendarGrid';
@@ -83,7 +83,14 @@ const DAY_OPTIONS: { key: DayKind; label: string }[] = [
   { key: 'weekdays', label: 'Weekdays' },
   { key: 'weekends', label: 'Weekends' },
 ];
-const DURATION_OPTIONS = (['60', '120', '180', '240'] as const).map(k => ({ key: k, label: DURATION_LABEL(Number(k)) }));
+// Within a day the length is optional: it matters for a recital, not for dinner.
+const HOUR_OPTIONS: { value: number | null; label: string }[] = [
+  { value: null, label: 'Doesn’t matter' },
+  ...[60, 120, 180, 240].map(m => ({ value: m, label: DURATION_LABEL(m) })),
+];
+// A trip over your work days still shows (you can take time off), after ones that don't.
+const WORK_PENALTY = 2;
+const LENGTH_KIND: { key: 'one' | 'several'; label: string }[] = [{ key: 'one', label: '1 day' }, { key: 'several', label: 'Several days' }];
 
 interface Props {
   visible: boolean;
@@ -130,6 +137,15 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
   const [showAllContacts, setShowAllContacts] = useState(false);
 
   const [prefs, setPrefs] = useState<PlanPrefs>(defaultPrefs({}));
+  const [spanText, setSpanText] = useState('');   // "3", "10 days", "2 weeks"
+  const [myPlans, setMyPlans] = useState<SheepPlan[]>([]);   // your own plans in range, to flag overlaps
+  const multi = spanOf(prefs) > 1;
+  // Several days start at midnight, so a trip can't start on a day already under way.
+  const startDay = date && !(multi && date <= todayKey()) ? date : null;
+  useEffect(() => { if (prefs.onlyDate && !startDay) setPrefs(p => ({ ...p, onlyDate: null })); }, [prefs.onlyDate, startDay]);
+  const spanTyped = parseSpan(spanText);
+  // Coming to preferences: show the number of days already chosen (e.g. from "two nights").
+  useEffect(() => { if (step === 'prefs') setSpanText(multi ? `${spanOf(prefs)} days` : ''); }, [step]);
   const [slots, setSlots] = useState<TimeSlot[]>([]);
   const [chosen, setChosen] = useState<number | null>(null);
   const [searching, setSearching] = useState(false);
@@ -153,7 +169,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
       setSelectedUserIds(new Set(existing.audience_user_ids ?? []));
       setSelectedContactIds(new Set(existing.audience_contact_ids ?? []));
       const hint = parseIdeaText(existing.title, { today: todayKey(), people: [] });
-      setPrefs(defaultPrefs({ start: hint.start, end: hint.end, date: existing.target_date }));
+      setPrefs({ ...defaultPrefs({ start: hint.start, end: hint.end, date: existing.target_date }), ...spanHint(`${existing.title} ${existing.description ?? ''}`) });
       setStep(entry!.step);
       if (entry!.step === 'options') {
         const proposed = (existing.proposed_slots ?? []).filter(s => new Date(s.start).getTime() > Date.now());
@@ -365,6 +381,9 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
 
   function startPlan() {
     if (!ready()) return;
+    // "Camping weekend", "two nights": start from several days.
+    const span = spanHint(`${title} ${description}`);
+    if (span && spanOf(prefs) === 1) setPrefs(p => ({ ...p, ...span }));
     setStep('prefs');
   }
 
@@ -421,13 +440,18 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
     const everyone = [meId!, ...participantIds];
     const plans = await loadPlans(everyone);
     const hint = parsed ?? parseIdeaText(title, { today: todayKey(), people: [] });
-    // Your own plans and work hours rule a time out; everyone else's only rank it lower.
+    // Within a day, your own plans and work hours rule a time out; everyone
+    // else's only rank it lower. A trip of several days will cross things, so
+    // there your plans and work days only rank it lower too, and the option says so.
     const mine = plans.filter(p => p.who === meId);
+    setMyPlans(mine);
     const cands = candidateSlots({
       prefs, work, preferredStart: hint.start, timeZone, perDay: 4,
-      skip: (s, e) => mine.some(p => s < p.end && e > p.start),
+      skip: multi ? undefined : (s, e) => mine.some(p => s < p.end && e > p.start),
     });
-    const ranked = rankSuggestions(await score(cands, everyone, plans), { soon: prefs.horizon === 'soon' });
+    const scored = (await score(cands, everyone, plans))
+      .map(c => (multi && workConflict(work, c.slot.start, c.slot.end) ? { ...c, penalty: c.penalty + WORK_PENALTY } : c));
+    const ranked = rankSuggestions(scored, { soon: prefs.horizon === 'soon' });
     const found = ranked.map(r => ({ start: r.slot.start, end: r.slot.end, fit: r.fit }));
     setSlots(found);
     setChosen(found.length ? 0 : null);
@@ -669,17 +693,62 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
             </Txt>
           </View>
 
-          <View>
-            <SectionHeader title="Time of day" />
-            <Segmented options={PART_OPTIONS} value={prefs.partOfDay} onChange={k => setPrefs(p => ({ ...p, partOfDay: k }))} />
+          <View style={{ gap: space.s }}>
+            <SectionHeader title="Duration" />
+            <Segmented
+              options={LENGTH_KIND}
+              value={multi ? 'several' : 'one'}
+              onChange={k => {
+                const days = k === 'several' ? spanTyped ?? 3 : 1;
+                setPrefs(p => ({ ...p, spanDays: days }));
+                if (k === 'several' && !spanTyped) setSpanText('3 days');
+              }}
+            />
+            {multi ? (
+              <Field
+                label="How many days"
+                value={spanText}
+                onChangeText={t => { setSpanText(t); const n = parseSpan(t); if (n) setPrefs(p => ({ ...p, spanDays: n })); }}
+                placeholder="3 days, 10 days, 2 weeks"
+                accessibilityLabel="How many days"
+                hint={spanText && !spanTyped ? `Use a number of days from 2 to ${MAX_SPAN_DAYS}, like 10 or 2 weeks.` : 'A weekend, a week away, two weeks — type it in.'}
+              />
+            ) : (
+              <ListSection footer="Optional. It matters for something like a recital, not for dinner.">
+                <Menu
+                  title="How long"
+                  sections={[{ items: HOUR_OPTIONS.map(o => ({
+                    key: String(o.value), label: o.label, checked: o.value === prefs.duration,
+                    onSelect: () => setPrefs(p => ({ ...p, duration: o.value })),
+                  })) }]}
+                >
+                  {open => (
+                    <ListRow
+                      icon="time-outline"
+                      title="Hours"
+                      value={HOUR_OPTIONS.find(o => o.value === prefs.duration)?.label ?? DURATION_LABEL(prefs.duration!)}
+                      chevron
+                      onPress={open}
+                    />
+                  )}
+                </Menu>
+              </ListSection>
+            )}
           </View>
 
-          {date ? (
+          {!multi ? (
+            <View>
+              <SectionHeader title="Time of day" />
+              <Segmented options={PART_OPTIONS} value={prefs.partOfDay} onChange={k => setPrefs(p => ({ ...p, partOfDay: k }))} />
+            </View>
+          ) : null}
+
+          {startDay ? (
             <ListSection footer={prefs.onlyDate ? 'Turn off to look at other days too.' : undefined}>
               <ListRow
                 icon="calendar-outline"
-                title={`Only ${shortDate(date)}`}
-                trailing={<Toggle label={`Only ${shortDate(date)}`} value={!!prefs.onlyDate} onValueChange={v => setPrefs(p => ({ ...p, onlyDate: v ? date : null }))} />}
+                title={spanOf(prefs) > 1 ? `Starting ${shortDate(startDay)}` : `Only ${shortDate(startDay)}`}
+                trailing={<Toggle label={spanOf(prefs) > 1 ? `Starting ${shortDate(startDay)}` : `Only ${shortDate(startDay)}`} value={!!prefs.onlyDate} onValueChange={v => setPrefs(p => ({ ...p, onlyDate: v ? startDay : null }))} />}
               />
             </ListSection>
           ) : null}
@@ -689,26 +758,44 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
               <View>
                 <SectionHeader title="How soon" />
                 <Segmented options={HORIZON_OPTIONS} value={prefs.horizon} onChange={k => setPrefs(p => ({ ...p, horizon: k }))} />
+                {prefs.horizon === 'later' ? (
+                  <ListSection>
+                    <Menu
+                      title="When"
+                      sections={[
+                        { items: [{ key: 'weeks', label: 'In a few weeks', checked: !prefs.month, onSelect: () => setPrefs(p => ({ ...p, month: null })) }] },
+                        { title: 'A month', items: laterMonths().map(m => ({
+                          key: m.key, label: m.label, checked: prefs.month === m.key,
+                          onSelect: () => setPrefs(p => ({ ...p, month: m.key })),
+                        })) },
+                      ]}
+                    >
+                      {open => (
+                        <ListRow
+                          icon="calendar-outline"
+                          title="When"
+                          value={laterMonths().find(m => m.key === prefs.month)?.label ?? 'In a few weeks'}
+                          chevron
+                          onPress={open}
+                        />
+                      )}
+                    </Menu>
+                  </ListSection>
+                ) : null}
               </View>
               <View>
                 <SectionHeader title="Days" />
                 <Segmented options={DAY_OPTIONS} value={prefs.days} onChange={k => setPrefs(p => ({ ...p, days: k }))} />
+                {spanOf(prefs) > 1 && prefs.days === 'weekends' ? (
+                  <Txt v="footnote" tone="secondary" style={{ paddingHorizontal: space.m, paddingTop: space.s }}>Each option takes in a whole Saturday and Sunday.</Txt>
+                ) : null}
               </View>
             </>
           )}
 
-          <View>
-            <SectionHeader title="How long" />
-            <Segmented
-              options={DURATION_OPTIONS}
-              value={String(prefs.duration) as typeof DURATION_OPTIONS[number]['key']}
-              onChange={k => setPrefs(p => ({ ...p, duration: Number(k) }))}
-            />
-          </View>
-
           <View style={{ flexDirection: 'row', gap: space.s }}>
             {!existing && <Button label="Back" variant="gray" onPress={() => setStep('compose')} style={{ flex: 1 }} />}
-            <Button label="Find Times" icon="search" onPress={handleFindTimes} loading={searching} style={{ flex: 2 }} />
+            <Button label="Find Times" icon="search" onPress={handleFindTimes} loading={searching} disabled={multi && !spanTyped} style={{ flex: 2 }} />
           </View>
         </>
       )}
@@ -726,7 +813,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
             </Txt>
             {slots.length > 0 && slots.length < MIN_OPTIONS ? (
               <Txt v="footnote" tone="secondary">
-                Only {slots.length} {slots.length === 1 ? 'time fits' : 'times fit'} in that range. For more, try another time of day, more days, or a later range.
+                Only {slots.length} {slots.length === 1 ? 'time fits' : 'times fit'} in that range. For more, {spanOf(prefs) > 1 ? 'try fewer days in a row, other days, or a later range.' : 'try another time of day, more days, or a later range.'}
               </Txt>
             ) : null}
           </View>
@@ -736,13 +823,18 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
               {slots.map((s, i) => {
                 const rel = relativeDay(slotDay(s));
                 const fit = participantIds.length && fitKnown(s.fit) ? estimateLabel(s.fit!) : '';
+                const overlapsMine = myPlans.some(p => p.start < Date.parse(s.end) && p.end > Date.parse(s.start));
+                const crossesWork = spanOf(prefs) > 1 && !!workConflict(work, s.start, s.end);
                 return (
                   <ListRow
                     key={s.start}
                     icon="calendar-outline"
-                    title={rel ? `${rel} · ${shortDate(slotDay(s))}` : shortDate(slotDay(s))}
+                    title={spanOf(prefs) > 1 ? slotTitle(s) : rel ? `${rel} · ${shortDate(slotDay(s))}` : shortDate(slotDay(s))}
                     subtitle={slotTime(s)}
-                    detail={fit ? `Calendar fit: ${fit}` : null}
+                    detail={overlapsMine && crossesWork ? 'Overlaps some of your plans and work days'
+                      : overlapsMine ? 'Overlaps some of your plans'
+                      : crossesWork ? 'Takes in some of your work days'
+                      : fit ? `Calendar fit: ${fit}` : null}
                     checked={chosen === i}
                     onPress={() => setChosen(i)}
                   />
@@ -751,7 +843,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
             </ListSection>
           ) : (
             <Txt v="callout" tone="secondary" style={{ paddingHorizontal: space.m }}>
-              Try a different time of day, more days, or a later range.
+              {spanOf(prefs) > 1 ? 'Try fewer days in a row, other days, or a later range.' : 'Try a different time of day, more days, or a later range.'}
             </Txt>
           )}
 

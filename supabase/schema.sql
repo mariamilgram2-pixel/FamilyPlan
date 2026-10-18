@@ -633,9 +633,14 @@ BEGIN
   ),
   pairs AS (
     SELECT sl.*, p.*,
-      EXTRACT(ISODOW FROM sl.s_start AT TIME ZONE p.tz) IN (6, 7) AS weekend
+      -- Any of its days a Saturday or Sunday (a trip can start on a Friday).
+      EXISTS (
+        SELECT 1 FROM generate_series((sl.s_start AT TIME ZONE p.tz)::date::timestamp,
+                                      ((sl.s_end - INTERVAL '1 microsecond') AT TIME ZONE p.tz)::date::timestamp,
+                                      INTERVAL '1 day') AS d(day)
+        WHERE EXTRACT(ISODOW FROM d.day) IN (6, 7)) AS weekend
     FROM slots sl CROSS JOIN people p
-    WHERE sl.s_end > sl.s_start AND sl.s_end - sl.s_start <= INTERVAL '2 days'
+    WHERE sl.s_end > sl.s_start AND sl.s_end - sl.s_start <= INTERVAL '31 days'
   ),
   verdicts AS (
     SELECT pa.s_start, pa.s_end,
