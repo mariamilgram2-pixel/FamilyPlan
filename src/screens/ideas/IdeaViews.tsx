@@ -12,6 +12,7 @@ import AvatarStack from '../../components/AvatarStack';
 import { shortDate } from '../calendar/dates';
 
 export const STATUS_LABEL: Record<Idea['status'], string> = {
+  draft: 'Draft',
   proposed: 'Proposed',
   planned: 'Planned',
   done: 'Done',
@@ -86,7 +87,8 @@ export function IdeaRow({ idea, voted, meId, audienceSummary, selected, onVote, 
 
   // One line that says where it stands, then who it's for.
   const where =
-    ready ? 'Everyone answered — send the invite'
+    idea.status === 'draft' ? 'Draft · only you can see it'
+    : ready ? 'Everyone answered — send the invite'
     : needsYou ? 'Say which dates work for you'
     : stage === 'dates' ? `${options} date option${options === 1 ? '' : 's'} · ${answered} of ${voters} answered`
     : booked ? `${stage === 'happened' ? '' : 'On '}${slotLabel(booked)}`
@@ -95,10 +97,15 @@ export function IdeaRow({ idea, voted, meId, audienceSummary, selected, onVote, 
   const meta = [where, audienceSummary ? `For ${audienceSummary}` : null, idea.profiles?.full_name ? `by ${idea.profiles.full_name.split(' ')[0]}` : null]
     .filter(Boolean).join(' · ');
   const strong = needsYou || ready;
+  const draft = idea.status === 'draft';
 
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.s, paddingLeft: space.m }}>
-      {stage === 'idea' || stage === 'dates' ? (
+      {draft ? (
+        <View style={{ width: 48, height: 56, alignItems: 'center', justifyContent: 'center' }}>
+          <Icon name="create-outline" size={22} color={c.secondaryLabel} />
+        </View>
+      ) : stage === 'idea' || stage === 'dates' ? (
         <VoteButton count={idea.votes} voted={voted} onPress={onVote} />
       ) : (
         <View style={{ width: 48, height: 56, alignItems: 'center', justifyContent: 'center' }}>

@@ -33,6 +33,7 @@ export type Database = {
       idea_votes: Table<IdeaVote, IdeaVoteInsert,
         [ForeignKey<'idea_votes_idea_id_fkey', 'idea_id', 'ideas'>]>;
       contacts: Table<Contact, ContactInsert>;
+      saved_places: Table<SavedPlace, SavedPlaceInsert>;
       notifications: Table<AppNotification, AppNotificationInsert>;
       plan_comments: Table<PlanComment, PlanCommentInsert>;
       categories: Table<Category, CategoryInsert>;
@@ -146,7 +147,7 @@ export interface Idea {
   title: string;
   description: string | null;
   votes: number;
-  status: 'proposed' | 'planned' | 'done';
+  status: 'draft' | 'proposed' | 'planned' | 'done';   // draft: only its creator sees it
   audience_group_ids: string[];
   audience_user_ids: string[];
   audience_contact_ids: string[];
@@ -178,6 +179,17 @@ export interface Contact {
 }
 
 export type ContactInsert = Omit<Contact, 'id' | 'created_at'>;
+
+/** Your own name for a place you plan at often. `place` is "Name, address", like an event's location. */
+export interface SavedPlace {
+  id: string;
+  owner_id: string;
+  label: string;
+  place: string;
+  created_at: string;
+}
+
+export type SavedPlaceInsert = Omit<SavedPlace, 'id' | 'created_at'>;
 
 export interface PlanComment {
   id: string;

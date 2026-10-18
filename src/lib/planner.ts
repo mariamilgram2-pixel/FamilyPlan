@@ -27,6 +27,7 @@ export interface PlanPrefs {
   duration: number | null;     // minutes, for a plan within one day; null = doesn't matter
   spanDays?: number;           // several days in a row (2+); 1 or unset = within one day
   month?: string | null;       // YYYY-MM — with 'later', look in this month (else 2–6 weeks out)
+  range?: [string, string] | null;   // first and last day (YYYY-MM-DD, inclusive) — "this week", "next weekend"
   onlyDate: string | null;     // YYYY-MM-DD — look on this day only (the first day, for several)
 }
 
@@ -60,9 +61,14 @@ export function laterMonths(today = todayKey()) {
   });
 }
 
-/** First days to search, in order: one day, a chosen month, or the horizon. */
+/** First days to search, in order: one day, a range of days, a chosen month, or the horizon. */
 function searchDays(prefs: PlanPrefs, today: string): string[] {
   if (prefs.onlyDate) return [prefs.onlyDate];
+  if (prefs.range) {
+    const out: string[] = [];
+    for (let k = prefs.range[0] > today ? prefs.range[0] : today; k <= prefs.range[1]; k = addDays(k, 1)) out.push(k);
+    return out;
+  }
   if (prefs.horizon === 'later' && prefs.month) {
     const out: string[] = [];
     for (let k = `${prefs.month}-01`; k.startsWith(prefs.month); k = addDays(k, 1)) if (k >= today) out.push(k);
