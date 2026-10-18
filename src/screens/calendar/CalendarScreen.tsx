@@ -35,7 +35,8 @@ import {
 } from '../../components/ui';
 import { space, tabularNums, useLayout, useTheme } from '../../theme';
 import CalendarGrid from './CalendarGrid';
-import { DayTimeline, EventChip, Maybe, MineChip, PeriodBar, Row, WeekRows, isMaybe } from './CalendarViews';
+import { DayTimeline, EventChip, Maybe, MineChip, PeriodBar, Row, WeekRows, isMaybe, rowEnd } from './CalendarViews';
+import { daysCovered, fillsDay, isMultiDay, spanLabel, whenOnDay } from '../../lib/span';
 import { calendarEvents } from './calendarFilter';
 import { EventComposer, EventDetail, WorkLine } from './EventViews';
 import { usePlanComposer } from '../../components/PlanComposer';
@@ -383,7 +384,8 @@ export default function CalendarScreen() {
     [events, scope, viewGroup, meId, showMine],
   );
 
-  const marked = useMemo(() => new Set(shown.filter(e => !e.cancelled_at).map(e => keyOf(e.start_time))), [shown]);
+  // A plan running several days marks each of them.
+  const marked = useMemo(() => new Set(shown.filter(e => !e.cancelled_at).flatMap(e => daysCovered(e.start_time, e.end_time))), [shown]);
 
   // Invites still waiting on you (a repeating one counts once), soonest first.
   const awaiting = useMemo(() => {
@@ -414,15 +416,19 @@ export default function CalendarScreen() {
   const ideaKey = (i: Idea) => `idea:${i.id}`;
 
 
-  // Everything shown, by day, soonest first within each day.
+  // Everything shown, by day: a plan running several days is on each of
+  // them. Within a day, whole-day plans first, then soonest first.
   const byDay = useMemo(() => {
     const map = new Map<string, Row[]>();
     ([...shown, ...maybes] as Row[]).forEach(e => {
-      const k = keyOf(e.start_time);
-      if (!map.has(k)) map.set(k, []);
-      map.get(k)!.push(e);
+      daysCovered(e.start_time, rowEnd(e)).forEach(k => {
+        if (!map.has(k)) map.set(k, []);
+        map.get(k)!.push(e);
+      });
     });
-    map.forEach(list => list.sort((a, b) => a.start_time.localeCompare(b.start_time)));
+    map.forEach((list, k) => list.sort((a, b) =>
+      Number(fillsDay(b.start_time, rowEnd(b), k)) - Number(fillsDay(a.start_time, rowEnd(a), k))
+      || a.start_time.localeCompare(b.start_time)));
     return map;
   }, [shown, maybes]);
 
@@ -445,7 +451,7 @@ export default function CalendarScreen() {
 
   // Plans visible in the view (the month grid itself lists none).
   const periodRows: Row[] = useMemo(
-    () => (view === 'month' && !asList ? [] : periodDays.flatMap(k => byDay.get(k) ?? [])),
+    () => (view === 'month' && !asList ? [] : Array.from(new Set(periodDays.flatMap(k => byDay.get(k) ?? [])))),
     [view, asList, periodDays, byDay],
   );
 
@@ -627,12 +633,13 @@ export default function CalendarScreen() {
     </View>
   );
 
-  const rowView = (item: Row) => isMaybe(item) ? (
-    <MaybeRow key={item.id} item={item} meId={meId} onPress={() => openRow(item)} />
+  const rowView = (item: Row, day: string) => isMaybe(item) ? (
+    <MaybeRow key={item.id} item={item} day={day} meId={meId} onPress={() => openRow(item)} />
   ) : (
     <EventRow
       key={item.id}
       event={item}
+      day={day}
       attendees={attendeesOf(item)}
       meId={meId}
       hostName={(() => { const h = hostOf(item); return h ? (h === meId ? 'you' : memberById.get(h)?.full_name?.split(' ')[0] ?? null) : null; })()}
@@ -666,7 +673,7 @@ export default function CalendarScreen() {
       {sections.map(s => (
         <View key={s.key}>
           {sectionHeader(s)}
-          {s.data.length ? s.data.map(rowView) : (
+          {s.data.length ? s.data.map(r => rowView(r, s.key)) : (
             <ListRow title="Nothing planned" subtitle={scope === 'mine' ? 'Make plans for this day' : 'Add something for this day'} tintTitle={false} onPress={() => newPlan(s.key)} icon="add-circle-outline" />
           )}
         </View>
@@ -706,7 +713,7 @@ export default function CalendarScreen() {
             {s.subtitle ? <Txt v="footnote" tone="secondary">{s.subtitle}</Txt> : null}
           </View>
           <WorkLine day={workOn(workSchedules, s.key)} />
-          {s.data.map(r => <EventChip key={r.id} row={r} onPress={() => openRow(r)} />)}
+          {s.data.map(r => <EventChip key={r.id} row={r} day={s.key} onPress={() => openRow(r)} />)}
         </View>
       )) : (
         <Txt v="callout" tone="secondary" style={{ paddingHorizontal: space.m, paddingTop: space.s }}>Nothing else planned yet.</Txt>
@@ -829,18 +836,19 @@ const REPLY_META: Record<Reply, string> = {
 };
 
 function timeLabel(e: Event) {
-  const { hm, ampm } = timeParts(e.start_time);
+  if (isMultiDay(e.start_time, e.end_time)) return spanLabel(e.start_time, e.end_time);
+  const { hm, ampm } = whenOnDay(e.start_time, e.end_time, keyOf(e.start_time));
   return `${hm} ${ampm}`;
 }
 
-function EventRow({ event, attendees, meId, groupName, hostName, overlay, selected, onPress }: {
-  event: Event; attendees: AvatarPerson[]; meId: string | null; groupName: string | null; hostName: string | null;
+function EventRow({ event, day, attendees, meId, groupName, hostName, overlay, selected, onPress }: {
+  event: Event; day: string; attendees: AvatarPerson[]; meId: string | null; groupName: string | null; hostName: string | null;
   overlay: boolean;   // your own event laid over a shared calendar
   selected: boolean; onPress: () => void;
 }) {
   const { c } = useTheme();
   const { compact } = useLayout();
-  const { hm, ampm } = timeParts(event.start_time);
+  const { hm, ampm, spoken: when } = whenOnDay(event.start_time, event.end_time, day);
   const cancelled = !!event.cancelled_at;
   const reply = replyOf(event, meId);
   // Traditions name this time's host; otherwise the organizer is hosting.
@@ -859,7 +867,7 @@ function EventRow({ event, attendees, meId, groupName, hostName, overlay, select
     <Tappable
       onPress={onPress}
       selected={selected}
-      accessibilityLabel={`${hm} ${ampm}, ${event.title}${meta ? `, ${meta}` : ''}${overlay ? ', your event, not on this calendar' : groupName ? `, ${groupName} calendar` : ''}`}
+      accessibilityLabel={`${when}, ${event.title}${meta ? `, ${meta}` : ''}${overlay ? ', your event, not on this calendar' : groupName ? `, ${groupName} calendar` : ''}`}
       style={{
         flexDirection: 'row', alignItems: 'center', gap: space.m,
         paddingHorizontal: space.m, paddingVertical: space.s, minHeight: 64,
@@ -894,17 +902,17 @@ function EventRow({ event, attendees, meId, groupName, hostName, overlay, select
 // ─── Maybe row ───────────────────────────────────────────────────────────────
 
 /** A date option still being decided: faint, dashed, and one tap from voting. */
-function MaybeRow({ item, meId, onPress }: { item: Maybe; meId: string | null; onPress: () => void }) {
+function MaybeRow({ item, day, meId, onPress }: { item: Maybe; day: string; meId: string | null; onPress: () => void }) {
   const { c } = useTheme();
   const { compact } = useLayout();
-  const { hm, ampm } = timeParts(item.slot.start);
+  const { hm, ampm, spoken: when } = whenOnDay(item.slot.start, item.slot.end, day);
   const yes = tallySlots(item.idea, [item.slot])[0].yes;
   const mine = meId ? item.idea.slot_votes?.[meId] : undefined;
   const status = mine === undefined ? 'Maybe · vote on dates' : mine.includes(item.slot.start) ? 'Maybe · works for you' : 'Maybe';
   return (
     <Tappable
       onPress={onPress}
-      accessibilityLabel={`${hm} ${ampm}, ${item.idea.title}, date option, ${votesLabel(yes.length)}`}
+      accessibilityLabel={`${when}, ${item.idea.title}, date option, ${votesLabel(yes.length)}`}
       style={{
         flexDirection: 'row', alignItems: 'center', gap: space.m,
         paddingHorizontal: space.m, paddingVertical: space.s, minHeight: 56,

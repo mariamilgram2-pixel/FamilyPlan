@@ -8,6 +8,7 @@ import { Event, Idea, TimeSlot } from '../../types';
 import { Button, Icon, IconButton, ListRow, Tappable, Txt } from '../../components/ui';
 import { continuous, space, tabularNums, useTheme } from '../../theme';
 import { addDays, parseKey, timeParts, todayKey } from './dates';
+import { fillsDay, whenOnDay } from '../../lib/span';
 
 /** A date option on a plan still picking one: shown faintly, like a pencilled-in maybe. */
 export type Maybe = { kind: 'maybe'; id: string; idea: Idea; slot: TimeSlot; start_time: string };
@@ -20,6 +21,7 @@ export const isOverlay = (r: Row) => !isMaybe(r) && !!r.overlay;
 
 const titleOf = (r: Row) => (isMaybe(r) ? r.idea.title : r.title);
 const endOf = (r: Row) => (isMaybe(r) ? r.slot.end : r.end_time);
+export const rowEnd = endOf;
 const cancelledOf = (r: Row) => !isMaybe(r) && !!r.cancelled_at;
 const spokenKind = (r: Row) =>
   `${isMaybe(r) ? ', date option' : ''}${isOverlay(r) ? ', your event, not on this calendar' : ''}${cancelledOf(r) ? ', cancelled' : ''}`;
@@ -120,7 +122,11 @@ export function DayTimeline({ day, rows, header, onOpen, onAdd }: {
   onAdd: () => void;
 }) {
   const { c } = useTheme();
-  const items = useMemo(() => layOut(rows, day), [rows, day]);
+  // Plans filling the whole day (all-day, or the middle of a trip) sit above
+  // the hours instead of as a 24-hour block.
+  const wholeDay = rows.filter(r => fillsDay(r.start_time, endOf(r), day));
+  const timed = rows.filter(r => !wholeDay.includes(r));
+  const items = useMemo(() => layOut(timed, day), [rows, day]);
 
   const isToday = day === todayKey();
   const nowMin = isToday ? minutesInto(new Date().toISOString(), day) : -1;
@@ -135,6 +141,13 @@ export function DayTimeline({ day, rows, header, onOpen, onAdd }: {
     );
   }
 
+  const strip = wholeDay.length ? (
+    <View style={{ paddingHorizontal: space.s, paddingTop: space.s, paddingBottom: space.s, gap: space.hair }}>
+      {wholeDay.map(r => <EventChip key={r.id} row={r} day={day} onPress={() => onOpen(r)} />)}
+    </View>
+  ) : null;
+  if (!timed.length) return <View style={{ paddingBottom: space.s }}>{header}{strip}</View>;
+
   // Only the hours that matter: an hour either side of the plans (and now,
   // on today), at least six hours tall.
   const minutes = [...items.flatMap(i => [i.start, i.end]), ...(isToday ? [nowMin] : [])];
@@ -147,6 +160,7 @@ export function DayTimeline({ day, rows, header, onOpen, onAdd }: {
   return (
     <View style={{ paddingBottom: space.s }}>
       {header}
+      {strip}
       <View style={{ height: hours.length * HOUR + space.s, marginTop: space.s }}>
         {hours.map(h => (
           <Pressable
@@ -170,12 +184,12 @@ export function DayTimeline({ day, rows, header, onOpen, onAdd }: {
             const cancelled = cancelledOf(row);
             const overlay = isOverlay(row);
             const height = Math.max(24, top(end) - top(start) - 2);
-            const { hm, ampm } = timeParts(row.start_time);
+            const { hm, ampm, spoken: when } = whenOnDay(row.start_time, endOf(row), day);
             return (
               <Tappable
                 key={row.id}
                 onPress={() => onOpen(row)}
-                accessibilityLabel={`${hm} ${ampm}, ${titleOf(row)}${spokenKind(row)}`}
+                accessibilityLabel={`${when}, ${titleOf(row)}${spokenKind(row)}`}
                 style={{
                   position: 'absolute', top: top(start) + 1, height,
                   left: `${(col / cols) * 100}%`, width: `${100 / cols}%`,
@@ -283,7 +297,7 @@ export function WeekRows({ start, byDay, selected, onPickDay, onOpen }: {
               </View>
             </Tappable>
             <View style={{ flex: 1, minWidth: 0, gap: space.hair, justifyContent: 'center' }}>
-              {rows.map(r => <EventChip key={r.id} row={r} onPress={() => onOpen(r)} />)}
+              {rows.map(r => <EventChip key={r.id} row={r} day={key} onPress={() => onOpen(r)} />)}
             </View>
           </View>
         );
@@ -293,16 +307,16 @@ export function WeekRows({ start, byDay, selected, onPickDay, onOpen }: {
 }
 
 /** One plan as a compact chip: the week's rows and "Coming up" both use it. */
-export function EventChip({ row, onPress }: { row: Row; onPress: () => void }) {
+export function EventChip({ row, day, onPress }: { row: Row; day: string; onPress: () => void }) {
   const { c } = useTheme();
   const maybe = isMaybe(row);
   const cancelled = cancelledOf(row);
   const overlay = isOverlay(row);
-  const { hm, ampm } = timeParts(row.start_time);
+  const { short, spoken } = whenOnDay(row.start_time, endOf(row), day);
   return (
     <Tappable
       onPress={onPress}
-      accessibilityLabel={`${hm} ${ampm}, ${titleOf(row)}${spokenKind(row)}`}
+      accessibilityLabel={`${spoken}, ${titleOf(row)}${spokenKind(row)}`}
       style={{
         flexDirection: 'row', alignItems: 'center', gap: space.s,
         paddingHorizontal: space.s, paddingVertical: 6, borderRadius: 8, ...continuous,
@@ -312,7 +326,7 @@ export function EventChip({ row, onPress }: { row: Row; onPress: () => void }) {
         ...(maybe ? { borderWidth: 1, borderStyle: 'dashed' as const, borderColor: c.separator, opacity: 0.8 } : null),
       }}
     >
-      <Txt v="footnote" tone="secondary" style={[tabularNums, { width: 58 }]}>{`${hm} ${ampm.toLowerCase()}`}</Txt>
+      <Txt v="footnote" tone="secondary" numberOfLines={1} style={[tabularNums, { width: 64 }]}>{short}</Txt>
       <Txt
         v="callout" numberOfLines={1} semibold={!maybe && !cancelled && !overlay}
         tone={maybe || cancelled || overlay ? 'secondary' : 'primary'}

@@ -69,13 +69,24 @@ CREATE TABLE public.contacts (
 
 CREATE INDEX contacts_owner ON public.contacts (owner_id);
 
+-- Your own names for places you plan at often ("Home"), shown first when adding where.
+CREATE TABLE public.saved_places (
+  id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_id    UUID        NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  label       TEXT        NOT NULL CHECK (char_length(label) BETWEEN 1 AND 40),
+  place       TEXT        NOT NULL CHECK (char_length(place) BETWEEN 1 AND 300),   -- "Home, 123 Maple St, Brooklyn"
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX saved_places_owner ON public.saved_places (owner_id);
+
 CREATE TABLE public.ideas (
   id                    UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   group_id              UUID        NOT NULL REFERENCES public.groups(id) ON DELETE CASCADE,
   title                 TEXT        NOT NULL,
   description           TEXT,
   votes                 INTEGER     NOT NULL DEFAULT 0,
-  status                TEXT        NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed', 'planned', 'done')),
+  status                TEXT        NOT NULL DEFAULT 'proposed' CHECK (status IN ('draft', 'proposed', 'planned', 'done')),   -- draft: only its creator sees it
   audience_group_ids    UUID[]      NOT NULL DEFAULT '{}',
   audience_user_ids     UUID[]      NOT NULL DEFAULT '{}',
   audience_contact_ids  UUID[]      NOT NULL DEFAULT '{}',
@@ -145,6 +156,7 @@ ALTER TABLE public.events       ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ideas        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.idea_votes   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.contacts     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.saved_places ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
 
 -- profiles
@@ -206,13 +218,15 @@ CREATE POLICY "Event creator can delete their event"
 -- ideas
 CREATE POLICY "Group members can view ideas"
   ON public.ideas FOR SELECT
-  USING (group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid()));
+  USING (group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid())
+         AND (status <> 'draft' OR created_by = auth.uid()));
 CREATE POLICY "Group members can create ideas"
   ON public.ideas FOR INSERT
   WITH CHECK (group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid()) AND auth.uid() = created_by);
 CREATE POLICY "Group members can update ideas (status / votes)"
   ON public.ideas FOR UPDATE
-  USING (group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid()));
+  USING (group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid())
+         AND (status <> 'draft' OR created_by = auth.uid()));
 CREATE POLICY "Idea creator can delete their idea"
   ON public.ideas FOR DELETE USING (auth.uid() = created_by);
 
@@ -243,6 +257,14 @@ CREATE POLICY "Users can update their own contacts"
   ON public.contacts FOR UPDATE USING (auth.uid() = owner_id);
 CREATE POLICY "Users can delete their own contacts"
   ON public.contacts FOR DELETE USING (auth.uid() = owner_id);
+
+-- saved_places (private to their owner)
+CREATE POLICY "Users can view their own saved places"
+  ON public.saved_places FOR SELECT USING (auth.uid() = owner_id);
+CREATE POLICY "Users can save places as themselves"
+  ON public.saved_places FOR INSERT WITH CHECK (auth.uid() = owner_id);
+CREATE POLICY "Users can delete their own saved places"
+  ON public.saved_places FOR DELETE USING (auth.uid() = owner_id);
 
 -- notifications (in-app inbox; anyone can notify, only the recipient reads)
 CREATE POLICY "Users can view their own notifications"
@@ -633,9 +655,14 @@ BEGIN
   ),
   pairs AS (
     SELECT sl.*, p.*,
-      EXTRACT(ISODOW FROM sl.s_start AT TIME ZONE p.tz) IN (6, 7) AS weekend
+      -- Any of its days a Saturday or Sunday (a trip can start on a Friday).
+      EXISTS (
+        SELECT 1 FROM generate_series((sl.s_start AT TIME ZONE p.tz)::date::timestamp,
+                                      ((sl.s_end - INTERVAL '1 microsecond') AT TIME ZONE p.tz)::date::timestamp,
+                                      INTERVAL '1 day') AS d(day)
+        WHERE EXTRACT(ISODOW FROM d.day) IN (6, 7)) AS weekend
     FROM slots sl CROSS JOIN people p
-    WHERE sl.s_end > sl.s_start AND sl.s_end - sl.s_start <= INTERVAL '2 days'
+    WHERE sl.s_end > sl.s_start AND sl.s_end - sl.s_start <= INTERVAL '31 days'
   ),
   verdicts AS (
     SELECT pa.s_start, pa.s_end,

@@ -14,6 +14,7 @@ import { DEMO_EVENTS, DEMO_IDEAS, DEMO_MEMBERS, DEMO_ME, isDemoGroup } from '../
 import { expandEvents } from '../../lib/recurrence';
 import { blocksTime, needsReply, replyOf } from '../../lib/rsvp';
 import { awaitingYourDates, hostOf, readyToSend } from '../../lib/plans';
+import { isAllDay, isMultiDay, spanLength } from '../../lib/span';
 import { findSlots } from '../../lib/planner';
 import { useWorkSchedules } from '../../lib/workSchedule';
 import { useNotifications } from '../../lib/notifications';
@@ -40,10 +41,16 @@ const BIRTHDAYS_WITHIN_DAYS = 30;
 
 const first = (p?: { full_name?: string | null } | null) => (p?.full_name ?? 'Someone').split(' ')[0];
 
+/** Its start time, "All day", or a trip's length ("3 days"). */
+function startsAt(e: Event) {
+  if (isAllDay(e.start_time, e.end_time)) return spanLength(e.start_time, e.end_time);
+  const { hm, ampm } = timeParts(e.start_time);
+  return `${hm.replace(':00', '')} ${ampm}${isMultiDay(e.start_time, e.end_time) ? ` · ${spanLength(e.start_time, e.end_time)}` : ''}`;
+}
+
 function when(e: Event) {
   const rel = relativeDay(keyOf(e.start_time));
-  const { hm, ampm } = timeParts(e.start_time);
-  return `${rel ?? shortDate(keyOf(e.start_time))} · ${hm} ${ampm}`;
+  return `${rel ?? shortDate(keyOf(e.start_time))} · ${startsAt(e)}`;
 }
 
 /** Next occurrence of an MM-DD birthday, from today. */
@@ -249,7 +256,7 @@ export default function HomeScreen() {
       weekday: d.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase(),
       today: keyOf(e.start_time) === todayKey(),
       title: e.title,
-      time: shortTime(e.start_time),
+      time: startsAt(e),
       host: host ? (host === meId ? 'You' : first(personOf(host))) : null,
       people: e.attendees.filter(id => id !== meId && e.rsvps?.[id] !== 'declined').map(personOf),
       a11y: `${e.title}, ${when(e)}${host ? `, ${host === meId ? 'your turn to host' : `${first(personOf(host))} hosting`}` : ''}`,
