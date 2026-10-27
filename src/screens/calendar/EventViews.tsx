@@ -719,13 +719,14 @@ function WorkHint({ date, startIso, endIso }: { date: string; startIso: string |
 type ParsedSummary = Pick<ParsedEvent, 'date' | 'start' | 'end' | 'location' | 'people' | 'repeat'>;
 
 export function DescribeField({
-  value, onChange, parsed, onSubmit,
+  value, onChange, parsed, onSubmit, autoFocus = true, inputRef, labeled = true,
   placeholder = 'Dinner with Ana next Tuesday at 7pm',
   filledHint = 'Filled in below — adjust anything, then Add.',
   emptyHint = 'Add a day or time, like “Friday at 7”.',
   accessibilityLabel = 'Describe the event in your own words',
 }: {
   value: string; onChange: (t: string) => void; parsed: ParsedSummary | null; onSubmit?: () => void;
+  autoFocus?: boolean; inputRef?: React.Ref<React.ElementRef<typeof Field>>; labeled?: boolean;
   placeholder?: string; filledHint?: string; emptyHint?: string; accessibilityLabel?: string;
 }) {
   const { c } = useTheme();
@@ -741,15 +742,18 @@ export function DescribeField({
 
   return (
     <View style={{ gap: space.s }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.hair, paddingHorizontal: space.m }}>
-        <Icon name="sparkles-outline" size={14} color={c.tint} />
-        <Txt v="footnote" tone="secondary" semibold>Describe it</Txt>
-      </View>
+      {labeled ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.hair, paddingHorizontal: space.m }}>
+          <Icon name="sparkles-outline" size={14} color={c.tint} />
+          <Txt v="footnote" tone="secondary" semibold>Describe it</Txt>
+        </View>
+      ) : null}
       <Field
+        ref={inputRef}
         value={value}
         onChangeText={onChange}
         placeholder={placeholder}
-        autoFocus
+        autoFocus={autoFocus}
         returnKeyType="done"
         onSubmitEditing={onSubmit}
         accessibilityLabel={accessibilityLabel}

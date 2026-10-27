@@ -23,6 +23,8 @@ export interface PlanPrefill {
   date?: string | null;    // YYYY-MM-DD
   start?: string;          // HH:MM
   end?: string;
+  /** Raw “Describe it” sentence. The New Plan sheet parses it on open. */
+  sentence?: string;
 }
 
 interface PlanComposerValue {
