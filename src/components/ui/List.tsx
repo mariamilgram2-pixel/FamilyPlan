@@ -68,6 +68,7 @@ export function SectionHeader({ title, action }: { title: string; action?: React
 interface RowProps {
   title: string;
   subtitle?: string | null;
+  subtitleTint?: boolean;     // a subtitle that's a call to act ("Reply to Book club")
   detail?: string | null;     // a second secondary line, e.g. calendar fit under votes
   leading?: React.ReactNode;
   icon?: IconName;            // shorthand for a tinted leading glyph
@@ -84,7 +85,7 @@ interface RowProps {
 }
 
 export function ListRow({
-  title, subtitle, detail, leading, icon, trailing, value, chevron, checked, selected,
+  title, subtitle, subtitleTint, detail, leading, icon, trailing, value, chevron, checked, selected,
   destructive, tintTitle, onPress, onLongPress, style,
 }: RowProps) {
   const { c } = useTheme();
@@ -104,7 +105,7 @@ export function ListRow({
           {title}
         </Txt>
         {subtitle ? (
-          <Txt v={compact ? 'callout' : 'footnote'} tone="secondary" numberOfLines={1}>{subtitle}</Txt>
+          <Txt v={compact ? 'callout' : 'footnote'} tone={subtitleTint ? 'tint' : 'secondary'} numberOfLines={1}>{subtitle}</Txt>
         ) : null}
         {detail ? (
           <Txt v="footnote" tone="secondary" numberOfLines={1}>{detail}</Txt>

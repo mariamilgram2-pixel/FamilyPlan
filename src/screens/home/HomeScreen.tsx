@@ -10,7 +10,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { supabase } from '../../lib/supabase';
-import { DEMO_EVENTS, DEMO_IDEAS, DEMO_MEMBERS, DEMO_ME, isDemoGroup } from '../../lib/demo';
+import { DEMO_EVENTS, DEMO_IDEAS, DEMO_MEMBERS, DEMO_ME, DEMO_PEOPLE, isDemoGroup } from '../../lib/demo';
 import { expandEvents } from '../../lib/recurrence';
 import { blocksTime, needsReply, replyOf } from '../../lib/rsvp';
 import { awaitingYourDates, hostOf, readyToSend } from '../../lib/plans';
@@ -113,7 +113,7 @@ export default function HomeScreen() {
 
   const people = useMemo(() => {
     const map = new Map<string, Profile>(circle.people.map(p => [p.profile.id, p.profile]));
-    if (isDemo) DEMO_MEMBERS.forEach(p => map.set(p.id, p));
+    if (isDemo) DEMO_PEOPLE.forEach(p => map.set(p.id, p));
     return map;
   }, [circle.people, isDemo]);
   const personOf = (id: string): AvatarPerson => people.get(id) ?? { id };
