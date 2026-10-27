@@ -9,7 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Avatar, { AvatarPerson } from '../../components/Avatar';
 import AvatarStack from '../../components/AvatarStack';
 import { Sheep, useReducedMotion } from '../../components/Sheep';
-import { Icon, IconButton, IconName, Menu, Tappable, Txt } from '../../components/ui';
+import { Icon, IconButton, IconName, Menu, Tappable, TextInputRef, Txt } from '../../components/ui';
 import { continuous, radius, space, tabularNums, type, useTheme, brand } from '../../theme';
 
 const native = Platform.OS !== 'web';
@@ -137,7 +137,7 @@ export function TilePanel({ title, onClose, children }: { title: string; onClose
  * opens New Plan with what you typed; the arrow opens it empty.
  */
 export function PlanBar({ inputRef, onType, onOpen }: {
-  inputRef?: React.Ref<TextInput>; onType: (text: string) => void; onOpen: () => void;
+  inputRef?: React.Ref<TextInputRef>; onType: (text: string) => void; onOpen: () => void;
 }) {
   const { c } = useTheme();
   const [focused, setFocused] = useState(false);

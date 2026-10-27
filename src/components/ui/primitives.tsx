@@ -52,7 +52,12 @@ interface TappableProps extends Omit<PressableProps, 'style'> {
   selected?: boolean;
 }
 
-export const Tappable = React.forwardRef<View, TappableProps>(function Tappable(
+// RN 0.88: View and TextInput are function components, so their instance
+// types come from their `ref` prop, not the components themselves.
+export type ViewRef = React.ComponentRef<typeof View>;
+export type TextInputRef = React.ComponentRef<typeof TextInput>;
+
+export const Tappable = React.forwardRef<ViewRef, TappableProps>(function Tappable(
   { style, feedback = 'highlight', selected, ...rest }, ref,
 ) {
   const { c } = useTheme();
@@ -143,7 +148,7 @@ interface IconButtonProps {
   style?: StyleProp<ViewStyle>;
 }
 
-export const IconButton = React.forwardRef<View, IconButtonProps>(function IconButton(
+export const IconButton = React.forwardRef<ViewRef, IconButtonProps>(function IconButton(
   { icon, label, onPress, variant = 'plain', disabled, style }, ref,
 ) {
   const { c } = useTheme();
@@ -180,7 +185,7 @@ interface FieldProps extends TextInputProps {
   mono?: boolean;
 }
 
-export const Field = React.forwardRef<TextInput, FieldProps>(function Field(
+export const Field = React.forwardRef<TextInputRef, FieldProps>(function Field(
   { label, hint, mono, multiline, style, ...rest }, ref,
 ) {
   const { c } = useTheme();

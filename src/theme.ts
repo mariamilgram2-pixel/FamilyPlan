@@ -10,7 +10,7 @@
 // All text/background pairs below clear WCAG AA (4.5:1).
 
 import { useMemo } from 'react';
-import { Platform, StyleSheet, TextStyle, useWindowDimensions, ViewStyle } from 'react-native';
+import { ImageStyle, Platform, StyleSheet, TextStyle, useWindowDimensions, ViewStyle } from 'react-native';
 import { useThemePreference } from './contexts/ThemeContext';
 
 export type Palette = {
@@ -153,7 +153,10 @@ export function useTheme() {
  * Build a StyleSheet from the active palette. Pass a module-level factory so
  * the sheet is only rebuilt when the color scheme flips.
  */
-export function useStyles<T extends StyleSheet.NamedStyles<T>>(factory: (c: Palette) => T): T {
+// RN 0.88 dropped StyleSheet.NamedStyles; any map of named styles will do.
+type NamedStyles<T> = { [P in keyof T]: ViewStyle | TextStyle | ImageStyle };
+
+export function useStyles<T extends NamedStyles<T>>(factory: (c: Palette) => T): T {
   const { c } = useTheme();
   return useMemo(() => StyleSheet.create(factory(c)), [c, factory]);
 }

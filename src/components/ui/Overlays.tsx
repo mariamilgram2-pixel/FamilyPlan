@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Icon, IconName, Tappable, Txt } from './primitives';
+import { Icon, IconName, Tappable, Txt, ViewRef } from './primitives';
 import { continuous, radius, space, useLayout, useTheme } from '../../theme';
 
 // ─── Material ────────────────────────────────────────────────────────────────
@@ -171,7 +171,7 @@ export function Menu({ sections, title, children }: MenuProps) {
   const { compact } = useLayout();
   const { width: winW, height: winH } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const anchorRef = useRef<View>(null);
+  const anchorRef = useRef<ViewRef>(null);
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const popover = Platform.OS === 'web' && !compact;

@@ -29,7 +29,7 @@ import { Sheep } from '../../components/Sheep';
 import {
   Button, EmptyState, IconButton, IconName, ListRow, ListSection, ReadingColumn,
   ScreenHeader, Screen, Sheet, Tappable, Txt,
-} from '../../components/ui';
+TextInputRef, } from '../../components/ui';
 import { NotificationList } from '../ideas/IdeaViews';
 import { Bubble, BubbleRow, Hero, PlanBar, Stop, TileGrid, TilePanel, TileSpec, Timeline, useOpenTile } from './HomeViews';
 import { ART, FieldFlock, useFieldFlockInset } from './FieldFlock';
@@ -81,7 +81,7 @@ export default function HomeScreen() {
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [loading, setLoading] = useState(true);
   const [inboxOpen, setInboxOpen] = useState(false);
-  const describeInput = useRef<TextInput>(null);
+  const describeInput = useRef<TextInputRef>(null);
   const [viewport, setViewport] = useState(0);
   const [stack, setStack] = useState(0);
   const hill = useFieldFlockInset();

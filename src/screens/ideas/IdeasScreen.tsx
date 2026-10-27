@@ -451,7 +451,7 @@ export default function PlansScreen() {
         <ListRow title={showAllHappened ? 'Show fewer' : `Show all ${section.total}`} tintTitle onPress={() => setShowAllHappened(x => !x)} />
       ) : null}
       ListEmptyComponent={
-        loading ? <ActivityIndicator style={{ marginTop: space.xl }} color={c.secondaryLabel} /> : tabCount(tab) > 0 ? null : (
+        loading ? <ActivityIndicator style={{ marginTop: space.xl }} color={c.secondaryLabel} /> : tabCount(tab) > 0 ? undefined : (
           <EmptyState
             icon="bulb-outline"
             illustration={<Sheep size={72} pose="graze" style={{ marginBottom: space.s }} />}
