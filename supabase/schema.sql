@@ -14,6 +14,8 @@ CREATE TABLE public.profiles (
   full_name   TEXT,
   avatar_url  TEXT,
   birthday    TEXT        CHECK (birthday ~ '^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'),   -- MM-DD
+  about       TEXT        CHECK (about IS NULL OR char_length(about) <= 140),             -- shared with people you plan with
+  favorites   TEXT[]      NOT NULL DEFAULT '{}' CHECK (cardinality(favorites) <= 6),      -- "things I love doing"
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -64,6 +66,7 @@ CREATE TABLE public.contacts (
   name        TEXT        NOT NULL,
   email       TEXT,
   note        TEXT,
+  avatar_url  TEXT,                                   -- a photo you set for them
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -79,6 +82,22 @@ CREATE TABLE public.saved_places (
 );
 
 CREATE INDEX saved_places_owner ON public.saved_places (owner_id);
+
+-- Notes and photos you keep about someone, private to you. About a group
+-- member (subject_user_id) or someone you added (subject_contact_id); exactly one.
+CREATE TABLE public.person_notes (
+  id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_id            UUID        NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  subject_user_id     UUID        REFERENCES public.profiles(id) ON DELETE CASCADE,
+  subject_contact_id  UUID        REFERENCES public.contacts(id) ON DELETE CASCADE,
+  body                TEXT        NOT NULL DEFAULT '' CHECK (char_length(body) <= 1000),
+  photo_urls          TEXT[]      NOT NULL DEFAULT '{}' CHECK (cardinality(photo_urls) <= 12),   -- paths in "person-notes"
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK ((subject_user_id IS NULL) <> (subject_contact_id IS NULL)),
+  CHECK (length(btrim(body)) > 0 OR cardinality(photo_urls) > 0)
+);
+
+CREATE INDEX person_notes_owner ON public.person_notes (owner_id);
 
 CREATE TABLE public.ideas (
   id                    UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -157,6 +176,7 @@ ALTER TABLE public.ideas        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.idea_votes   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.contacts     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.saved_places ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.person_notes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
 
 -- profiles
@@ -265,6 +285,14 @@ CREATE POLICY "Users can save places as themselves"
   ON public.saved_places FOR INSERT WITH CHECK (auth.uid() = owner_id);
 CREATE POLICY "Users can delete their own saved places"
   ON public.saved_places FOR DELETE USING (auth.uid() = owner_id);
+
+-- person_notes (private to whoever wrote them; the person never sees them)
+CREATE POLICY "Users can view their own notes about people"
+  ON public.person_notes FOR SELECT USING (auth.uid() = owner_id);
+CREATE POLICY "Users can write notes about people as themselves"
+  ON public.person_notes FOR INSERT WITH CHECK (auth.uid() = owner_id);
+CREATE POLICY "Users can delete their own notes about people"
+  ON public.person_notes FOR DELETE USING (auth.uid() = owner_id);
 
 -- notifications (in-app inbox; anyone can notify, only the recipient reads)
 CREATE POLICY "Users can view their own notifications"
@@ -402,6 +430,27 @@ DROP POLICY IF EXISTS "People can remove their own photos" ON storage.objects;
 CREATE POLICY "People can remove their own photos"
   ON storage.objects FOR DELETE
   USING (bucket_id = 'memories' AND (storage.foldername(name))[2] = auth.uid()::text);
+
+-- Person-note photos
+-- Private bucket. Paths are "<owner id>/<file>"; only the owner can touch them.
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('person-notes', 'person-notes', false)
+ON CONFLICT (id) DO NOTHING;
+
+DROP POLICY IF EXISTS "People can see their own person-note photos" ON storage.objects;
+CREATE POLICY "People can see their own person-note photos"
+  ON storage.objects FOR SELECT
+  USING (bucket_id = 'person-notes' AND (storage.foldername(name))[1] = auth.uid()::text);
+
+DROP POLICY IF EXISTS "People can add their own person-note photos" ON storage.objects;
+CREATE POLICY "People can add their own person-note photos"
+  ON storage.objects FOR INSERT
+  WITH CHECK (bucket_id = 'person-notes' AND (storage.foldername(name))[1] = auth.uid()::text);
+
+DROP POLICY IF EXISTS "People can remove their own person-note photos" ON storage.objects;
+CREATE POLICY "People can remove their own person-note photos"
+  ON storage.objects FOR DELETE
+  USING (bucket_id = 'person-notes' AND (storage.foldername(name))[1] = auth.uid()::text);
 
 -- ─── Time zones ──────────────────────────────────────────────
 

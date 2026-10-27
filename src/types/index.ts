@@ -34,6 +34,7 @@ export type Database = {
         [ForeignKey<'idea_votes_idea_id_fkey', 'idea_id', 'ideas'>]>;
       contacts: Table<Contact, ContactInsert>;
       saved_places: Table<SavedPlace, SavedPlaceInsert>;
+      person_notes: Table<PersonNote, PersonNoteInsert>;
       notifications: Table<AppNotification, AppNotificationInsert>;
       plan_comments: Table<PlanComment, PlanCommentInsert>;
       categories: Table<Category, CategoryInsert>;
@@ -65,6 +66,8 @@ export interface Profile {
   full_name: string | null;
   avatar_url: string | null;
   birthday?: string | null;          // MM-DD
+  about?: string | null;             // a line they share with people they plan with
+  favorites?: string[];              // "things I love doing", ≤ 6
   timezone?: string | null;          // IANA, e.g. "America/New_York"; null = use the device's
   created_at: string;
 }
@@ -175,6 +178,7 @@ export interface Contact {
   name: string;
   email: string | null;
   note: string | null;
+  avatar_url?: string | null;        // a photo you set for them
   created_at: string;
 }
 
@@ -190,6 +194,19 @@ export interface SavedPlace {
 }
 
 export type SavedPlaceInsert = Omit<SavedPlace, 'id' | 'created_at'>;
+
+/** Something you want to remember about someone. Private to its owner. */
+export interface PersonNote {
+  id: string;
+  owner_id: string;
+  subject_user_id: string | null;    // someone in your groups…
+  subject_contact_id: string | null; // …or someone you added
+  body: string;                      // may be empty when there are photos
+  photo_urls: string[];              // storage paths in "person-notes" (demo: image URIs)
+  created_at: string;
+}
+
+export type PersonNoteInsert = Omit<PersonNote, 'id' | 'created_at'>;
 
 export interface PlanComment {
   id: string;

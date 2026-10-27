@@ -1,31 +1,46 @@
 // People
 //
-// Two chunks — Groups, and People — each capped at five rows with an
-// explicit "Show all". People is one list: everyone you plan with, whether
-// they're on sheep (from your groups) or not yet (people you added), with an
-// easy way to invite the latter. Creating things (group, person,
-// join by code) is one "+" menu instead of three competing cards. Group
-// management (invite code, members, leave) lives in the group's detail.
+// Groups, then People, then people who aren't on sheep yet. People is sorted
+// by what's going on, not just A–Z: anyone waiting on you first, then anyone
+// with a birthday or plan coming up, then everyone else. Each row's subtitle
+// says where things stand ("Reply to Book club", "Hike · Sat", "Last together
+// 6 weeks ago"). People not on sheep sit last and quieter, with a small
+// invite button. Creating things (group, person, join by code) is one "+"
+// menu. Group management (invite code, members, leave) lives in the group's detail.
+//
+// Like pinned conversations, people and groups you pin sit on top as big
+// avatars (long-press a row, or Pin in its detail), and a green dot marks
+// anyone with something waiting on you: an invite from them, dates they
+// asked for, an unread note.
 
-import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Platform, ScrollView, Share, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Platform, Pressable, ScrollView, Share, TextInput, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { supabase } from '../../lib/supabase';
 import { notify, confirmAction } from '../../lib/alert';
-import { DEMO_CONTACTS, DEMO_MEMBERS, DEMO_ME, isDemoGroup } from '../../lib/demo';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { DEMO_CONTACTS, DEMO_EVENTS, DEMO_EXTRA_GROUPS, DEMO_IDEAS, DEMO_MEMBERS, DEMO_ME, DEMO_PEOPLE, isDemoGroup } from '../../lib/demo';
+import { expandEvents } from '../../lib/recurrence';
+import { useNotifications } from '../../lib/notifications';
+import { NeedsYouItem, whatNeedsYou } from '../../lib/needsYou';
+import { daysUntilBirthday, personStatus, sharedHistory } from '../../lib/personal';
+import { PinKind, pinKey, usePins } from '../../lib/pins';
 import { useShortcut } from '../../lib/shortcuts';
 import { useAuth } from '../../contexts/AuthContext';
 import { useGroup } from '../../contexts/GroupContext';
-import { Contact, Group, Profile } from '../../types';
+import { Contact, Event, Group, Idea, Profile } from '../../types';
 import Avatar, { AvatarPerson } from '../../components/Avatar';
 import AvatarStack from '../../components/AvatarStack';
+import GroupAvatar from '../../components/GroupAvatar';
 import { useGroupSheets, useVisibleGroups } from '../../components/GroupSwitcher';
-import { usePlanComposer } from '../../components/PlanComposer';
+import { IdentityHeader, NotesSection, PersonDetail } from './PersonDetail';
+import { Dotted, GroupCards, NeedsYouSection, PinnedGrid, PinTile } from './PeoplePieces';
+import { keyOf } from '../calendar/dates';
 import {
-  Button, EmptyState, Field, IconButton, ListRow, ListSection, Menu, ReadingColumn,
-  ScreenHeader, Sheet, SplitView, Tag, Txt, useBottomClearance,
+  Button, EmptyState, Field, Icon, IconButton, ListRow, ListSection, Menu, ReadingColumn,
+  ScreenHeader, SectionHeader, Sheet, SplitView, Tag, Txt, useBottomClearance,
 } from '../../components/ui';
-import { continuous, radius, space, tabularNums, useLayout, useTheme } from '../../theme';
+import { continuous, radius, space, tabularNums, type, useLayout, useTheme } from '../../theme';
 
 interface PersonEntry {
   profile: Profile;
@@ -39,25 +54,34 @@ type Selection =
   | null;
 
 const CHUNK = 5;
+const DAY = 86400000;
 
 export default function PeopleScreen() {
   const { user } = useAuth();
   const { activeGroup, setActiveGroup, fetchGroups } = useGroup();
-  const groups = useVisibleGroups();
+  const visibleGroups = useVisibleGroups();
   const { c } = useTheme();
   const { threeColumn, compact } = useLayout();
   const bottomClearance = useBottomClearance();
   const isDemo = isDemoGroup(activeGroup);
+  // The demo has other groups you're in (Book club, Climbing crew) besides the active one.
+  const groups = useMemo(() => (isDemo
+    ? [...visibleGroups, ...DEMO_EXTRA_GROUPS.filter(g => g.memberIds.includes(DEMO_ME)).map(g => g.group)]
+    : visibleGroups), [visibleGroups, isDemo]);
   const meId = user?.id ?? (isDemo ? DEMO_ME : null);
   const { openCreate, openJoin, sheets: groupSheets } = useGroupSheets();
-  const composer = usePlanComposer();
+  const navigation = useNavigation<any>();
+  const inbox = useNotifications(meId, isDemo);
+  const { pins, isPinned, toggle: togglePinRaw } = usePins();
 
   const [people, setPeople] = useState<PersonEntry[]>([]);
   const [membersByGroup, setMembersByGroup] = useState<Record<string, Profile[]>>({});
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(false);
   const [selection, setSelection] = useState<Selection>(null);
-  const [showAllPeople, setShowAllPeople] = useState(false);
+  const [query, setQuery] = useState('');
+  const [planEvents, setPlanEvents] = useState<Event[]>([]);
+  const [openIdeas, setOpenIdeas] = useState<Idea[]>([]);
 
   // Person sheet (add / edit contact)
   const [personSheet, setPersonSheet] = useState<null | { editing: Contact | null }>(null);
@@ -67,13 +91,17 @@ export default function PeopleScreen() {
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
+    type Row = { group: { id: string; name: string }; members: Profile[] };
+    let results: Row[];
+    let contactRows: Contact[];
     if (isDemo) {
-      const others = DEMO_MEMBERS.filter(m => m.id !== DEMO_ME);
-      setMembersByGroup({ [activeGroup!.id]: DEMO_MEMBERS });
-      setPeople(others.map(p => ({ profile: p, groups: [{ id: activeGroup!.id, name: activeGroup!.name }] })));
-      setContacts(DEMO_CONTACTS);
-      return;
-    }
+      results = groups.map(g => ({
+        group: g,
+        members: g.id === activeGroup!.id ? DEMO_MEMBERS
+          : DEMO_PEOPLE.filter(m => DEMO_EXTRA_GROUPS.find(x => x.group.id === g.id)?.memberIds.includes(m.id)),
+      }));
+      contactRows = DEMO_CONTACTS;
+    } else {
     setLoading(true);
 
     const memberPromise = groups.length === 0
@@ -81,7 +109,7 @@ export default function PeopleScreen() {
       : Promise.all(
           groups.map(g =>
             supabase.from('group_members')
-              .select('profiles(id, full_name, email, avatar_url)')
+              .select('profiles(id, full_name, email, avatar_url, birthday, about, favorites)')
               .eq('group_id', g.id)
               .then(({ data }) => ({
                 group: g,
@@ -94,14 +122,17 @@ export default function PeopleScreen() {
       ? supabase.from('contacts').select('*').eq('owner_id', user.id).order('name')
       : Promise.resolve({ data: [] as Contact[] } as any);
 
-    const [results, contactsRes] = await Promise.all([memberPromise, contactsPromise]);
+    const [memberRows, contactsRes] = await Promise.all([memberPromise, contactsPromise]);
+    results = memberRows;
+    contactRows = (contactsRes?.data ?? []) as Contact[];
+    }
 
     const byGroup: Record<string, Profile[]> = {};
     const peopleMap = new Map<string, PersonEntry>();
     results.forEach(({ group, members }) => {
       byGroup[group.id] = members;
       members.forEach(p => {
-        if (p.id === user?.id) return;
+        if (p.id === meId) return;
         const existing = peopleMap.get(p.id);
         if (existing) existing.groups.push({ id: group.id, name: group.name });
         else peopleMap.set(p.id, { profile: p, groups: [{ id: group.id, name: group.name }] });
@@ -111,11 +142,40 @@ export default function PeopleScreen() {
     setMembersByGroup(byGroup);
     setPeople(Array.from(peopleMap.values()).sort((a, b) =>
       (a.profile.full_name ?? a.profile.email ?? '').localeCompare(b.profile.full_name ?? b.profile.email ?? '')));
-    setContacts((contactsRes?.data ?? []) as Contact[]);
+    setContacts(contactRows);
     setLoading(false);
-  }, [groups, user, isDemo, activeGroup]);
+  }, [groups, user, isDemo, activeGroup, meId]);
 
   useEffect(() => { load(); }, [load]);
+
+  // The last four months through the next two: what's open (for the dots)
+  // and how long since you saw people (for their status). Refetched on
+  // focus, since you answer things elsewhere and come back.
+  const loadNeeds = useCallback(async () => {
+    const from = new Date(Date.now() - 120 * DAY), to = new Date(Date.now() + 60 * DAY);
+    if (isDemo) {
+      setPlanEvents(expandEvents(DEMO_EVENTS, from, to));
+      setOpenIdeas([...DEMO_IDEAS]);
+      return;
+    }
+    if (!meId || !groups.length) return;
+    const ids = groups.map(g => g.id).join(',');
+    const [{ data: ev }, { data: id }] = await Promise.all([
+      supabase.from('events').select('*').or(`group_id.in.(${ids}),attendees.cs.{${meId}}`).lt('start_time', to.toISOString()),
+      supabase.from('ideas').select('*').in('group_id', groups.map(g => g.id)).eq('status', 'proposed'),
+    ]);
+    setPlanEvents(expandEvents((ev as Event[]) ?? [], from, to));
+    setOpenIdeas((id as Idea[]) ?? []);
+  }, [isDemo, meId, groups]);
+  useFocusEffect(useCallback(() => { loadNeeds(); inbox.refresh(); }, [loadNeeds, inbox.refresh]));
+
+  const needs = useMemo(() => whatNeedsYou(planEvents, openIdeas, inbox.items, meId), [planEvents, openIdeas, inbox.items, meId]);
+  const needsOf = (kind: PinKind, id: string): NeedsYouItem[] =>
+    kind === 'group' ? needs.byGroup.get(id) ?? [] : kind === 'person' ? needs.byPerson.get(id) ?? [] : [];
+
+  function togglePin(kind: PinKind, id: string) {
+    if (!togglePinRaw(kind, id)) notify('Pins are full', 'Unpin someone to make room.');
+  }
 
   // Detail column defaults to the active group.
   useEffect(() => {
@@ -189,14 +249,80 @@ export default function PeopleScreen() {
   }
 
   // ─── List ──────────────────────────────────────────────────────────────────
+  // Long-press any row to pin or unpin it.
+  const pinMenu = (kind: PinKind, id: string, label: string, row: (onLongPress: () => void) => React.ReactNode) => (
+    <Menu
+      key={pinKey(kind, id)}
+      title={label}
+      sections={[{ items: [isPinned(kind, id)
+        ? { key: 'unpin', label: 'Unpin', icon: 'pin-outline', onSelect: () => togglePin(kind, id) }
+        : { key: 'pin', label: 'Pin', icon: 'pin', onSelect: () => togglePin(kind, id) }] }]}
+    >
+      {row}
+    </Menu>
+  );
   const isSel = (kind: string, id: string) => threeColumn && selection?.kind === kind && selection.id === id;
-  // Everyone, A–Z: sheep members and people you've added who aren't on it yet.
+
+  // Where things stand with each person on sheep.
+  const statuses = useMemo(() => new Map(people.map(p => [p.profile.id, personStatus({
+    needs: (needs.byPerson.get(p.profile.id) ?? []).map(i => i.label),
+    history: meId ? sharedHistory(planEvents, meId, p.profile.id) : null,
+    birthday: p.profile.birthday,
+  })])), [people, needs, planEvents, meId]);
+
+  // People on sheep by what's going on; people you added, A–Z.
   type Entry = { kind: 'person'; p: PersonEntry; name: string } | { kind: 'contact'; ct: Contact; name: string };
+  const byStatus = (a: Entry, b: Entry) => {
+    const sa = a.kind === 'person' ? statuses.get(a.p.profile.id) : undefined;
+    const sb = b.kind === 'person' ? statuses.get(b.p.profile.id) : undefined;
+    return (sa?.rank ?? 2) - (sb?.rank ?? 2) || (sa?.rank === 1 ? sa.soon - (sb?.soon ?? 0) : 0) || a.name.localeCompare(b.name);
+  };
   const everyone: Entry[] = [
-    ...people.map(p => ({ kind: 'person' as const, p, name: p.profile.full_name ?? p.profile.email ?? '' })),
-    ...contacts.map(ct => ({ kind: 'contact' as const, ct, name: ct.name })),
-  ].sort((a, b) => a.name.localeCompare(b.name));
-  const shownEveryone = showAllPeople ? everyone : everyone.slice(0, CHUNK);
+    ...people.map(p => ({ kind: 'person' as const, p, name: p.profile.full_name ?? p.profile.email ?? '' })).sort(byStatus),
+    ...contacts.map(ct => ({ kind: 'contact' as const, ct, name: ct.name })).sort((a, b) => a.name.localeCompare(b.name)),
+  ];
+  // Search covers groups, people, and people you added, matching name, the
+  // email before the @ (so "co" doesn't hit every ".com"), notes, and shared
+  // group names. While searching, pins and sections give way to one flat list.
+  const q = query.trim().toLowerCase();
+  const handle = (email?: string | null) => email?.split('@')[0];
+  const hit = (...hay: (string | null | undefined)[]) => hay.some(h => h?.toLowerCase().includes(q));
+  const matches = q ? everyone.filter(e => e.kind === 'person'
+    ? hit(e.name, handle(e.p.profile.email), ...e.p.groups.map(g => g.name))
+    : hit(e.name, handle(e.ct.email), e.ct.note)) : everyone;
+  const groupMatches = q ? groups.filter(g => hit(g.name, g.description)) : [];
+
+  // Pinned ones move up top, out of the lists.
+  const unpinned = matches.filter(e => !(e.kind === 'person' ? isPinned('person', e.p.profile.id) : isPinned('contact', e.ct.id)));
+  const onSheep = unpinned.filter((e): e is Extract<Entry, { kind: 'person' }> => e.kind === 'person');
+  const notOnSheep = unpinned.filter((e): e is Extract<Entry, { kind: 'contact' }> => e.kind === 'contact');
+  const listedGroups = groups.filter(g => !isPinned('group', g.id));
+
+  const shortDay = (mmdd: string) => {
+    const [m, d] = mmdd.split('-').map(Number);
+    return new Date(2024, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
+  const pinTiles: PinTile[] = pins.flatMap((key): PinTile[] => {
+    const [kind, id] = key.split(':') as [PinKind, string];
+    const waiting = needsOf(kind, id);
+    const tile = (label: string, avatar: PinTile['avatar'], fallback: string | null = null): PinTile[] => [{
+      key, label, avatar, needs: waiting.length > 0,
+      count: waiting.length,
+      bubble: waiting.length > 1 ? null : waiting[0]?.short ?? fallback,
+      onPress: () => setSelection({ kind, id }), onUnpin: () => togglePin(kind, id),
+    }];
+    if (kind === 'group') {
+      const g = groups.find(x => x.id === id);
+      return g ? tile(g.name, size => <GroupAvatar group={g} size={size} />) : [];
+    }
+    if (kind === 'person') {
+      const p = people.find(x => x.profile.id === id)?.profile;
+      const bday = p?.birthday && daysUntilBirthday(p.birthday) <= 14 ? `🎂 ${shortDay(p.birthday)}` : null;
+      return p ? tile((p.full_name ?? p.email).split(' ')[0], size => <Avatar person={p} size={size} />, bday) : [];
+    }
+    const ct = contacts.find(x => x.id === id);
+    return ct ? tile(ct.name.split(' ')[0], size => <Avatar person={{ id: ct.id, full_name: ct.name, avatar_url: ct.avatar_url }} size={size} />) : [];
+  });
 
   const addMenu = (
     <Menu
@@ -211,64 +337,111 @@ export default function PeopleScreen() {
     </Menu>
   );
 
+  // ─── Rows ──────────────────────────────────────────────────────────────────
+  const memberLine = (g: Group) => {
+    const n = (membersByGroup[g.id] ?? []).length;
+    return `${n} member${n === 1 ? '' : 's'}${g.id === activeGroup?.id ? ' · Active' : ''}`;
+  };
+  const groupRow = (g: Group) => pinMenu('group', g.id, g.name, open => (
+    <ListRow
+      leading={<Dotted on={needsOf('group', g.id).length > 0} size={32} ringColor={c.fill}><GroupAvatar group={g} size={32} /></Dotted>}
+      title={g.name}
+      subtitle={memberLine(g)}
+      chevron={!threeColumn}
+      selected={isSel('group', g.id)}
+      onPress={() => setSelection({ kind: 'group', id: g.id })}
+      onLongPress={open}
+    />
+  ));
+  const personRow = (e: Extract<Entry, { kind: 'person' }>) => {
+    const status = statuses.get(e.p.profile.id);
+    return pinMenu('person', e.p.profile.id, e.name, open => (
+      <ListRow
+        leading={<Dotted on={needsOf('person', e.p.profile.id).length > 0} size={32} ringColor={c.fill}><Avatar person={e.p.profile} size={32} /></Dotted>}
+        title={e.name}
+        subtitle={status?.text ?? e.p.groups.map(g => g.name).join(', ')}
+        subtitleTint={status?.tint}
+        chevron={!threeColumn}
+        selected={isSel('person', e.p.profile.id)}
+        onPress={() => setSelection({ kind: 'person', id: e.p.profile.id })}
+        onLongPress={open}
+      />
+    ));
+  };
+  const contactRow = (e: Extract<Entry, { kind: 'contact' }>, searching = false) => pinMenu('contact', e.ct.id, e.name, open => (
+    <ListRow
+      leading={<Avatar person={{ id: e.ct.id, full_name: e.ct.name, avatar_url: e.ct.avatar_url }} size={32} />}
+      title={e.name}
+      subtitle={searching ? ['Not on sheep yet', e.ct.note].filter(Boolean).join(' · ') : e.ct.note}
+      trailing={<IconButton icon="paper-plane-outline" label={`Invite ${e.name.split(' ')[0]} to sheep`} onPress={() => inviteToSheep(e.ct)} />}
+      selected={isSel('contact', e.ct.id)}
+      onPress={() => setSelection({ kind: 'contact', id: e.ct.id })}
+      onLongPress={open}
+    />
+  ));
+
   const list = (
-    <ScrollView contentContainerStyle={{ paddingBottom: bottomClearance }}>
+    <ScrollView contentContainerStyle={{ paddingBottom: bottomClearance }} keyboardShouldPersistTaps="handled">
       <ScreenHeader title="People" trailing={addMenu} />
-      <View style={{ paddingHorizontal: compact ? space.m : space.s, gap: space.l, paddingTop: space.s }}>
+      <View style={{ paddingHorizontal: compact ? space.m : space.s, gap: space.l }}>
+        {groups.length + everyone.length > 0 ? <PeopleSearch value={query} onChange={setQuery} /> : null}
         {loading && <ActivityIndicator color={c.secondaryLabel} />}
 
-        <ListSection header="Groups">
-          {groups.map(g => {
-            const members = membersByGroup[g.id] ?? [];
-            const active = g.id === activeGroup?.id;
-            return (
-              <ListRow
-                key={g.id}
-                title={g.name}
-                subtitle={`${members.length} member${members.length === 1 ? '' : 's'}${active ? ' · Active' : ''}`}
-                trailing={members.length > 0 ? <AvatarStack people={members as AvatarPerson[]} max={3} size={24} ringColor={c.fill} /> : null}
-                chevron={!threeColumn}
-                selected={isSel('group', g.id)}
-                onPress={() => setSelection({ kind: 'group', id: g.id })}
-              />
-            );
-          })}
-          {groups.length === 0 ? (
-            <ListRow key="none" title="Create or join a group" icon="add-circle-outline" tintTitle onPress={openCreate} />
-          ) : null}
-        </ListSection>
+        {q ? (
+          <ListSection
+            separatorInset={64}
+            footer={groupMatches.length + matches.length === 0 ? `Nothing matches “${query.trim()}”.` : undefined}
+          >
+            {groupMatches.map(groupRow)}
+            {matches.map(e => (e.kind === 'person' ? personRow(e) : contactRow(e, true)))}
+          </ListSection>
+        ) : (
+          <>
+            <PinnedGrid tiles={pinTiles} />
 
-        <ListSection
-          header="People"
-          separatorInset={64}
-          footer={everyone.length === 0 ? 'People in your groups show up here. Add anyone else you make plans with.' : undefined}
-        >
-          {shownEveryone.map(e => e.kind === 'person' ? (
-            <ListRow
-              key={`u-${e.p.profile.id}`}
-              leading={<Avatar person={e.p.profile} size={32} />}
-              title={e.name}
-              subtitle={e.p.groups.map(g => g.name).join(', ')}
-              chevron={!threeColumn}
-              selected={isSel('person', e.p.profile.id)}
-              onPress={() => setSelection({ kind: 'person', id: e.p.profile.id })}
-            />
-          ) : (
-            <ListRow
-              key={`c-${e.ct.id}`}
-              leading={<Avatar person={{ id: e.ct.id, full_name: e.ct.name }} size={32} />}
-              title={e.name}
-              subtitle={['Not on sheep yet', e.ct.note].filter(Boolean).join(' · ')}
-              trailing={<Button label="Invite" variant="gray" onPress={() => inviteToSheep(e.ct)} />}
-              selected={isSel('contact', e.ct.id)}
-              onPress={() => setSelection({ kind: 'contact', id: e.ct.id })}
-            />
-          ))}
-          {everyone.length > CHUNK ? (
-            <ListRow key="more" title={showAllPeople ? 'Show fewer' : `Show all ${everyone.length}`} tintTitle onPress={() => setShowAllPeople(x => !x)} />
-          ) : null}
-          <ListRow key="add" icon="person-add-outline" title="Add Person" tintTitle onPress={() => openPersonSheet(null)} />
-        </ListSection>
+            {groups.length === 0 ? (
+              <ListSection header="Groups">
+                <ListRow title="Create or join a group" icon="add-circle-outline" tintTitle onPress={openCreate} />
+              </ListSection>
+            ) : listedGroups.length ? (
+              <View>
+                <SectionHeader title="Groups" />
+                <GroupCards
+                  onNew={openCreate}
+                  cards={listedGroups.map(g => ({
+                    group: g,
+                    members: membersByGroup[g.id] ?? [],
+                    active: g.id === activeGroup?.id,
+                    needs: needsOf('group', g.id).length > 0,
+                    selected: !!isSel('group', g.id),
+                    pinItem: { key: 'pin', label: 'Pin', icon: 'pin', onSelect: () => togglePin('group', g.id) },
+                    onPress: () => setSelection({ kind: 'group', id: g.id }),
+                  }))}
+                />
+              </View>
+            ) : null}
+
+            <ListSection
+              header="People"
+              separatorInset={64}
+              footer={everyone.length === 0 ? 'People in your groups show up here. Add anyone else you make plans with.' : undefined}
+            >
+              {onSheep.map(personRow)}
+              {!onSheep.length && people.length ? (
+                <ListRow key="none" title="Everyone’s pinned" subtitle="Unpin someone to see them here." />
+              ) : null}
+            </ListSection>
+
+            <ListSection
+              header="Not on sheep yet"
+              separatorInset={64}
+              footer={notOnSheep.length ? 'Invite them to see shared calendars and get plan invites in the app.' : undefined}
+            >
+              {notOnSheep.map(e => contactRow(e))}
+              <ListRow key="add" icon="person-add-outline" title="Add Person" tintTitle onPress={() => openPersonSheet(null)} />
+            </ListSection>
+          </>
+        )}
       </View>
     </ScrollView>
   );
@@ -277,6 +450,29 @@ export default function PeopleScreen() {
   const selGroup = selection?.kind === 'group' ? groups.find(g => g.id === selection.id) ?? null : null;
   const selContact = selection?.kind === 'contact' ? contacts.find(x => x.id === selection.id) ?? null : null;
   const selPerson = selection?.kind === 'person' ? people.find(x => x.profile.id === selection.id) ?? null : null;
+
+  // On phones the detail is a sheet: let it close before going elsewhere.
+  const closeFirst = (then: () => void) => {
+    if (threeColumn) return then();
+    setSelection(null);
+    setTimeout(then, 450);
+  };
+
+  function openNeed(item: NeedsYouItem) {
+    if (item.notificationId) inbox.markRead([item.notificationId]);
+    closeFirst(() => {
+      if (item.eventId) navigation.navigate('Calendar', { eventId: item.eventId, date: item.date ? keyOf(item.date) : undefined });
+      else if (item.ideaId) navigation.navigate('Plans', { ideaId: item.ideaId });
+    });
+  }
+  const pinRow = (kind: PinKind, id: string, name: string) => (
+    <ListRow
+      icon={isPinned(kind, id) ? 'pin' : 'pin-outline'}
+      title={isPinned(kind, id) ? `Unpin ${name}` : `Pin ${name}`}
+      tintTitle
+      onPress={() => togglePin(kind, id)}
+    />
+  );
 
   let detailBody: React.ReactNode = null;
   let detailTitle = '';
@@ -291,19 +487,23 @@ export default function PeopleScreen() {
         isDemo={isDemo}
         onMakeActive={() => setActiveGroup(selGroup)}
         onLeave={() => leaveGroup(selGroup)}
+        needs={<NeedsYouSection items={needsOf('group', selGroup.id)} onOpen={openNeed} />}
+        pinRow={pinRow('group', selGroup.id, selGroup.name)}
       />
     );
   } else if (selContact) {
     detailTitle = 'Person';
     detailBody = (
       <View style={{ gap: space.l }}>
-        <IdentityHeader person={{ id: selContact.id, full_name: selContact.name }} title={selContact.name} subtitle={selContact.email} />
+        <IdentityHeader person={{ id: selContact.id, full_name: selContact.name, avatar_url: selContact.avatar_url }} title={selContact.name} subtitle={selContact.email} />
         {selContact.note ? (
           <ListSection header="Note"><View style={{ padding: space.m }}><Txt v="body">{selContact.note}</Txt></View></ListSection>
         ) : null}
         <ListSection footer={`${selContact.name.split(' ')[0]} isn’t on sheep yet, so you can’t check their calendar or send them invites in the app.`}>
           <ListRow icon="paper-plane-outline" title="Invite to sheep" tintTitle onPress={() => inviteToSheep(selContact)} />
+          {pinRow('contact', selContact.id, selContact.name.split(' ')[0])}
         </ListSection>
+        <NotesSection ownerId={meId} subject={{ kind: 'contact', id: selContact.id }} isDemo={isDemo} name={selContact.name.split(' ')[0]} />
         <ListSection>
           <ListRow icon="create-outline" title="Edit" tintTitle onPress={() => { if (!threeColumn) setSelection(null); openPersonSheet(selContact); }} />
           <ListRow icon="trash-outline" title="Remove Person" destructive onPress={() => removeContact(selContact)} />
@@ -313,24 +513,16 @@ export default function PeopleScreen() {
   } else if (selPerson) {
     detailTitle = 'Person';
     detailBody = (
-      <View style={{ gap: space.l }}>
-        <IdentityHeader person={selPerson.profile} title={selPerson.profile.full_name ?? selPerson.profile.email} subtitle={selPerson.profile.full_name ? selPerson.profile.email : null} />
-        <ListSection>
-          <ListRow
-            icon="sparkles-outline"
-            title={`Make Plans with ${(selPerson.profile.full_name ?? 'them').split(' ')[0]}`}
-            tintTitle
-            onPress={() => {
-              if (!threeColumn) setSelection(null);
-              const id = selPerson.profile.id;
-              setTimeout(() => composer.newPlan({ people: [id] }), threeColumn ? 0 : 450);
-            }}
-          />
-        </ListSection>
-        <ListSection header="Shared groups">
-          {selPerson.groups.map(g => <ListRow key={g.id} title={g.name} />)}
-        </ListSection>
-      </View>
+      <PersonDetail
+        profile={selPerson.profile}
+        groups={selPerson.groups}
+        meId={meId}
+        isDemo={isDemo}
+        closeFirst={closeFirst}
+        needs={<NeedsYouSection items={needsOf('person', selPerson.profile.id)} onOpen={openNeed} />}
+        pinned={isPinned('person', selPerson.profile.id)}
+        onTogglePin={() => togglePin('person', selPerson.profile.id)}
+      />
     );
   }
 
@@ -373,19 +565,47 @@ export default function PeopleScreen() {
 
 // ─── Pieces ──────────────────────────────────────────────────────────────────
 
-function IdentityHeader({ person, title, subtitle }: { person: AvatarPerson; title: string; subtitle?: string | null }) {
+function PeopleSearch({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const { c } = useTheme();
+  const [focused, setFocused] = useState(false);
   return (
-    <View style={{ alignItems: 'center', gap: space.s, paddingVertical: space.m }}>
-      <Avatar person={person} size={80} />
-      <Txt v="title" align="center">{title}</Txt>
-      {subtitle ? <Txt v="callout" tone="secondary" align="center">{subtitle}</Txt> : null}
+    <View style={{
+      flexDirection: 'row', alignItems: 'center', gap: space.s,
+      height: 36, paddingHorizontal: space.s + space.hair,
+      backgroundColor: c.fill, borderRadius: radius.row,
+      borderWidth: 2, borderColor: focused ? c.tint : 'transparent',
+      ...continuous,
+    }}>
+      <Icon name="search" size={15} color={c.secondaryLabel} />
+      <TextInput
+        value={value}
+        onChangeText={onChange}
+        placeholder="Search people and groups"
+        placeholderTextColor={c.secondaryLabel}
+        autoCorrect={false}
+        autoCapitalize="none"
+        returnKeyType="search"
+        accessibilityLabel="Search people and groups"
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        style={[
+          type.callout,
+          { flex: 1, minWidth: 0, color: c.label, paddingVertical: 0 },
+          Platform.OS === 'web' && ({ outlineStyle: 'none' } as any),
+        ]}
+      />
+      {value ? (
+        <Pressable onPress={() => onChange('')} accessibilityLabel="Clear search" hitSlop={8}>
+          <Icon name="close-circle" size={16} color={c.secondaryLabel} />
+        </Pressable>
+      ) : null}
     </View>
   );
 }
 
-function GroupDetail({ group, isActive, meId, fallbackMembers, isDemo, onMakeActive, onLeave }: {
+function GroupDetail({ group, isActive, meId, fallbackMembers, isDemo, onMakeActive, onLeave, needs, pinRow }: {
   group: Group; isActive: boolean; meId: string | null; fallbackMembers: Profile[]; isDemo: boolean;
-  onMakeActive: () => void; onLeave: () => void;
+  onMakeActive: () => void; onLeave: () => void; needs: React.ReactNode; pinRow: React.ReactNode;
 }) {
   const { c } = useTheme();
   const [members, setMembers] = useState<(Profile & { role?: string })[]>(fallbackMembers);
@@ -415,6 +635,8 @@ function GroupDetail({ group, isActive, meId, fallbackMembers, isDemo, onMakeAct
         {isActive ? <View style={{ flexDirection: 'row' }}><Tag label="Active group" tone="tint" /></View> : null}
       </View>
 
+      {needs}
+
       <View style={{ backgroundColor: c.fill, borderRadius: radius.group, padding: space.m, gap: space.s, ...continuous }}>
         <Txt v="footnote" tone="secondary" semibold style={{ textTransform: 'uppercase', letterSpacing: 0.4 }}>Invite code</Txt>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.m }}>
@@ -440,7 +662,8 @@ function GroupDetail({ group, isActive, meId, fallbackMembers, isDemo, onMakeAct
       </ListSection>
 
       <ListSection>
-        {!isActive ? <ListRow key="active" icon="checkmark-circle-outline" title="Make Active Group" tintTitle onPress={onMakeActive} /> : null}
+        {!isActive && !isDemo ? <ListRow key="active" icon="checkmark-circle-outline" title="Make Active Group" tintTitle onPress={onMakeActive} /> : null}
+        {pinRow}
         <ListRow key="leave" icon="exit-outline" title="Leave Group" destructive onPress={onLeave} />
       </ListSection>
     </View>
