@@ -233,13 +233,13 @@ export function Timeline({ stops }: { stops: Stop[] }) {
   );
 }
 
-// ─── Hero: the sheep, and this week's flock ──────────────────────────────────
+// ─── Hero: the sheep ─────────────────────────────────────────────────────────
 
 /**
  * A sheep you can poke. Tap it and it hops and says something — a summary of
- * your week first, then a rotating pun. Below, the faces you'll see this week.
+ * your week first, then a rotating pun.
  */
-export function Hero({ lines, flock }: { lines: string[]; flock: AvatarPerson[] }) {
+export function Hero({ lines, below }: { lines: string[]; below?: React.ReactNode }) {
   const { c } = useTheme();
   const reduced = useReducedMotion();
   const [i, setI] = useState(0);
@@ -280,14 +280,8 @@ export function Hero({ lines, flock }: { lines: string[]; flock: AvatarPerson[] 
         </Animated.View>
         <Sheep size={30} pose="graze" flip delay={1600} style={{ marginBottom: 2, opacity: 0.7 }} />
       </View>
-      <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: c.separator, marginTop: -space.m }} />
-
-      {flock.length > 0 ? (
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.s }} accessibilityLabel={`You'll see ${flock.length} ${flock.length === 1 ? 'person' : 'people'} this week`}>
-          <AvatarStack people={flock} max={6} size={30} />
-          <Txt v="footnote" tone="secondary">your flock this week</Txt>
-        </View>
-      ) : null}
+      {below}
+      <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: c.separator, marginTop: below ? 0 : -space.m }} />
     </View>
   );
 }

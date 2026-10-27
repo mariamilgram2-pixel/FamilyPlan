@@ -6,8 +6,8 @@
 // next one (birthdays, someone free when you are, people you haven't seen).
 // Activity (the inbox) sits behind the bell; settings behind your avatar.
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, TextInput, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { supabase } from '../../lib/supabase';
 import { DEMO_EVENTS, DEMO_IDEAS, DEMO_MEMBERS, DEMO_ME, isDemoGroup } from '../../lib/demo';
@@ -28,10 +28,12 @@ import { usePlanComposer } from '../../components/PlanComposer';
 import { Sheep } from '../../components/Sheep';
 import {
   Button, EmptyState, IconButton, IconName, ListRow, ListSection, PrimaryAction, ReadingColumn,
-  ScreenHeader, Screen, Sheet, Tappable, Txt, useBottomClearance,
+  ScreenHeader, Screen, Sheet, Tappable, Txt,
 } from '../../components/ui';
 import { NotificationList } from '../ideas/IdeaViews';
 import { Bubble, BubbleRow, Category, Hero, Stop, Timeline, useCollapsed } from './HomeViews';
+import { FieldFlock, useFieldFlockInset } from './FieldFlock';
+import { DescribeField } from '../calendar/EventViews';
 import { addDays, dateKey, keyOf, parseKey, relativeDay, shortDate, timeParts, todayKey } from '../calendar/dates';
 import { space, useLayout, useTheme } from '../../theme';
 
@@ -65,11 +67,10 @@ function nextBirthday(mmdd: string): string {
 export default function HomeScreen() {
   const { user, profile } = useAuth();
   const { activeGroup, groups } = useGroup();
-  const { c } = useTheme();
+  const { c, isDark, toggleColorScheme } = useTheme();
   const { compact } = useLayout();
   const navigation = useNavigation<any>();
   const composer = usePlanComposer();
-  const bottomClearance = useBottomClearance();
   const work = useWorkSchedules();
   const isDemo = isDemoGroup(activeGroup);
   const meId = user?.id ?? (isDemo ? DEMO_ME : null);
@@ -81,6 +82,28 @@ export default function HomeScreen() {
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [loading, setLoading] = useState(true);
   const [inboxOpen, setInboxOpen] = useState(false);
+  const describeInput = useRef<TextInput>(null);
+  const scrollY = useRef(0);
+  const viewH = useRef(0);
+  const [viewport, setViewport] = useState(0);
+  const [stack, setStack] = useState(0);
+  const hill = useFieldFlockInset();
+  // Plain page between the last row and the crest. Grows when the list is
+  // shorter than the screen, so the hill sits at the bottom instead of
+  // cutting through a row. Expanding a section lengthens the stack and the
+  // hill moves down with it.
+  const hillGap = Math.max(space.xxl, viewport - stack - space.l - hill.height);
+  const heroTop = useRef(0);
+  const fieldBox = useRef({ y: 0, height: 0 });
+  const [composerInView, setComposerInView] = useState(true);
+
+  const publishComposer = useCallback(() => {
+    const { y, height } = fieldBox.current;
+    if (!height || !viewH.current) return;
+    const top = heroTop.current + y;
+    const inView = top + height > scrollY.current && top < scrollY.current + viewH.current;
+    setComposerInView(prev => (prev === inView ? prev : inView));
+  }, []);
 
   // ─── Data ──────────────────────────────────────────────────────────────────
   // Your events from the last four months (for "haven't seen") through the
@@ -347,13 +370,35 @@ export default function HomeScreen() {
   // ─── Render ────────────────────────────────────────────────────────────────
   return (
     <Screen>
-      <ReadingColumn contentContainerStyle={{ paddingTop: 0, paddingBottom: bottomClearance, paddingHorizontal: compact ? space.m : space.l }}>
+      <ReadingColumn
+        style={{ flex: 1 }}
+        footer={<FieldFlock />}
+        scrollEventThrottle={16}
+        onLayout={(e) => {
+          viewH.current = e.nativeEvent.layout.height;
+          setViewport(e.nativeEvent.layout.height);
+          publishComposer();
+        }}
+        onScroll={(e) => {
+          scrollY.current = e.nativeEvent.contentOffset.y;
+          viewH.current = e.nativeEvent.layoutMeasurement.height;
+          publishComposer();
+        }}
+        contentContainerStyle={{ paddingTop: 0, paddingBottom: 0, paddingHorizontal: compact ? space.m : space.l }}
+      >
+        <View onLayout={(e) => setStack(e.nativeEvent.layout.height)} style={{ gap: space.l }}>
         <View style={{ marginHorizontal: compact ? -space.m : -space.l, marginBottom: -space.m }}>
           <ScreenHeader
             title={`Hi, ${first(me)}`}
             display
             trailing={
               <>
+                <IconButton
+                  icon={isDark ? 'sunny-outline' : 'moon-outline'}
+                  label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+                  variant="gray"
+                  onPress={toggleColorScheme}
+                />
                 <View>
                   <IconButton
                     icon={inbox.unread ? 'notifications' : 'notifications-outline'}
@@ -375,7 +420,29 @@ export default function HomeScreen() {
           />
         </View>
 
-        <Hero lines={lines} flock={flock} />
+        <View onLayout={(e) => { heroTop.current = e.nativeEvent.layout.y; publishComposer(); }}>
+          <Hero
+            lines={lines}
+            below={(
+              <View onLayout={(e) => { fieldBox.current = { y: e.nativeEvent.layout.y, height: e.nativeEvent.layout.height }; publishComposer(); }}>
+                <DescribeField
+                  inputRef={describeInput}
+                  value=""
+                  autoFocus={false}
+                  labeled={false}
+                  parsed={null}
+                  placeholder="Natasha and I want to try Lilia for dinner"
+                  accessibilityLabel="Describe a plan in your own words"
+                  onChange={(text) => {
+                    if (!text) return;
+                    composer.newPlan({ sentence: text });
+                    describeInput.current?.blur();
+                  }}
+                />
+              </View>
+            )}
+          />
+        </View>
 
         {loading ? <ActivityIndicator color={c.secondaryLabel} /> : null}
 
@@ -411,9 +478,11 @@ export default function HomeScreen() {
             action={{ label: 'New Plan', onPress: () => composer.newPlan() }}
           />
         ) : null}
+        </View>
+        <View style={{ height: hillGap }} />
       </ReadingColumn>
 
-      <PrimaryAction label="New Plan" onPress={() => composer.newPlan()} />
+      <PrimaryAction label="New Plan" hidden={composerInView} onPress={() => composer.newPlan()} />
 
       <Sheet visible={inboxOpen} onClose={closeInbox} title="Activity" cancelLabel="Done">
         <NotificationList items={inbox.items} onOpen={openNotification} />

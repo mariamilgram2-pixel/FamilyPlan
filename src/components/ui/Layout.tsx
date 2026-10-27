@@ -83,18 +83,18 @@ export function ScreenHeader({ title, eyebrow, display, trailing, toolbar, onTit
 
 // ─── Primary action capsule (compact, thumb zone) ────────────────────────────
 
-export function PrimaryAction({ label, icon = 'add', onPress }: { label: string; icon?: IconName; onPress: () => void }) {
+export function PrimaryAction({ label, icon = 'add', onPress, hidden = false }: { label: string; icon?: IconName; onPress: () => void; hidden?: boolean }) {
   const { c } = useTheme();
   const { compact } = useLayout();
   const insets = useSafeAreaInsets();
-  if (!compact) return null;
+  if (!compact || hidden) return null;
   return (
     <Tappable
       feedback="opacity"
       onPress={onPress}
       accessibilityLabel={label}
       style={{
-        position: 'absolute', right: space.m,
+        position: 'absolute', zIndex: 2, right: space.m,
         bottom: TAB_BAR_HEIGHT + insets.bottom + space.m,
         height: 48, paddingHorizontal: space.l, borderRadius: radius.pill,
         flexDirection: 'row', alignItems: 'center', gap: space.s,
@@ -142,17 +142,33 @@ export function SplitView({ list, detail }: { list: React.ReactNode; detail: Rea
 }
 
 /** Scrollable reading column capped at a comfortable measure. */
-export function ReadingColumn({ children, maxWidth = 640, ...rest }: ScrollViewProps & { maxWidth?: number; children: React.ReactNode }) {
+export function ReadingColumn({
+  children,
+  footer,
+  maxWidth = 640,
+  ...rest
+}: ScrollViewProps & { maxWidth?: number; children: React.ReactNode; footer?: React.ReactNode }) {
   const { compact } = useLayout();
+  const column = {
+    padding: compact ? space.m : space.l,
+    gap: space.l,
+    width: '100%' as const,
+    maxWidth,
+    alignSelf: 'center' as const,
+  };
+  // A footer sits after the column, full width of the scroll view, so scenery
+  // can follow the list without being squeezed into the reading measure.
+  if (footer == null) {
+    return (
+      <ScrollView {...rest} contentContainerStyle={[column, rest.contentContainerStyle]}>
+        {children}
+      </ScrollView>
+    );
+  }
   return (
-    <ScrollView
-      {...rest}
-      contentContainerStyle={[
-        { padding: compact ? space.m : space.l, gap: space.l, width: '100%', maxWidth, alignSelf: 'center' },
-        rest.contentContainerStyle,
-      ]}
-    >
-      {children}
+    <ScrollView {...rest} contentContainerStyle={{ width: '100%' }}>
+      <View style={[column, rest.contentContainerStyle]}>{children}</View>
+      {footer}
     </ScrollView>
   );
 }

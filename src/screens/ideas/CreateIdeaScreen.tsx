@@ -198,11 +198,16 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [saving, setSaving] = useState<'propose' | 'save' | 'invite' | 'keep' | null>(null);
   const [loadingPeople, setLoadingPeople] = useState(false);
+  const describeInput = useRef<React.ElementRef<typeof Field>>(null);
 
   // Reset + refetch groups each time the sheet opens so we never render
   // against a stale/empty list from an earlier failed fetch.
   useEffect(() => {
-    if (!visible) return;
+    if (!visible) {
+      setDescribe('');
+      setParsed(null);
+      return;
+    }
     setDescribe(''); setParsed(null); setPickingDate(false); setWhen(ANY_WHEN); setKind(null);
     setEditingTitle(false); setEditingWhen(false); setSuggested(false); setShowWho(false);
     setFilling(false); setShowDetails(false); setRepeat('never'); touched.current.clear(); setPickingTime(false); setTimeText('');
@@ -411,6 +416,21 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
     if (k !== 'trip' && kind === 'trip' && !spanHint(describe)) setPrefs(p => ({ ...p, spanDays: 1 }));
   }
 
+  // Home (and any other entry) can hand over a sentence already being typed.
+  // Parse it the same way a keystroke in this field would. If names load a
+  // moment later, parse again — unless the sentence was edited in the meantime.
+  const describeRef = useRef('');
+  describeRef.current = describe;
+  useEffect(() => {
+    if (!visible || existing) return;
+    const sentence = prefill?.sentence;
+    if (!sentence) return;
+    const current = describeRef.current;
+    if (current && current !== sentence) return;
+    onDescribe(sentence);
+    const focus = setTimeout(() => describeInput.current?.focus(), 50);
+    return () => clearTimeout(focus);
+  }, [visible, prefill?.sentence, nlPeople]);
 
   // ─── Who's involved ────────────────────────────────────────────────────────
   // App users we can notify and whose calendars we can check: picked people,
@@ -1195,6 +1215,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
       {step === 'compose' && (
         <>
           <Field
+            ref={describeInput}
             value={describe}
             onChangeText={onDescribe}
             placeholder={KINDS.find(k => k.key === kind)?.example ?? 'Dinner with Ana this week'}
