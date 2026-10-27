@@ -26,6 +26,7 @@ import { toRRule } from '../lib/recurrence';
 import { useMyPrefs } from '../lib/availabilityPrefs';
 import { SoftPrefs } from '../lib/availability';
 import { WeekendMode } from '../types';
+import { splitPlace, useSavedPlaces } from '../lib/places';
 import { space, useLayout, useTheme } from '../theme';
 
 // User-chosen labels for their own events — content, not chrome.
@@ -69,6 +70,7 @@ export default function ProfileScreen() {
   const bottomClearance = useBottomClearance();
   const isDemo = !user || isDemoGroup(activeGroup);
   const navigation = useNavigation<any>();
+  const savedPlaces = useSavedPlaces(user?.id ?? null, isDemo);
 
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
   const [showEmail, setShowEmail] = useState(false);
@@ -232,6 +234,20 @@ export default function ProfileScreen() {
             onPress={() => setWorkSheet({ editing: null })}
           />
         </ListSection>
+
+        {savedPlaces.saved.length ? (
+          <ListSection header="Saved places" footer="Save a place from Add where when you make a plan." separatorInset={60}>
+            {savedPlaces.saved.map(sp => (
+              <ListRow
+                key={sp.id}
+                icon="bookmark-outline"
+                title={sp.label}
+                subtitle={splitPlace(sp.place).address ?? splitPlace(sp.place).name}
+                trailing={<IconButton icon="trash-outline" label={`Remove ${sp.label}`} onPress={() => savedPlaces.remove(sp.id)} />}
+              />
+            ))}
+          </ListSection>
+        ) : null}
 
         <ListSection header="Notifications">
           <ListRow title="Event invites" trailing={<Toggle label="Event invites" value={notifPrefs.eventInvites} onValueChange={v => setNotif('eventInvites', v)} />} />

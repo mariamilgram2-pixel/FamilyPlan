@@ -70,29 +70,48 @@ export interface SheepPlan { who: string; start: number; end: number }
 
 const dayGap = (a: string, b: string) => Math.round(Math.abs(parseKey(a).getTime() - parseKey(b).getTime()) / 86400000);
 
+/** The days a time covers in the planning zone, first to last (a trip covers several). */
+function slotDays(slot: TimeSlot, timeZone?: string) {
+  const first = keyIn(Date.parse(slot.start), timeZone);
+  const last = keyIn(Math.max(Date.parse(slot.start), Date.parse(slot.end) - 1), timeZone);
+  const out = [first];
+  for (let k = first; k < last && out.length < 62; ) { k = addDays(k, 1); out.push(k); }
+  return out;
+}
+
+const isWeekendDay = (key: string) => { const wd = parseKey(key).getDay(); return wd === 0 || wd === 6; };
+
+/** Touches a Saturday or Sunday, on any of its days. */
 export function isWeekend(slot: TimeSlot, timeZone?: string) {
-  const wd = parseKey(keyIn(Date.parse(slot.start), timeZone)).getDay();
-  return wd === 0 || wd === 6;
+  return slotDays(slot, timeZone).some(isWeekendDay);
 }
 
 /**
  * Per-person Sheep facts for one time, as availability_estimate() takes them:
  * who's busy, who has a plan close by, who'd lose their free weekend day.
+ * A time running several days is close to a plan the day before it starts or
+ * after it ends, and takes a whole weekend when it covers both Sat and Sun.
  */
 export function sheepContext(slot: TimeSlot, people: string[], plans: SheepPlan[], timeZone?: string): EstimateSlot {
   const s = Date.parse(slot.start), e = Date.parse(slot.end);
-  const day = keyIn(s, timeZone);
-  const wd = parseKey(day).getDay();
-  const otherWeekendDay = wd === 6 ? addDays(day, 1) : wd === 0 ? addDays(day, -1) : null;
+  const covered = slotDays(slot, timeZone);
+  const first = covered[0], last = covered[covered.length - 1];
+  // Each weekend it touches: [Sat, Sun].
+  const weekends = Array.from(new Set(covered.filter(isWeekendDay).map(k => (parseKey(k).getDay() === 6 ? k : addDays(k, -1)))))
+    .map(sat => [sat, addDays(sat, 1)] as const);
   const out: EstimateSlot = { start: slot.start, end: slot.end, sheep_busy: [], nearby: {}, weekend_taken: [] };
   people.forEach(id => {
     const theirs = plans.filter(p => p.who === id);
     if (theirs.some(p => p.start < e && p.end > s)) { out.sheep_busy.push(id); return; }
     const planDays = new Set(theirs.flatMap(p => [keyIn(p.start, timeZone), keyIn(p.end - 1, timeZone)]));
-    const gap = Math.min(Infinity, ...Array.from(planDays, d => dayGap(d, day)));
+    const gap = Math.min(Infinity, ...Array.from(planDays, d => (d >= first && d <= last ? 0 : Math.min(dayGap(d, first), dayGap(d, last)))));
     if (gap === 0) out.nearby[id] = 2;
     else if (gap === 1) out.nearby[id] = 1;
-    if (otherWeekendDay && planDays.has(otherWeekendDay)) out.weekend_taken.push(id);
+    const takesWeekend = weekends.some(([sat, sun]) => {
+      const hasSat = covered.includes(sat), hasSun = covered.includes(sun);
+      return (hasSat && hasSun) || (hasSat && planDays.has(sun)) || (hasSun && planDays.has(sat));
+    });
+    if (takesWeekend) out.weekend_taken.push(id);
   });
   return out;
 }

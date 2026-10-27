@@ -209,13 +209,18 @@ function interval(h: DayHours): [number, number] {
   return [a, b];
 }
 
-/** Does [startIso, endIso) overlap work? Also checks yesterday's overnight shift. */
+/**
+ * Does [startIso, endIso) overlap work? Checks every day it touches (a plan
+ * can run several days), plus the overnight shift from the day before.
+ */
 export function workConflict(list: WorkSchedule[], startIso: string, endIso: string): DayHours | null {
   const start = new Date(startIso), end = new Date(endIso);
   const key = dateKey(start);
   const s = start.getHours() * 60 + start.getMinutes();
   const e = s + Math.max(0, (end.getTime() - start.getTime()) / 60000);
-  for (const [k, shift] of [[key, 0], [addDays(key, -1), -1440]] as const) {
+  const days = Math.min(62, Math.ceil(e / 1440));
+  const checks = Array.from({ length: days + 1 }, (_, i) => [addDays(key, i - 1), (i - 1) * 1440] as const);
+  for (const [k, shift] of checks) {
     const w = workOn(list, k);
     if (w?.kind !== 'work') continue;
     const [a, b] = interval(w.hours);

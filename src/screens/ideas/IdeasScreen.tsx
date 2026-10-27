@@ -40,8 +40,9 @@ type AudienceFilter =
   | { kind: 'user'; id: string }
   | { kind: 'contact'; id: string };
 
-type Bucket = 'needsYou' | Stage;
+type Bucket = 'draft' | 'needsYou' | Stage;
 const BUCKETS: { key: Bucket; title: string }[] = [
+  { key: 'draft', title: 'Drafts' },
   { key: 'needsYou', title: 'Needs you' },
   { key: 'dates', title: 'Picking a date' },
   { key: 'idea', title: 'Ideas' },
@@ -251,9 +252,10 @@ export default function PlansScreen() {
   }, [ideas, audienceFilter]);
 
   const sections = useMemo(() => {
-    const by: Record<Bucket, Idea[]> = { needsYou: [], dates: [], idea: [], on: [], happened: [] };
+    const by: Record<Bucket, Idea[]> = { draft: [], needsYou: [], dates: [], idea: [], on: [], happened: [] };
     filtered.forEach(i => {
-      if (awaitingYourDates(i, meId) || readyToSend(i, meId)) by.needsYou.push(i);
+      if (i.status === 'draft') { if (i.created_by === meId) by.draft.push(i); }
+      else if (awaitingYourDates(i, meId) || readyToSend(i, meId)) by.needsYou.push(i);
       else by[stageOf(i)].push(i);
     });
     const when = (i: Idea) => i.proposed_slots?.[0]?.start ?? '';
@@ -378,7 +380,8 @@ export default function PlansScreen() {
           audienceSummary={audienceSummary(item)}
           selected={threeColumn && item.id === selectedId}
           onVote={() => handleVote(item)}
-          onPress={() => setSelectedId(item.id)}
+          // A draft picks up where you left off, in New Plan.
+          onPress={() => (item.status === 'draft' ? composer.planIdea({ idea: item, step: 'compose' }) : setSelectedId(item.id))}
         />
       )}
       renderSectionFooter={({ section }) => section.key === 'happened' && section.total > HAPPENED_SHOWN ? (

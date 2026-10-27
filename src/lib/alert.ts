@@ -46,3 +46,16 @@ export function confirmAction(title: string, message: string, confirmLabel: stri
   }
   return present({ title, message, confirmLabel, cancelLabel, destructive: true });
 }
+
+/** A choice that isn't dangerous: both buttons look ordinary ("Share with Ana" / "Just save"). */
+export function ask(title: string, message: string, confirmLabel: string, cancelLabel: string): Promise<boolean> {
+  if (Platform.OS !== 'web') {
+    return new Promise(resolve => {
+      Alert.alert(title, message, [
+        { text: cancelLabel, style: 'cancel', onPress: () => resolve(false) },
+        { text: confirmLabel, onPress: () => resolve(true) },
+      ], { cancelable: true, onDismiss: () => resolve(false) });
+    });
+  }
+  return present({ title, message, confirmLabel, cancelLabel, destructive: false });
+}

@@ -1,13 +1,11 @@
 // One way to make plans, from anywhere.
 //
-// "New Plan" always opens the same sheet: say what it is and who's in, then
-// either ask the group, find a time that works, or — if you already know
-// when — put it straight on the calendar. Home, Calendar, and Plans all open
+// "New Plan" always opens the same sheet: describe it, fill in what's still
+// open, then find a time, lock it in, ask the group, or save the idea. Home, Calendar, and Plans all open
 // it from here, and refresh when `version` changes. The same provider holds
 // the Add Memories sheet for after an event.
 
 import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
-import { Platform } from 'react-native';
 import { useAuth } from '../contexts/AuthContext';
 import { useGroup } from '../contexts/GroupContext';
 import { DEMO_MEMBERS, DEMO_ME, isDemoGroup, upsertDemoIdea } from '../lib/demo';
@@ -45,9 +43,6 @@ interface PlanComposerValue {
 
 const Ctx = createContext<PlanComposerValue | null>(null);
 
-// iOS can't present a sheet while another is still sliding away.
-const afterSheet = (fn: () => void) => setTimeout(fn, Platform.OS === 'ios' ? 450 : 0);
-
 export function PlanComposerProvider({ children }: { children: React.ReactNode }) {
   const { user, profile } = useAuth();
   const { activeGroup } = useGroup();
@@ -75,12 +70,6 @@ export function PlanComposerProvider({ children }: { children: React.ReactNode }
     changed();
   }
 
-  // "I know when": hand what's been filled in to the event sheet.
-  function knowWhen(prefill: PlanPrefill) {
-    setIdeaSheet(null);
-    afterSheet(() => setEventSheet(prefill));
-  }
-
   const me = profile ?? (isDemo ? DEMO_MEMBERS[0] : null);
 
   return (
@@ -92,7 +81,6 @@ export function PlanComposerProvider({ children }: { children: React.ReactNode }
         prefill={ideaSheet?.prefill}
         onClose={() => setIdeaSheet(null)}
         onSaved={onIdeaSaved}
-        onKnowWhen={knowWhen}
       />
       <EventComposer
         visible={!!eventSheet}
