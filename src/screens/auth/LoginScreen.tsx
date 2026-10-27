@@ -59,8 +59,9 @@ export default function LoginScreen({ navigation }: Props) {
       <FormMessage message={error} />
       <Button label="Sign In" onPress={handleLogin} loading={loading} disabled={!ready} block style={{ marginTop: space.s }} />
       <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-        <Button label="Create Account" variant="plain" onPress={() => navigation.navigate('Signup')} />
-        <Button label="Explore Demo" variant="plain" onPress={() => enterDemo(setActiveGroup)} />
+        {/* Text-style buttons: trim the side padding so both fit on narrow phones. */}
+        <Button label="Create Account" variant="plain" onPress={() => navigation.navigate('Signup')} style={{ paddingHorizontal: space.s }} />
+        <Button label="Explore Demo" variant="plain" onPress={() => enterDemo(setActiveGroup)} style={{ paddingHorizontal: space.s }} />
       </View>
     </AuthLayout>
   );

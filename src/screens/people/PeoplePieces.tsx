@@ -6,7 +6,7 @@ import { ScrollView, View } from 'react-native';
 import { NeedsYouItem } from '../../lib/needsYou';
 import { Group, Profile } from '../../types';
 import AvatarStack from '../../components/AvatarStack';
-import GroupAvatar from '../../components/GroupAvatar';
+import GroupCover, { useCoverInk } from '../../components/GroupCover';
 import { AvatarPerson } from '../../components/Avatar';
 import { Icon, IconName, ListRow, ListSection, Menu, MenuItem, Tappable, Txt } from '../../components/ui';
 import { continuous, radius, space, useLayout, useTheme } from '../../theme';
@@ -20,7 +20,7 @@ export function Dotted({ on, size, ringColor, children }: { on: boolean; size: n
       {children}
       {on ? (
         <View
-          accessibilityLabel="Needs you"
+          accessibilityLabel="Your turn"
           style={{
             position: 'absolute', top: -1, right: -1, width: dot, height: dot, borderRadius: dot / 2,
             backgroundColor: c.tint, borderWidth: 2, borderColor: ringColor ?? c.background,
@@ -61,7 +61,7 @@ export function PinnedGrid({ tiles }: { tiles: PinTile[] }) {
                 onPress={t.onPress}
                 onLongPress={open}
                 feedback="opacity"
-                accessibilityLabel={`${t.label}${t.needs ? ', needs you' : ''}, pinned`}
+                accessibilityLabel={`${t.label}${t.needs ? ', your turn' : ''}, pinned`}
                 style={{ alignItems: 'center', gap: space.s, paddingVertical: space.hair }}
               >
                 <View>
@@ -83,7 +83,7 @@ function CountBadge({ n }: { n: number }) {
   const { c } = useTheme();
   return (
     <View
-      accessibilityLabel={`${n} things need you`}
+      accessibilityLabel={`Your turn: ${n} things`}
       style={{
         position: 'absolute', top: -2, right: -2, minWidth: 24, height: 24, borderRadius: 12, paddingHorizontal: 6,
         alignItems: 'center', justifyContent: 'center', backgroundColor: c.tint, borderWidth: 2, borderColor: c.background,
@@ -102,7 +102,7 @@ function Bubble({ text, tint }: { text: string; tint: boolean }) {
     <View pointerEvents="none" style={{ position: 'absolute', top: -space.m, left: PIN_AVATAR * 0.45, alignItems: 'flex-start' }}>
       <View style={{
         paddingHorizontal: space.s, paddingVertical: 3, borderRadius: radius.pill, backgroundColor: bg, ...continuous,
-        shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 4, shadowOffset: { width: 0, height: 1 }, elevation: 2,
+        shadowColor: c.shadow, shadowOpacity: 0.12, shadowRadius: 4, shadowOffset: { width: 0, height: 1 }, elevation: 2,
       }}>
         <Txt v="caption" tone={tint ? 'onTint' : 'primary'} numberOfLines={1}>{text}</Txt>
       </View>
@@ -114,7 +114,8 @@ function Bubble({ text, tint }: { text: string; tint: boolean }) {
 
 // ─── Group cards ─────────────────────────────────────────────────────────────
 
-const CARD_WIDTH = 156;
+const CARD_WIDTH = 176;
+const CARD_HEIGHT = 132;
 
 export interface GroupCardData {
   group: Group;
@@ -126,12 +127,15 @@ export interface GroupCardData {
   onPress: () => void;
 }
 
-/** Your groups as a row of cards you scroll sideways, ending in "New Group". */
+/**
+ * Your groups as a row of covers you scroll sideways: the group's photo,
+ * blurred, with its name set over it. Ends in "New Group".
+ */
 export function GroupCards({ cards, onNew }: { cards: GroupCardData[]; onNew: () => void }) {
   const { c } = useTheme();
   const { compact } = useLayout();
   const bleed = compact ? space.m : space.s;
-  const card = { width: CARD_WIDTH, padding: space.m, gap: space.s, borderRadius: radius.group, ...continuous };
+  const card = { width: CARD_WIDTH, height: CARD_HEIGHT, borderRadius: radius.group, ...continuous };
   return (
     <ScrollView
       horizontal
@@ -145,20 +149,11 @@ export function GroupCards({ cards, onNew }: { cards: GroupCardData[]; onNew: ()
             <Tappable
               onPress={d.onPress}
               onLongPress={open}
-              selected={d.selected}
-              accessibilityLabel={`${d.group.name}, ${d.members.length} members${d.needs ? ', needs you' : ''}`}
-              style={{ ...card, backgroundColor: d.selected ? undefined : c.fill }}
+              feedback="opacity"
+              accessibilityLabel={`${d.group.name}, ${d.members.length} members${d.needs ? ', your turn' : ''}`}
+              style={[card, d.selected && { borderWidth: 2, borderColor: c.tint, borderRadius: radius.group + 2 }]}
             >
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                <Dotted on={d.needs} size={40} ringColor={c.fill}><GroupAvatar group={d.group} size={40} /></Dotted>
-                {d.members.length ? <AvatarStack people={d.members as AvatarPerson[]} max={3} size={20} ringColor={c.fill} /> : null}
-              </View>
-              <View>
-                <Txt v="headline" numberOfLines={1}>{d.group.name}</Txt>
-                <Txt v="footnote" tone="secondary" numberOfLines={1}>
-                  {`${d.members.length} member${d.members.length === 1 ? '' : 's'}${d.active ? ' · Active' : ''}`}
-                </Txt>
-              </View>
+              <GroupCard data={d} />
             </Tappable>
           )}
         </Menu>
@@ -175,6 +170,30 @@ export function GroupCards({ cards, onNew }: { cards: GroupCardData[]; onNew: ()
         <Txt v="footnote" tone="tint" semibold>New Group</Txt>
       </Tappable>
     </ScrollView>
+  );
+}
+
+function GroupCard({ data: d }: { data: GroupCardData }) {
+  const { c } = useTheme();
+  const { ink, soft } = useCoverInk(d.group);
+  return (
+    <GroupCover group={d.group} style={{ flex: 1, padding: space.m, justifyContent: 'space-between' }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 22 }}>
+        {d.needs ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.hair + 2, paddingHorizontal: space.s, height: 22, borderRadius: radius.pill, backgroundColor: c.tint }}>
+            <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: c.onTint }} />
+            <Txt v="caption" tone="onTint">Your turn</Txt>
+          </View>
+        ) : <View />}
+        {d.members.length ? <AvatarStack people={d.members as AvatarPerson[]} max={3} size={22} ringColor={soft} /> : null}
+      </View>
+      <View>
+        <Txt v="title" numberOfLines={2} style={{ color: ink, fontSize: 22, lineHeight: 26 }}>{d.group.name}</Txt>
+        <Txt v="footnote" numberOfLines={1} style={{ color: soft }}>
+          {`${d.members.length} member${d.members.length === 1 ? '' : 's'}${d.active ? ' · Active' : ''}`}
+        </Txt>
+      </View>
+    </GroupCover>
   );
 }
 
@@ -209,7 +228,7 @@ export function NeedsYouSection({ items, onOpen }: { items: NeedsYouItem[]; onOp
   const { c } = useTheme();
   if (!items.length) return null;
   return (
-    <ListSection header="Needs you" separatorInset={44}>
+    <ListSection header="Your turn" separatorInset={44}>
       {items.map(i => (
         <ListRow
           key={i.key}

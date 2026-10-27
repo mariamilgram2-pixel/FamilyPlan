@@ -31,7 +31,7 @@ import { useGroup } from '../../contexts/GroupContext';
 import { Contact, Event, Group, Idea, Profile } from '../../types';
 import Avatar, { AvatarPerson } from '../../components/Avatar';
 import AvatarStack from '../../components/AvatarStack';
-import GroupAvatar from '../../components/GroupAvatar';
+import GroupCover, { GroupCoverCircle, useCoverInk } from '../../components/GroupCover';
 import { useGroupSheets, useVisibleGroups } from '../../components/GroupSwitcher';
 import { IdentityHeader, NotesSection, PersonDetail } from './PersonDetail';
 import { Dotted, GroupCards, NeedsYouSection, PinnedGrid, PinTile } from './PeoplePieces';
@@ -40,7 +40,7 @@ import {
   Button, EmptyState, Field, Icon, IconButton, ListRow, ListSection, Menu, ReadingColumn,
   ScreenHeader, SectionHeader, Sheet, SplitView, Tag, Txt, useBottomClearance,
 } from '../../components/ui';
-import { continuous, radius, space, tabularNums, type, useLayout, useTheme } from '../../theme';
+import { continuous, eyebrow, radius, space, tabularNums, type, useLayout, useTheme, brand } from '../../theme';
 
 interface PersonEntry {
   profile: Profile;
@@ -313,7 +313,7 @@ export default function PeopleScreen() {
     }];
     if (kind === 'group') {
       const g = groups.find(x => x.id === id);
-      return g ? tile(g.name, size => <GroupAvatar group={g} size={size} />) : [];
+      return g ? tile(g.name, size => <GroupCoverCircle group={g} size={size} />) : [];
     }
     if (kind === 'person') {
       const p = people.find(x => x.profile.id === id)?.profile;
@@ -344,7 +344,7 @@ export default function PeopleScreen() {
   };
   const groupRow = (g: Group) => pinMenu('group', g.id, g.name, open => (
     <ListRow
-      leading={<Dotted on={needsOf('group', g.id).length > 0} size={32} ringColor={c.fill}><GroupAvatar group={g} size={32} /></Dotted>}
+      leading={<Dotted on={needsOf('group', g.id).length > 0} size={32} ringColor={c.fill}><GroupCover group={g} round blur={0} style={{ width: 32, height: 32 }} /></Dotted>}
       title={g.name}
       subtitle={memberLine(g)}
       chevron={!threeColumn}
@@ -571,8 +571,8 @@ function PeopleSearch({ value, onChange }: { value: string; onChange: (v: string
   return (
     <View style={{
       flexDirection: 'row', alignItems: 'center', gap: space.s,
-      height: 36, paddingHorizontal: space.s + space.hair,
-      backgroundColor: c.fill, borderRadius: radius.row,
+      height: 40, paddingHorizontal: space.m,
+      backgroundColor: c.fill, borderRadius: radius.pill,
       borderWidth: 2, borderColor: focused ? c.tint : 'transparent',
       ...continuous,
     }}>
@@ -603,6 +603,25 @@ function PeopleSearch({ value, onChange }: { value: string; onChange: (v: string
   );
 }
 
+/** The group's cover with its name, line, and member count set over it. */
+function GroupHero({ group, isActive, memberCount }: { group: Group; isActive: boolean; memberCount: number }) {
+  const { ink, soft } = useCoverInk(group);
+  return (
+    <GroupCover group={group} blur={4} style={{ minHeight: 184, padding: space.l, justifyContent: 'flex-end', gap: space.hair }}>
+      {isActive ? (
+        <View style={{ position: 'absolute', top: space.m, left: space.m }}>
+          <View style={{ paddingHorizontal: space.s + 2, height: 26, justifyContent: 'center', borderRadius: radius.pill, backgroundColor: brand.coverChip }}>
+            <Txt v="caption" style={{ color: brand.olive }}>Active group</Txt>
+          </View>
+        </View>
+      ) : null}
+      <Txt v="display" accessibilityRole="header" numberOfLines={2} style={{ color: ink }}>{group.name}</Txt>
+      {group.description ? <Txt v="callout" style={{ color: soft }}>{group.description}</Txt> : null}
+      <Txt v="footnote" style={{ color: soft, ...eyebrow }}>{`${memberCount} member${memberCount === 1 ? '' : 's'}`}</Txt>
+    </GroupCover>
+  );
+}
+
 function GroupDetail({ group, isActive, meId, fallbackMembers, isDemo, onMakeActive, onLeave, needs, pinRow }: {
   group: Group; isActive: boolean; meId: string | null; fallbackMembers: Profile[]; isDemo: boolean;
   onMakeActive: () => void; onLeave: () => void; needs: React.ReactNode; pinRow: React.ReactNode;
@@ -629,16 +648,12 @@ function GroupDetail({ group, isActive, meId, fallbackMembers, isDemo, onMakeAct
 
   return (
     <View style={{ gap: space.l }}>
-      <View style={{ gap: space.s }}>
-        <Txt v="title" accessibilityRole="header">{group.name}</Txt>
-        {group.description ? <Txt v="callout" tone="secondary">{group.description}</Txt> : null}
-        {isActive ? <View style={{ flexDirection: 'row' }}><Tag label="Active group" tone="tint" /></View> : null}
-      </View>
+      <GroupHero group={group} isActive={isActive} memberCount={members.length} />
 
       {needs}
 
       <View style={{ backgroundColor: c.fill, borderRadius: radius.group, padding: space.m, gap: space.s, ...continuous }}>
-        <Txt v="footnote" tone="secondary" semibold style={{ textTransform: 'uppercase', letterSpacing: 0.4 }}>Invite code</Txt>
+        <Txt v="footnote" tone="secondary" style={eyebrow}>Invite code</Txt>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.m }}>
           <Txt v="title" selectable style={[tabularNums, { flex: 1, letterSpacing: 4 }]}>{group.invite_code}</Txt>
           <Button label={copied ? 'Copied' : 'Copy'} icon={copied ? 'checkmark' : 'copy-outline'} variant="plain" onPress={copy} />

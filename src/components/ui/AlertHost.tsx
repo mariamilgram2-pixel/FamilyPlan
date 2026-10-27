@@ -41,7 +41,7 @@ export default function AlertHost() {
     <Modal visible transparent animationType="fade" onRequestClose={() => close(false)}>
       <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', padding: space.l }]}>
         <Pressable style={[StyleSheet.absoluteFill, { backgroundColor: c.scrim }]} onPress={() => close(false)} accessibilityLabel="Dismiss" />
-        <Material style={[styles.box, { borderColor: c.separator }]}>
+        <Material style={[styles.box, { borderColor: c.separator, shadowColor: c.shadow }]}>
           <View accessibilityRole="alert" style={{ padding: space.m, gap: space.s, alignItems: 'center' }}>
             <Txt v="headline" align="center">{current.title}</Txt>
             {current.message ? <Txt v="footnote" align="center">{current.message}</Txt> : null}
@@ -72,7 +72,7 @@ const styles = StyleSheet.create({
   box: {
     width: 280, maxWidth: '100%', borderRadius: radius.group, overflow: 'hidden',
     borderWidth: StyleSheet.hairlineWidth, ...continuous,
-    shadowColor: '#000', shadowOpacity: 0.24, shadowRadius: 32, shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.24, shadowRadius: 32, shadowOffset: { width: 0, height: 12 },
   },
   btn: { flex: 1, height: 32, borderRadius: radius.control, alignItems: 'center', justifyContent: 'center', ...continuous },
 });

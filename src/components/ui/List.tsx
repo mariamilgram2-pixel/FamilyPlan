@@ -5,7 +5,7 @@
 import React from 'react';
 import { StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
 import { Icon, IconName, Tappable, Txt } from './primitives';
-import { continuous, radius, space, useLayout, useTheme } from '../../theme';
+import { continuous, eyebrow, radius, space, useLayout, useTheme } from '../../theme';
 
 // ─── Section ─────────────────────────────────────────────────────────────────
 
@@ -57,7 +57,7 @@ export function SectionHeader({ title, action }: { title: string; action?: React
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
       paddingHorizontal: space.m, paddingBottom: space.s, minHeight: 32,
     }}>
-      <Txt v="footnote" tone="secondary" semibold style={{ textTransform: 'uppercase', letterSpacing: 0.4 }}>{title}</Txt>
+      <Txt v="footnote" tone="secondary" style={eyebrow}>{title}</Txt>
       {action}
     </View>
   );

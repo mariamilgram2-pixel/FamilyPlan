@@ -8,7 +8,7 @@ import {
   Text, TextInput, TextInputProps, TextProps, TextStyle, View, ViewStyle,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { continuous, HIT, Palette, radius, space, type, TypeVariant, useLayout, useStyles, useTheme } from '../../theme';
+import { continuous, HIT, Palette, radius, space, type, TypeVariant, useLayout, useStyles, useTheme, weight, brand } from '../../theme';
 
 export type IconName = React.ComponentProps<typeof Ionicons>['name'];
 export { Ionicons as Icon };
@@ -26,6 +26,9 @@ interface TxtProps extends TextProps {
   align?: TextStyle['textAlign'];
 }
 
+// Gloock has one weight; "semibold" only applies to the sans variants.
+const SERIF = new Set<TypeVariant>(['display', 'largeTitle', 'title']);
+
 export function Txt({ v = 'body', tone = 'primary', semibold, align, style, ...rest }: TxtProps) {
   const { c } = useTheme();
   const color =
@@ -36,7 +39,7 @@ export function Txt({ v = 'body', tone = 'primary', semibold, align, style, ...r
   return (
     <Text
       {...rest}
-      style={[type[v], { color }, semibold && { fontWeight: '600' }, align && { textAlign: align }, style]}
+      style={[type[v], { color }, semibold && !SERIF.has(v) && weight('700'), align && { textAlign: align }, style]}
     />
   );
 }
@@ -111,7 +114,7 @@ export function Button({ label, onPress, variant = 'filled', icon, loading, disa
       ) : (
         <>
           {icon && <Ionicons name={icon} size={compact ? 20 : 16} color={fg} />}
-          <Text style={[compact ? type.headline : type.callout, { color: fg, fontWeight: '600' }]}>{label}</Text>
+          <Text style={[compact ? type.headline : type.callout, weight('700'), { color: fg }]}>{label}</Text>
         </>
       )}
     </Tappable>
@@ -124,7 +127,7 @@ const buttonStyles = (_c: Palette) => ({
     alignItems: 'center' as const,
     justifyContent: 'center' as const,
     gap: space.s,
-    borderRadius: radius.row,
+    borderRadius: radius.pill,
     ...continuous,
   },
 });
@@ -206,7 +209,7 @@ export const Field = React.forwardRef<TextInput, FieldProps>(function Field(
             ...continuous,
           },
           multiline && { minHeight: 96, paddingTop: space.s + space.hair, textAlignVertical: 'top' },
-          mono && { fontVariant: ['tabular-nums'], letterSpacing: 4, fontWeight: '600', textAlign: 'center' },
+          mono && { fontVariant: ['tabular-nums'], letterSpacing: 4, ...weight('700'), textAlign: 'center' },
           Platform.OS === 'web' && ({ outlineStyle: 'none' } as any),
           style,
         ]}
@@ -226,14 +229,14 @@ interface SegmentedProps<K extends string> {
 }
 
 export function Segmented<K extends string>({ options, value, onChange, style }: SegmentedProps<K>) {
-  const { c, isDark } = useTheme();
+  const { c } = useTheme();
   const { compact } = useLayout();
   return (
     <View
       accessibilityRole="tablist"
       style={[{
-        flexDirection: 'row', backgroundColor: c.fill, borderRadius: radius.control + 2,
-        padding: 2, height: compact ? 40 : 32, ...continuous,
+        flexDirection: 'row', backgroundColor: c.fill, borderRadius: radius.pill,
+        padding: 3, height: compact ? 42 : 34, ...continuous,
       }, style]}
     >
       {options.map(o => {
@@ -249,18 +252,16 @@ export function Segmented<K extends string>({ options, value, onChange, style }:
             style={[
               {
                 flex: 1, alignItems: 'center', justifyContent: 'center',
-                borderRadius: radius.control, ...continuous,
+                borderRadius: radius.pill, ...continuous,
               },
-              active && {
-                backgroundColor: isDark ? c.separator : c.background,
-                shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 4, shadowOffset: { width: 0, height: 1 },
-              },
+              // The chosen one is a solid olive (sage in dark) pill, like a selected chip.
+              active && { backgroundColor: c.tint },
               webPointer,
             ]}
           >
             <Text
               numberOfLines={1}
-              style={[compact ? type.callout : type.footnote, { color: c.label, fontWeight: active ? '600' : '400' }]}
+              style={[compact ? type.callout : type.footnote, { color: active ? c.onTint : c.label }, weight(active ? '700' : '500')]}
             >
               {o.label}
             </Text>
@@ -281,8 +282,8 @@ export function Toggle({ value, onValueChange, label }: { value: boolean; onValu
       value={value}
       onValueChange={onValueChange}
       trackColor={{ false: c.separator, true: c.tint }}
-      thumbColor="#FFFFFF"
-      {...(Platform.OS === 'web' ? ({ activeThumbColor: '#FFFFFF' } as any) : {})}
+      thumbColor={brand.thumb}
+      {...(Platform.OS === 'web' ? ({ activeThumbColor: brand.thumb } as any) : {})}
     />
   );
 }

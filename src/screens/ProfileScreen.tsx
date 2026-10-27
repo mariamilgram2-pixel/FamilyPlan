@@ -185,7 +185,9 @@ export default function ProfileScreen() {
     if (await confirmAction('Sign out', 'You’ll need to sign in again to see your groups.', 'Sign Out')) signOut();
   }
 
-  const displayName = profile?.full_name || user?.email || 'Guest';
+  // Demo: you're Jordan, as Home and everyone else see you.
+  const demoMe = isDemo ? DEMO_MEMBERS[0] : null;
+  const displayName = profile?.full_name || user?.email || demoMe?.full_name || 'Guest';
   // Demo: Jordan's portrait until you pick your own.
   const myPhoto = avatarUri ?? (isDemo ? DEMO_MEMBERS[0].avatar_url : null);
   const me = { id: user?.id ?? 'me', full_name: displayName, avatar_url: myPhoto };
@@ -204,7 +206,7 @@ export default function ProfileScreen() {
           <ListRow
             leading={<Avatar person={me} size={56} highlight />}
             title={displayName}
-            subtitle={user?.email ?? 'Not signed in'}
+            subtitle={user?.email ?? (demoMe ? 'Demo account' : 'Not signed in')}
             chevron
             onPress={() => setSheet('profile')}
             style={{ minHeight: 80 }}
@@ -303,8 +305,8 @@ export default function ProfileScreen() {
         visible={sheet === 'profile'}
         onClose={() => setSheet(null)}
         isDemo={isDemo}
-        initialName={profile?.full_name ?? ''}
-        initialEmail={user?.email ?? ''}
+        initialName={profile?.full_name ?? demoMe?.full_name ?? ''}
+        initialEmail={user?.email ?? demoMe?.email ?? ''}
         initialBirthday={profile?.birthday ?? (isDemo ? DEMO_MEMBERS[0].birthday ?? null : null)}
         initialAbout={(profile ?? (isDemo ? DEMO_MEMBERS[0] : null))?.about ?? ''}
         initialFavorites={(profile ?? (isDemo ? DEMO_MEMBERS[0] : null))?.favorites ?? []}

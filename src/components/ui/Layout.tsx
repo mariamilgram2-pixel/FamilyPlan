@@ -11,9 +11,11 @@ import { ScrollView, ScrollViewProps, StyleSheet, View, ViewStyle, StyleProp } f
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Icon, IconName, Tappable, Txt } from './primitives';
 import { Menu, MenuSection } from './Overlays';
-import { LIST_WIDTH, radius, space, type, useLayout, useTheme, continuous } from '../../theme';
+import { LIST_WIDTH, radius, space, type, useLayout, useTheme, continuous, eyebrow as eyebrowStyle } from '../../theme';
 
-export const TAB_BAR_HEIGHT = 56;
+/** Room the floating tab bar takes above the safe area: the capsule plus the gap under it. */
+export const TAB_BAR_GAP = 12;
+export const TAB_BAR_HEIGHT = 64 + TAB_BAR_GAP;
 
 // ─── Header ──────────────────────────────────────────────────────────────────
 
@@ -44,7 +46,7 @@ export function ScreenHeader({ title, eyebrow, display, trailing, toolbar, onTit
         v={asToolbar ? 'title' : display ? 'display' : 'largeTitle'}
         numberOfLines={1}
         accessibilityRole="header"
-        style={[{ flexShrink: 1 }, display && asToolbar && { fontFamily: type.display.fontFamily, fontWeight: '600' }]}
+        style={{ flexShrink: 1 }}
       >
         {title}
       </Txt>
@@ -58,7 +60,7 @@ export function ScreenHeader({ title, eyebrow, display, trailing, toolbar, onTit
       paddingBottom: space.s,
       paddingHorizontal: asToolbar ? space.l : space.m,
     }}>
-      {eyebrow ? <Txt v="footnote" tone="secondary" semibold style={{ textTransform: 'uppercase', letterSpacing: 0.4 }}>{eyebrow}</Txt> : null}
+      {eyebrow ? <Txt v="footnote" tone="secondary" style={eyebrowStyle}>{eyebrow}</Txt> : null}
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.s, minHeight: 44 }}>
         {titleMenu ? (
           <View style={{ flexShrink: 1 }}>
@@ -99,7 +101,7 @@ export function PrimaryAction({ label, icon = 'add', onPress, hidden = false }: 
         height: 48, paddingHorizontal: space.l, borderRadius: radius.pill,
         flexDirection: 'row', alignItems: 'center', gap: space.s,
         backgroundColor: c.tint, ...continuous,
-        shadowColor: '#000', shadowOpacity: 0.16, shadowRadius: 12, shadowOffset: { width: 0, height: 4 },
+        shadowColor: c.shadow, shadowOpacity: 0.16, shadowRadius: 12, shadowOffset: { width: 0, height: 4 },
       }}
     >
       <Icon name={icon} size={22} color={c.onTint} />
@@ -179,8 +181,8 @@ export function Tag({ label, tone = 'secondary' }: { label: string; tone?: 'seco
   const { c } = useTheme();
   return (
     <View style={{
-      paddingHorizontal: space.s, height: 24, justifyContent: 'center',
-      borderRadius: radius.control, backgroundColor: tone === 'tint' ? c.tintSoft : c.fill, ...continuous,
+      paddingHorizontal: space.s + 2, height: 26, justifyContent: 'center',
+      borderRadius: radius.pill, backgroundColor: tone === 'tint' ? c.tintSoft : c.fill, ...continuous,
     }}>
       <Txt v="caption" tone={tone === 'tint' ? 'tint' : 'secondary'} numberOfLines={1}>{label}</Txt>
     </View>

@@ -13,7 +13,7 @@ import { usePlanComposer } from './PlanComposer';
 import { PlanComment } from '../types';
 import Avatar, { AvatarPerson } from './Avatar';
 import { Button, Field, IconButton, ListSection, Tappable, Txt } from './ui';
-import { radius, space, useTheme } from '../theme';
+import { radius, space, useTheme, brand } from '../theme';
 
 function ago(iso: string) {
   const min = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
@@ -133,7 +133,7 @@ export default function CommentThread({ eventId, ideaId, planTitle, meId, myName
 
       {/* Full-size photo. */}
       <Modal visible={!!viewing} transparent animationType="fade" onRequestClose={() => setViewing(null)}>
-        <Pressable onPress={() => setViewing(null)} accessibilityLabel="Close photo" style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', alignItems: 'center', justifyContent: 'center' }}>
+        <Pressable onPress={() => setViewing(null)} accessibilityLabel="Close photo" style={{ flex: 1, backgroundColor: brand.photoBackdrop, alignItems: 'center', justifyContent: 'center' }}>
           {viewing ? <Image source={{ uri: viewing }} resizeMode="contain" style={{ width: '100%', height: '80%' }} /> : null}
           <IconButton icon="close" label="Close photo" variant="gray" onPress={() => setViewing(null)} style={{ position: 'absolute', top: space.xl, right: space.m }} />
         </Pressable>

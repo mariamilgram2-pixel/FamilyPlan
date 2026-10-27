@@ -1,12 +1,18 @@
-// Plans
+// Plans: your own planning space, and where you plan with friends.
 //
-// Every plan in one list, grouped by what it needs — not by a status someone
-// has to set. Needs you first (dates to answer, invites ready to send), then
-// plans picking a date, ideas still gathering interest, what's coming up,
-// and what already happened. The audience filter stays behind one menu.
+// Four tabs along the top, each a step a plan moves through. What a plan
+// needs decides where it sits, not a status someone has to set:
+//   Your turn        where friends are waiting on you (dates to answer,
+//                    invites ready to send)
+//   Ideas            brainstorm: ideas gathering interest, as a deck of cover
+//                    cards to swipe through (or "See all" for the list), then
+//                    your drafts. New ideas start here.
+//   Finish planning  picking a date together, then sending the invite
+//   Coming up        booked, and what already happened
+// The audience filter stays behind one menu.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, SectionList, View } from 'react-native';
+import { ActivityIndicator, ScrollView, SectionList, View } from 'react-native';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import { confirmAction, notify } from '../../lib/alert';
 import { supabase } from '../../lib/supabase';
@@ -26,12 +32,13 @@ import GroupSwitcher, { useVisibleGroups } from '../../components/GroupSwitcher'
 import { usePlanComposer } from '../../components/PlanComposer';
 import CommentThread from '../../components/CommentThread';
 import {
-  EmptyState, IconButton, ListRow, Menu, MenuSection, PrimaryAction, ReadingColumn,
-  ScreenHeader, Sheet, SplitView, Txt, useBottomClearance,
+  EmptyState, Icon, IconButton, ListRow, Menu, MenuSection, ReadingColumn,
+  ScreenHeader, Sheet, SplitView, Tappable, Txt, useBottomClearance,
 } from '../../components/ui';
-import { space, useLayout, useTheme } from '../../theme';
+import { continuous, eyebrow, radius, space, tabularNums, useLayout, useTheme } from '../../theme';
 import { Sheep } from '../../components/Sheep';
 import { IdeaDetail, IdeaRow } from './IdeaViews';
+import { IdeaDeck } from './IdeaDeck';
 import { keyOf, shortDate } from '../calendar/dates';
 
 type AudienceFilter =
@@ -43,13 +50,22 @@ type AudienceFilter =
 type Bucket = 'draft' | 'needsYou' | Stage;
 const BUCKETS: { key: Bucket; title: string }[] = [
   { key: 'draft', title: 'Drafts' },
-  { key: 'needsYou', title: 'Needs you' },
+  { key: 'needsYou', title: 'Your turn' },
   { key: 'dates', title: 'Picking a date' },
   { key: 'idea', title: 'Ideas' },
   { key: 'on', title: 'Coming up' },
   { key: 'happened', title: 'Happened' },
 ];
 const HAPPENED_SHOWN = 5;
+
+type TabKey = 'turn' | 'ideas' | 'finish' | 'coming';
+const TABS: { key: TabKey; label: string; buckets: Bucket[] }[] = [
+  { key: 'turn', label: 'Your turn', buckets: ['needsYou'] },
+  { key: 'ideas', label: 'Ideas', buckets: ['draft', 'idea'] },
+  { key: 'finish', label: 'Finish planning', buckets: ['dates'] },
+  { key: 'coming', label: 'Coming up', buckets: ['on', 'happened'] },
+];
+const tabOf = (b: Bucket) => TABS.find(t => t.buckets.includes(b))!.key;
 
 /** Demo ideas follow their events the way the database does: moved or cancelled. */
 function reconcileDemo(i: Idea): Idea {
@@ -79,6 +95,10 @@ export default function PlansScreen() {
   const [audienceFilter, setAudienceFilter] = useState<AudienceFilter>({ kind: 'all' });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showAllHappened, setShowAllHappened] = useState(false);
+  const [chosenTab, setChosenTab] = useState<TabKey | null>(null);   // null: not chosen yet
+  const [ideasAsList, setIdeasAsList] = useState(false);              // Ideas: the deck, or every idea as a list
+  const [deckIndex, setDeckIndex] = useState(0);
+  const jumpTo = useRef<string | null>(null);                         // a plan to open once it's loaded
   const [loading, setLoading] = useState(true);
 
   const fetchAll = useCallback(async () => {
@@ -128,6 +148,7 @@ export default function PlansScreen() {
     const id = route.params?.ideaId;
     if (!id) return;
     setSelectedId(id);
+    jumpTo.current = id;
     navigation.setParams({ ideaId: undefined });
   }, [route.params?.ideaId]);
 
@@ -251,21 +272,45 @@ export default function PlansScreen() {
     return list;
   }, [ideas, audienceFilter]);
 
-  const sections = useMemo(() => {
-    const by: Record<Bucket, Idea[]> = { draft: [], needsYou: [], dates: [], idea: [], on: [], happened: [] };
-    filtered.forEach(i => {
-      if (i.status === 'draft') { if (i.created_by === meId) by.draft.push(i); }
-      else if (awaitingYourDates(i, meId) || readyToSend(i, meId)) by.needsYou.push(i);
-      else by[stageOf(i)].push(i);
-    });
+  const bucketOf = (i: Idea): Bucket | null =>
+    i.status === 'draft' ? (i.created_by === meId ? 'draft' : null)
+    : awaitingYourDates(i, meId) || readyToSend(i, meId) ? 'needsYou'
+    : stageOf(i);
+
+  const by = useMemo(() => {
+    const out: Record<Bucket, Idea[]> = { draft: [], needsYou: [], dates: [], idea: [], on: [], happened: [] };
+    filtered.forEach(i => { const b = bucketOf(i); if (b) out[b].push(i); });
     const when = (i: Idea) => i.proposed_slots?.[0]?.start ?? '';
-    by.idea.sort((a, b) => b.votes - a.votes);
-    by.on.sort((a, b) => when(a).localeCompare(when(b)));
-    by.happened.sort((a, b) => when(b).localeCompare(when(a)));
+    out.idea.sort((a, b) => b.votes - a.votes);
+    out.on.sort((a, b) => when(a).localeCompare(when(b)));
+    out.happened.sort((a, b) => when(b).localeCompare(when(a)));
+    return out;
+  }, [filtered, meId]);
+
+  // Until you pick a tab: Your turn when something's waiting, else Ideas.
+  const tab: TabKey = chosenTab ?? (by.needsYou.length ? 'turn' : 'ideas');
+  const tabCount = (t: TabKey) => TABS.find(x => x.key === t)!.buckets.reduce((n, b) => n + by[b].length, 0);
+
+  // Arriving with a plan to open: show the tab it's in.
+  useEffect(() => {
+    const id = jumpTo.current;
+    const idea = id ? ideas.find(i => i.id === id) : null;
+    const b = idea ? bucketOf(idea) : null;
+    if (!b) return;
+    jumpTo.current = null;
+    setChosenTab(tabOf(b));
+  }, [ideas]);
+
+  // A tab's own groups. On Ideas, the deck shows the ideas themselves, so the
+  // list below holds only drafts, unless you've asked to see all as a list.
+  const deck = tab === 'ideas' && !ideasAsList;
+  const sections = useMemo(() => {
+    const current = TABS.find(t => t.key === tab)!;
     return BUCKETS
+      .filter(b => current.buckets.includes(b.key) && !(deck && b.key === 'idea'))
       .map(b => ({ key: b.key, title: b.title, total: by[b.key].length, data: b.key === 'happened' && !showAllHappened ? by[b.key].slice(0, HAPPENED_SHOWN) : by[b.key] }))
       .filter(s => s.data.length > 0);
-  }, [filtered, meId, showAllHappened]);
+  }, [by, tab, showAllHappened, deck]);
 
   const flat = useMemo(() => sections.flatMap(s => s.data), [sections]);
 
@@ -348,9 +393,7 @@ export default function PlansScreen() {
                   <GroupSwitcher>
                     {(open) => <IconButton icon="people-circle-outline" label={`Group: ${activeGroup?.name ?? 'none'}`} variant="gray" onPress={open} />}
                   </GroupSwitcher>
-                ) : (
-                  <IconButton icon="add" label="New Plan (⌘N)" variant="gray" onPress={() => composer.newPlan()} />
-                )}
+                ) : null}
               </>
             }
           />
@@ -363,14 +406,34 @@ export default function PlansScreen() {
               />
             </View>
           ) : null}
+          <PlanTabs tab={tab} count={tabCount} onChange={(t) => { setChosenTab(t); setSelectedId(null); }} />
+          {tab === 'ideas' ? <NewIdea onPress={() => composer.newPlan()} /> : null}
+          {deck && by.idea.length ? (
+            <View style={{ paddingHorizontal: compact ? space.m : space.l, paddingTop: space.l, gap: space.s }}>
+              <DeckHeader count={by.idea.length} action="See all" onAction={() => setIdeasAsList(true)} />
+              <IdeaDeck
+                ideas={by.idea}
+                index={deckIndex}
+                onIndex={setDeckIndex}
+                onOpen={(i) => setSelectedId(i.id)}
+                onVote={handleVote}
+                voted={hasVoted}
+                votersOf={(i) => (i.idea_votes ?? []).map(v => memberById.get(v.user_id)).filter(Boolean) as AvatarPerson[]}
+              />
+            </View>
+          ) : null}
         </View>
       }
       renderSectionHeader={({ section }) => (
-        <View style={{ paddingHorizontal: space.m, paddingTop: space.m, paddingBottom: space.s }}>
-          <Txt v="headline" accessibilityRole="header" tone={section.key === 'needsYou' ? 'tint' : 'primary'}>
-            {section.title}<Txt v="callout" tone="secondary">{`  ${section.total}`}</Txt>
-          </Txt>
-        </View>
+        tab === 'ideas' && section.key === 'idea' ? (
+          <View style={{ paddingHorizontal: space.m, paddingTop: space.l, paddingBottom: space.s }}>
+            <DeckHeader count={section.total} action="Cards" onAction={() => setIdeasAsList(false)} />
+          </View>
+        ) : sections.length > 1 || section.key === 'draft' ? (
+          <View style={{ paddingHorizontal: space.m, paddingTop: space.l, paddingBottom: space.s }}>
+            <Txt v="footnote" tone="secondary" accessibilityRole="header" style={eyebrow}>{`${section.title} · ${section.total}`}</Txt>
+          </View>
+        ) : <View style={{ height: space.s }} />
       )}
       renderItem={({ item }) => (
         <IdeaRow
@@ -388,13 +451,12 @@ export default function PlansScreen() {
         <ListRow title={showAllHappened ? 'Show fewer' : `Show all ${section.total}`} tintTitle onPress={() => setShowAllHappened(x => !x)} />
       ) : null}
       ListEmptyComponent={
-        loading ? <ActivityIndicator style={{ marginTop: space.xl }} color={c.secondaryLabel} /> : (
+        loading ? <ActivityIndicator style={{ marginTop: space.xl }} color={c.secondaryLabel} /> : tabCount(tab) > 0 ? null : (
           <EmptyState
             icon="bulb-outline"
-            illustration={ideas.length ? undefined : <Sheep size={88} pose="graze" style={{ marginBottom: space.m }} />}
-            title={ideas.length ? 'No plans for them yet' : 'Nothing brewing yet'}
-            body={ideas.length ? 'Try someone else, or make a plan with them.' : 'Float a plan and see who’s in.'}
-            action={{ label: 'New Plan', onPress: () => composer.newPlan() }}
+            illustration={<Sheep size={72} pose="graze" style={{ marginBottom: space.s }} />}
+            title={audienceLabel ? `Nothing here for ${audienceLabel}` : EMPTY[tab].title}
+            body={audienceLabel ? 'Try someone else, or clear the filter.' : EMPTY[tab].body}
           />
         )
       }
@@ -455,7 +517,105 @@ export default function PlansScreen() {
           {selected ? detailFor(selected) : null}
         </Sheet>
       )}
-      <PrimaryAction label="New Plan" onPress={() => composer.newPlan()} />
     </>
+  );
+}
+
+const EMPTY: Record<TabKey, { title: string; body: string }> = {
+  turn: { title: 'Nothing waiting on you', body: 'When friends ask for your dates, or a plan is ready to send, it shows up here.' },
+  ideas: { title: 'Nothing brewing yet', body: 'Float an idea and see who’s in.' },
+  finish: { title: 'Nothing to finish', body: 'Ideas land here once someone suggests dates.' },
+  coming: { title: 'Nothing booked yet', body: 'Plans show up here once the invite goes out.' },
+};
+
+// ─── Tabs ────────────────────────────────────────────────────────────────────
+
+/** The four steps as pills along the top; the chosen one is solid olive. */
+function PlanTabs({ tab, count, onChange }: { tab: TabKey; count: (t: TabKey) => number; onChange: (t: TabKey) => void }) {
+  const { c } = useTheme();
+  const { compact } = useLayout();
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      accessibilityRole="tablist"
+      contentContainerStyle={{ gap: space.s, paddingHorizontal: compact ? space.m : space.l, paddingTop: space.s }}
+    >
+      {TABS.map(t => {
+        const on = t.key === tab;
+        const n = count(t.key);
+        // Your turn calls for attention when something's waiting, even from another tab.
+        const waiting = t.key === 'turn' && n > 0;
+        return (
+          <Tappable
+            key={t.key}
+            feedback="opacity"
+            accessibilityRole="tab"
+            accessibilityState={{ selected: on }}
+            accessibilityLabel={`${t.label}, ${n}`}
+            onPress={() => onChange(t.key)}
+            style={{
+              flexDirection: 'row', alignItems: 'center', gap: space.s - 2,
+              height: 38, paddingLeft: space.m, paddingRight: n ? space.s - 2 : space.m,
+              borderRadius: radius.pill, backgroundColor: on ? c.tint : c.fill, ...continuous,
+            }}
+          >
+            <Txt v="callout" semibold style={{ color: on ? c.onTint : c.label }}>{t.label}</Txt>
+            {n ? (
+              <View style={{
+                minWidth: 24, height: 24, paddingHorizontal: 6, borderRadius: 12, alignItems: 'center', justifyContent: 'center',
+                backgroundColor: on ? c.onTint : waiting ? c.tint : c.background,
+              }}>
+                <Txt v="caption" style={[tabularNums, { color: on ? c.tint : waiting ? c.onTint : c.secondaryLabel }]}>{n}</Txt>
+              </View>
+            ) : null}
+          </Tappable>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
+/** Where new ideas start: a soft dashed card at the top of Ideas. */
+function NewIdea({ onPress }: { onPress: () => void }) {
+  const { c } = useTheme();
+  const { compact } = useLayout();
+  return (
+    <Tappable
+      feedback="opacity"
+      onPress={onPress}
+      accessibilityLabel="New idea"
+      style={{
+        flexDirection: 'row', alignItems: 'center', gap: space.m,
+        marginHorizontal: compact ? space.m : space.l, marginTop: space.m, padding: space.m,
+        borderRadius: radius.group, borderWidth: 1.5, borderStyle: 'dashed', borderColor: c.tint,
+        backgroundColor: c.tintSoft, ...continuous,
+      }}
+    >
+      <View style={{ width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: c.tint }}>
+        <Icon name="add" size={22} color={c.onTint} />
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Txt v="headline" style={{ color: c.tint }}>New idea</Txt>
+        <Txt v="footnote" tone="secondary">Float something and see who’s in</Txt>
+      </View>
+      <Icon name="sparkles" size={18} color={c.tint} />
+    </Tappable>
+  );
+}
+
+/** "IDEAS · 3" with a switch between the deck and the list. */
+function DeckHeader({ count, action, onAction }: { count: number; action: string; onAction: () => void }) {
+  const { c } = useTheme();
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+      <Txt v="footnote" tone="secondary" accessibilityRole="header" style={eyebrow}>{`Ideas · ${count}`}</Txt>
+      <Tappable feedback="opacity" onPress={onAction} accessibilityLabel={action === 'See all' ? 'See all ideas as a list' : 'Show ideas as cards'} style={{ paddingVertical: space.hair, paddingHorizontal: space.s, marginRight: -space.s }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+          <Txt v="footnote" semibold style={{ color: c.tint }}>{action}</Txt>
+          <Icon name={action === 'See all' ? 'chevron-forward' : 'albums-outline'} size={14} color={c.tint} />
+        </View>
+      </Tappable>
+    </View>
   );
 }

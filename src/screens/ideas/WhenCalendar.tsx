@@ -7,7 +7,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Platform, Pressable, View } from 'react-native';
 import { Button, Field, IconButton, Menu, Tappable, Icon, Txt } from '../../components/ui';
-import { continuous, space, tabularNums, useTheme } from '../../theme';
+import { continuous, space, tabularNums, useTheme, weight } from '../../theme';
 import { addDays, dateKey, keyOf, parseKey, shortDate } from '../calendar/dates';
 import { CalendarView as View_, readOther, startOfWeek } from '../../lib/planWhen';
 import { Event } from '../../types';
@@ -141,7 +141,7 @@ export default function WhenCalendar({ range, selected, today, onPick, events, o
                       style={[tabularNums, {
                         color: isSel ? c.onTint : c.label,
                         opacity: past ? 0.25 : inside ? 1 : 0.4,
-                        fontWeight: isSel || isToday ? '600' : '400',
+                        ...weight(isSel || isToday ? '700' : '500'),
                       }]}
                     >
                       {d.getDate()}

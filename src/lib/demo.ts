@@ -170,6 +170,10 @@ export const DEMO_IDEAS: Idea[] = [
   idea('i3', 'Pottery class', null, 'proposed', ['demo-ana'], DEMO_ME, ['demo-ana', 'demo-chloe'], 1),
   idea('i4', 'Visit the aquarium', 'Kids are asking. Weekday mornings are quieter.', 'planned', [DEMO_ME, 'demo-ben', 'demo-chloe'], 'demo-ben', [], 20, 3),
   idea('i5', 'Board game marathon', null, 'done', ['demo-dev', 'demo-eli'], 'demo-dev', [], 40, 30),
+  // More ideas gathering interest, so the Ideas deck has cards to swipe through.
+  idea('i6', 'Fall foliage weekend in Vermont', 'Rent a farmhouse, cider donuts, maybe a covered bridge or two.', 'proposed', ['demo-ben', DEMO_ME, 'demo-ana'], 'demo-ben', [], 3),
+  idea('i7', 'Sunrise hike to the fire tower', 'Short but steep. Thermos of coffee at the top.', 'proposed', ['demo-ana', 'demo-dev'], 'demo-ana', [], 5),
+  idea('i8', 'Coffee crawl in the West Village', 'Four cafés, one afternoon, rank them all.', 'proposed', ['demo-chloe'], 'demo-chloe', [], 2),
 ];
 
 // Date options waiting on votes: one you proposed, one waiting on you.
@@ -218,6 +222,16 @@ export const DEMO_COMMENTS: PlanComment[] = [
   { id: 'm6', event_id: 'e8', idea_id: null, user_id: DEMO_ME, body: '', photo_urls: [photo('brunch', 1), photo('brunch', 2)], created_at: ago(2 * 1440) },
   { id: 'm7', event_id: 'e14', idea_id: null, user_id: 'demo-hana', body: 'Sent the V4!', photo_urls: [photo('climb', 1), photo('climb', 2)], created_at: ago(10 * 1440) },
 ];
+
+// Cover photos for demo groups, by id. Looked up rather than stored on the
+// group, so a demo group saved before photos existed still gets one.
+const unsplash = (id: string) => `https://images.unsplash.com/photo-${id}?w=800&q=70&auto=format&fit=crop`;
+export const DEMO_GROUP_PHOTOS: Record<string, string> = {
+  [DEMO_GROUP_ID]: unsplash('1511795409834-ef04bbd61622'),   // a dinner table with flowers
+  'demo-books': unsplash('1481627834876-b7833e8f5570'),      // a warm library
+  'demo-climb': unsplash('1564769662533-4f00a87b4056'),      // a climbing gym
+  'demo-soccer': unsplash('1574629810360-7efbbe195018'),     // a ball on grass
+};
 
 /** Extra demo groups, so the invite picker has more than one to choose from. */
 export const DEMO_EXTRA_GROUPS: { group: Group; memberIds: string[] }[] = [

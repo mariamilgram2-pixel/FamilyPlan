@@ -28,7 +28,7 @@ import { AvatarPerson } from '../../components/Avatar';
 import AvatarStack from '../../components/AvatarStack';
 import { useGroupSheets, useVisibleGroups } from '../../components/GroupSwitcher';
 import { Sheep } from '../../components/Sheep';
-import GroupAvatar from '../../components/GroupAvatar';
+import GroupCover from '../../components/GroupCover';
 import {
   EmptyState, Icon, IconButton, ListRow, Menu, MenuSection, PrimaryAction, ReadingColumn, ScreenHeader,
   Segmented, Sheet, SplitView, Tappable, Toggle, Txt, useBottomClearance,
@@ -503,7 +503,7 @@ export default function CalendarScreen() {
     {
       title: 'Shared calendars',
       items: sharedCalendars.map(g => ({
-        key: g.id, label: g.name, leading: <GroupAvatar group={g} size={24} />,
+        key: g.id, label: g.name, leading: <GroupCover group={g} round blur={0} style={{ width: 24, height: 24 }} />,
         checked: scope === 'group' && g.id === viewGroup?.id,
         onSelect: () => openCalendar(g),
       })),
@@ -546,7 +546,7 @@ export default function CalendarScreen() {
   const needsCount = needsTargets.length;
   const needsBell = (
     <Menu
-      title={needsCount ? 'Needs you' : undefined}
+      title={needsCount ? 'Your turn' : undefined}
       sections={needsCount
         ? [
           { title: awaiting.length ? 'Waiting on your reply' : undefined, items: needsTargets.filter(t => !t.key.startsWith('idea:')) },
@@ -558,7 +558,7 @@ export default function CalendarScreen() {
         <View>
           <IconButton
             icon={needsCount ? 'notifications' : 'notifications-outline'}
-            label={needsCount ? `Needs you: ${needsCount} item${needsCount === 1 ? '' : 's'}` : 'Needs you: nothing right now'}
+            label={needsCount ? `Your turn: ${needsCount} item${needsCount === 1 ? '' : 's'}` : 'Your turn: nothing right now'}
             variant="gray"
             onPress={open}
           />
@@ -577,7 +577,7 @@ export default function CalendarScreen() {
     <ScreenHeader
       title={scope === 'mine' ? 'My calendar' : viewGroup?.name ?? 'Shared calendar'}
       titleAccessibilityLabel={scope === 'group' && viewGroup ? `${viewGroup.name}, shared calendar` : undefined}
-      titleLeading={scope === 'group' && viewGroup ? <GroupAvatar group={viewGroup} size={38} /> : undefined}
+      titleLeading={scope === 'group' && viewGroup ? <GroupCover group={viewGroup} round blur={0} style={{ width: 38, height: 38 }} /> : undefined}
       titleMenu={{ sections: calendarMenu, title: 'Show calendar' }}
       display
       trailing={

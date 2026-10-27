@@ -10,6 +10,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@expo-google-fonts/gloock": "^0.4.2",
+    "@expo-google-fonts/manrope": "^0.4.2",
     "@expo/vector-icons": "^15.0.2",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-navigation/bottom-tabs": "^7.21.0",
@@ -20,6 +22,7 @@
     "expo-blur": "~57.0.3",
     "expo-clipboard": "~57.0.2",
     "expo-document-picker": "~57.0.3",
+    "expo-font": "~57.0.4",
     "expo-image-picker": "~57.0.20",
     "expo-secure-store": "~57.0.4",
     "expo-splash-screen": "~57.0.10",

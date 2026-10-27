@@ -27,13 +27,12 @@ import Avatar, { AvatarPerson } from '../../components/Avatar';
 import { usePlanComposer } from '../../components/PlanComposer';
 import { Sheep } from '../../components/Sheep';
 import {
-  Button, EmptyState, IconButton, IconName, ListRow, ListSection, PrimaryAction, ReadingColumn,
+  Button, EmptyState, IconButton, IconName, ListRow, ListSection, ReadingColumn,
   ScreenHeader, Screen, Sheet, Tappable, Txt,
 } from '../../components/ui';
 import { NotificationList } from '../ideas/IdeaViews';
-import { Bubble, BubbleRow, Category, Hero, Stop, Timeline, useCollapsed } from './HomeViews';
-import { FieldFlock, useFieldFlockInset } from './FieldFlock';
-import { DescribeField } from '../calendar/EventViews';
+import { Bubble, BubbleRow, Hero, PlanBar, Stop, TileGrid, TilePanel, TileSpec, Timeline, useOpenTile } from './HomeViews';
+import { ART, FieldFlock, useFieldFlockInset } from './FieldFlock';
 import { addDays, dateKey, keyOf, parseKey, relativeDay, shortDate, timeParts, todayKey } from '../calendar/dates';
 import { space, useLayout, useTheme } from '../../theme';
 
@@ -83,8 +82,6 @@ export default function HomeScreen() {
   const [loading, setLoading] = useState(true);
   const [inboxOpen, setInboxOpen] = useState(false);
   const describeInput = useRef<TextInput>(null);
-  const scrollY = useRef(0);
-  const viewH = useRef(0);
   const [viewport, setViewport] = useState(0);
   const [stack, setStack] = useState(0);
   const hill = useFieldFlockInset();
@@ -93,17 +90,6 @@ export default function HomeScreen() {
   // cutting through a row. Expanding a section lengthens the stack and the
   // hill moves down with it.
   const hillGap = Math.max(space.xxl, viewport - stack - space.l - hill.height);
-  const heroTop = useRef(0);
-  const fieldBox = useRef({ y: 0, height: 0 });
-  const [composerInView, setComposerInView] = useState(true);
-
-  const publishComposer = useCallback(() => {
-    const { y, height } = fieldBox.current;
-    if (!height || !viewH.current) return;
-    const top = heroTop.current + y;
-    const inView = top + height > scrollY.current && top < scrollY.current + viewH.current;
-    setComposerInView(prev => (prev === inView ? prev : inView));
-  }, []);
 
   // ─── Data ──────────────────────────────────────────────────────────────────
   // Your events from the last four months (for "haven't seen") through the
@@ -266,8 +252,6 @@ export default function HomeScreen() {
   const hhmm = (iso: string) => { const d = new Date(iso); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
   const shortTime = (iso: string) => { const { hm, ampm } = timeParts(iso); return `${hm.replace(':00', '')} ${ampm}`; };
   const nothing = !todos.length && !upNext.length && !recent.length && !reconnect.length && !freeTogether.length && !birthdays.length;
-  const { collapsed, toggle } = useCollapsed();
-  const isOpen = (k: string) => !collapsed.has(k);
 
   // ─── Pieces ────────────────────────────────────────────────────────────────
   const stops: Stop[] = upNext.map(e => {
@@ -367,23 +351,24 @@ export default function HomeScreen() {
     'No sheepish excuses this week.',
   ];
 
+  // ─── Tiles ─────────────────────────────────────────────────────────────────
+  // Four rounded tiles, each with a sheep from the hillside in a matching pose.
+  const tiles: TileSpec[] = [
+    { key: 'needs', title: 'Your turn', sheep: ART.standing3, count: todos.length, empty: 'All caught up', accent: true },
+    { key: 'upcoming', title: 'Coming up', sheep: ART.grazing2, count: stops.length, empty: 'Nothing planned' },
+    { key: 'recent', title: 'How was it?', sheep: ART.lying1, count: memories.length, empty: 'No new memories' },
+    { key: 'nudges', title: 'Make plans', sheep: ART.sitting1, count: nudges.length, empty: 'Ideas soon' },
+  ];
+  const { open: openTile, toggle: toggleTile } = useOpenTile(tiles.find(t => t.count > 0)?.key ?? null);
+  const openSpec = tiles.find(t => t.key === openTile && t.count > 0) ?? null;
+
   // ─── Render ────────────────────────────────────────────────────────────────
   return (
     <Screen>
       <ReadingColumn
         style={{ flex: 1 }}
         footer={<FieldFlock />}
-        scrollEventThrottle={16}
-        onLayout={(e) => {
-          viewH.current = e.nativeEvent.layout.height;
-          setViewport(e.nativeEvent.layout.height);
-          publishComposer();
-        }}
-        onScroll={(e) => {
-          scrollY.current = e.nativeEvent.contentOffset.y;
-          viewH.current = e.nativeEvent.layoutMeasurement.height;
-          publishComposer();
-        }}
+        onLayout={(e) => setViewport(e.nativeEvent.layout.height)}
         contentContainerStyle={{ paddingTop: 0, paddingBottom: 0, paddingHorizontal: compact ? space.m : space.l }}
       >
         <View onLayout={(e) => setStack(e.nativeEvent.layout.height)} style={{ gap: space.l }}>
@@ -420,55 +405,35 @@ export default function HomeScreen() {
           />
         </View>
 
-        <View onLayout={(e) => { heroTop.current = e.nativeEvent.layout.y; publishComposer(); }}>
-          <Hero
-            lines={lines}
-            below={(
-              <View onLayout={(e) => { fieldBox.current = { y: e.nativeEvent.layout.y, height: e.nativeEvent.layout.height }; publishComposer(); }}>
-                <DescribeField
-                  inputRef={describeInput}
-                  value=""
-                  autoFocus={false}
-                  labeled={false}
-                  parsed={null}
-                  placeholder="Natasha and I want to try Lilia for dinner"
-                  accessibilityLabel="Describe a plan in your own words"
-                  onChange={(text) => {
-                    if (!text) return;
-                    composer.newPlan({ sentence: text });
-                    describeInput.current?.blur();
-                  }}
-                />
-              </View>
-            )}
-          />
-        </View>
+        {/* Planning starts in the bar under the sheep; Home has no floating New Plan
+            button, so nothing covers the flock on the hill. */}
+        <Hero
+          lines={lines}
+          below={(
+            <PlanBar
+              inputRef={describeInput}
+              onType={(text) => {
+                composer.newPlan({ sentence: text });
+                describeInput.current?.blur();
+              }}
+              onOpen={() => composer.newPlan()}
+            />
+          )}
+        />
 
         {loading ? <ActivityIndicator color={c.secondaryLabel} /> : null}
 
-        {todos.length > 0 && (
-          <Category title="Needs you" icon="flash" accent count={todos.length} open={isOpen('needs')} onToggle={() => toggle('needs')}>
-            <BubbleRow items={todos} />
-          </Category>
-        )}
-
-        {stops.length > 0 && (
-          <Category title="Coming up" icon="calendar" count={stops.length} open={isOpen('upcoming')} onToggle={() => toggle('upcoming')}>
-            <Timeline stops={stops} />
-          </Category>
-        )}
-
-        {memories.length > 0 && (
-          <Category title="How was it?" icon="heart" count={memories.length} open={isOpen('recent')} onToggle={() => toggle('recent')}>
-            <BubbleRow items={memories} />
-          </Category>
-        )}
-
-        {nudges.length > 0 && (
-          <Category title="Make plans" icon="sparkles" count={nudges.length} open={isOpen('nudges')} onToggle={() => toggle('nudges')}>
-            <BubbleRow items={nudges} />
-          </Category>
-        )}
+        {!nothing ? (
+          <>
+            <TileGrid tiles={tiles} open={openTile} onToggle={toggleTile} />
+            {openSpec ? (
+              <TilePanel title={openSpec.title} onClose={() => toggleTile(openSpec.key)}>
+                {openSpec.key === 'upcoming' ? <Timeline stops={stops} />
+                  : <BubbleRow items={openSpec.key === 'needs' ? todos : openSpec.key === 'recent' ? memories : nudges} />}
+              </TilePanel>
+            ) : null}
+          </>
+        ) : null}
 
         {nothing && !loading ? (
           <EmptyState
@@ -482,7 +447,6 @@ export default function HomeScreen() {
         <View style={{ height: hillGap }} />
       </ReadingColumn>
 
-      <PrimaryAction label="New Plan" hidden={composerInView} onPress={() => composer.newPlan()} />
 
       <Sheet visible={inboxOpen} onClose={closeInbox} title="Activity" cancelLabel="Done">
         <NotificationList items={inbox.items} onOpen={openNotification} />

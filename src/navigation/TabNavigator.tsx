@@ -2,8 +2,8 @@
 //
 // One navigator, two presentations of the same four destinations — Home,
 // Calendar, Plans, People:
-//   compact  → translucent tab bar anchored to the bottom (thumb zone);
-//              settings ("You") open from your avatar on Home
+//   compact  → a floating olive capsule just above the bottom edge (thumb
+//              zone); settings ("You") open from your avatar on Home
 //   sidebar  → a left source list with sections, your groups, and your
 //              account pinned bottom-left (macOS / iPadOS convention)
 // Desktop also gets ⌘1–⌘4 to jump between sections. The New Plan sheet
@@ -21,7 +21,7 @@ import PeopleScreen from '../screens/people/PeopleScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import Avatar from '../components/Avatar';
 import { useGroupSheets, useVisibleGroups } from '../components/GroupSwitcher';
-import { Icon, IconButton, IconName, Material, Menu, SectionHeader, TAB_BAR_HEIGHT, Tappable, Txt } from '../components/ui';
+import { Icon, IconButton, IconName, Menu, SectionHeader, TAB_BAR_GAP, TAB_BAR_HEIGHT, Tappable, Txt } from '../components/ui';
 import { useAuth } from '../contexts/AuthContext';
 import { useGroup } from '../contexts/GroupContext';
 import { modKey } from '../lib/shortcuts';
@@ -59,16 +59,22 @@ export default function TabNavigator() {
 // ─── Compact: bottom tab bar ─────────────────────────────────────────────────
 
 function TabBar({ state, navigation }: BottomTabBarProps) {
-  const { c } = useTheme();
+  const { c, isDark } = useTheme();
   const insets = useSafeAreaInsets();
+  // The selected tab sits in a cream (or, in dark, sage) pill.
+  const bar = c.tabBar;
+  const idle = c.tabIdle;
   return (
-    <Material style={[styles.tabBar, { paddingBottom: insets.bottom, borderTopColor: c.separator }]}>
-      <View accessibilityRole="tablist" style={styles.tabRow}>
+    <View pointerEvents="box-none" style={[styles.tabBarWrap, { bottom: insets.bottom + TAB_BAR_GAP }]}>
+      <View
+        accessibilityRole="tablist"
+        style={[styles.tabRow, { backgroundColor: bar, borderColor: isDark ? c.separator : 'transparent', shadowColor: c.shadow }]}
+      >
         {state.routes.map((route, i) => {
           const d = DESTINATIONS.find(x => x.name === route.name);
           if (!d) return null;   // "You" opens from your avatar on Home
           const focused = state.index === i;
-          const color = focused ? c.tint : c.secondaryLabel;
+          const color = focused ? (isDark ? c.onTint : c.tint) : idle;
           return (
             <Tappable
               key={route.key}
@@ -80,15 +86,15 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
                 const e = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
                 if (!focused && !e.defaultPrevented) navigation.navigate(route.name);
               }}
-              style={styles.tabItem}
+              style={[styles.tabItem, focused && { backgroundColor: isDark ? c.tint : c.background }]}
             >
-              <Icon name={focused ? d.iconActive : d.icon} size={24} color={color} />
-              <Txt v="caption" style={{ color, fontWeight: focused ? '600' : '400' }}>{d.label}</Txt>
+              <Icon name={focused ? d.iconActive : d.icon} size={20} color={color} />
+              <Txt v="caption" style={{ color }}>{d.label}</Txt>
             </Tappable>
           );
         })}
       </View>
-    </Material>
+    </View>
   );
 }
 
@@ -123,7 +129,7 @@ function Sidebar({ state, navigation }: BottomTabBarProps) {
   return (
     <View style={[styles.sidebar, { backgroundColor: c.fill, paddingTop: insets.top + space.m, borderRightColor: c.separator }]}>
       <View style={styles.brand}>
-        <Txt v="title" style={{ fontFamily: Platform.select({ web: 'ui-serif, "New York", Georgia, serif', ios: 'Georgia' }), fontWeight: '600' }}>sheep</Txt>
+        <Txt v="title">sheep</Txt>
       </View>
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: space.s, paddingBottom: space.m }}>
@@ -216,12 +222,17 @@ function SidebarItem({ label, icon, iconSize = 18, selected, checked, hint, onPr
 }
 
 const styles = StyleSheet.create({
-  tabBar: {
-    position: 'absolute', left: 0, right: 0, bottom: 0,
-    borderTopWidth: StyleSheet.hairlineWidth,
+  tabBarWrap: { position: 'absolute', left: 0, right: 0, alignItems: 'center', paddingHorizontal: space.m },
+  tabRow: {
+    flexDirection: 'row', alignItems: 'center', gap: space.hair,
+    height: TAB_BAR_HEIGHT - TAB_BAR_GAP, padding: space.s - 2, borderRadius: radius.pill, borderWidth: 1,
+    width: '100%', maxWidth: 360, ...continuous,
+    shadowOpacity: 0.18, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 8,
   },
-  tabRow: { flexDirection: 'row', height: TAB_BAR_HEIGHT },
-  tabItem: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 2 },
+  tabItem: {
+    flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center', gap: 1,
+    borderRadius: radius.pill, ...continuous,
+  },
 
   sidebar: {
     position: 'absolute', left: 0, top: 0, bottom: 0, width: SIDEBAR_WIDTH,

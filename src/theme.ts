@@ -1,8 +1,12 @@
 // Design tokens for sheep.
 //
+// Warm and editorial: a cream page, deep olive for actions, soft sage for
+// highlights, a bold serif (Gloock) for titles, and a clean geometric sans
+// (Manrope) for everything else. Dark mode is warm charcoal with sage.
+//
 // The palette is deliberately tiny: one tint, one background, one container
 // fill, and two label levels. Everything else (separators, materials, pressed
-// states) is derived from those by opacity, so light and dark stay in lockstep.
+// states) is derived from those, so light and dark stay in lockstep.
 // All text/background pairs below clear WCAG AA (4.5:1).
 
 import { useMemo } from 'react';
@@ -23,36 +27,64 @@ export type Palette = {
   material: string;        // translucent bar surface (paired with blur)
   scrim: string;
   danger: string;          // system red, reserved for destructive actions
+  // Chrome.
+  tabBar: string;          // the floating tab bar's capsule
+  tabIdle: string;         // unselected tabs on it
+  shadow: string;          // warm, never pure black
 };
 
+/**
+ * Brand colors that stay the same in light and dark, because what's under
+ * them doesn't change: photos (covers are dimmed the same either way) and
+ * the hillside drawings.
+ */
+export const brand = {
+  olive: '#3E4A2E',                         // the tint, for olive type on cream chips over photos
+  onCover: '#F7F2E8',                       // cream type on a photo cover
+  onCoverSoft: 'rgba(247,242,232,0.82)',    // its secondary lines
+  coverGlass: 'rgba(247,242,232,0.22)',     // a frosted pill on a cover
+  coverChip: 'rgba(247,242,232,0.92)',      // a solid cream chip on a cover ("+3", "I'm in")
+  coverShade: (alpha: number) => `rgba(32,27,18,${alpha})`,   // dims a photo so type reads
+  meadow: '#DCECC8',                        // the hillside and the sheep's meadow circles
+  meadowCrest: '#4F7338',                   // the line along the top of the hill
+  photoBackdrop: 'rgba(0,0,0,0.92)',        // behind a photo opened full screen
+  thumb: '#FFFFFF',                         // a switch's knob
+} as const;
+
 const light: Palette = {
-  tint: '#3A7A3A',
-  onTint: '#FFFFFF',
-  background: '#f7f7f7',
-  fill: '#F2F2F7',
-  label: '#1C1C1E',
-  secondaryLabel: '#6C6C70',
-  separator: 'rgba(60,60,67,0.18)',
-  pressed: 'rgba(60,60,67,0.08)',
-  tintSoft: 'rgba(58,122,58,0.12)',
-  material: 'rgba(255,255,255,0.78)',
-  scrim: 'rgba(0,0,0,0.32)',
-  danger: '#D70015',
+  tint: '#3E4A2E',          // deep olive
+  onTint: '#F4EFE6',
+  background: '#F4EFE6',    // cream
+  fill: '#EAE3D6',          // a shade deeper: cards, inputs
+  label: '#23261D',
+  secondaryLabel: '#6B675B',
+  separator: 'rgba(62,52,30,0.13)',
+  pressed: 'rgba(62,52,30,0.07)',
+  tintSoft: '#DCE3C8',      // sage: selection, tags, highlights
+  material: 'rgba(244,239,230,0.86)',
+  scrim: 'rgba(30,26,18,0.36)',
+  danger: '#B3261E',
+  tabBar: '#3E4A2E',
+  tabIdle: 'rgba(244,239,230,0.72)',
+  shadow: '#1E1A12',
 };
 
 const dark: Palette = {
-  tint: '#7DC67A',
-  onTint: '#000000',
-  background: '#000000',
-  fill: '#1C1C1E',
-  label: '#FFFFFF',
-  secondaryLabel: '#A1A1A6',
-  separator: 'rgba(84,84,88,0.6)',
-  pressed: 'rgba(235,235,245,0.10)',
-  tintSoft: 'rgba(125,198,122,0.18)',
-  material: 'rgba(22,22,24,0.78)',
+  tint: '#BCCB9E',          // sage
+  onTint: '#171812',
+  background: '#151612',    // warm charcoal
+  fill: '#21231C',
+  label: '#F2EEE4',
+  secondaryLabel: '#A8A393',
+  separator: 'rgba(242,238,228,0.12)',
+  pressed: 'rgba(242,238,228,0.08)',
+  tintSoft: 'rgba(188,203,158,0.16)',
+  material: 'rgba(28,29,23,0.86)',
   scrim: 'rgba(0,0,0,0.56)',
-  danger: '#FF6961',
+  danger: '#F2867C',
+  tabBar: '#2C2E25',        // a step lighter than cards, so it reads as floating over them
+  tabIdle: '#A8A393',
+  shadow: '#000000',
 };
 
 // ─── Spacing: rigid 8pt grid ──────────────────────────────────────────────────
@@ -65,37 +97,46 @@ export const HIT = 44;
 
 // ─── Radii: continuous (squircle) curves on iOS ──────────────────────────────
 
-export const radius = { control: 8, row: 12, group: 16, sheet: 24, pill: 999 } as const;
+export const radius = { control: 10, row: 14, group: 22, sheet: 28, pill: 999 } as const;
 
 export const continuous: ViewStyle = Platform.OS === 'ios' ? ({ borderCurve: 'continuous' } as ViewStyle) : {};
 
-// ─── Typography: SF Pro scale (+ New York for the one display anchor) ─────────
-// Two working weights: regular (400) and semibold (600). Bold is reserved for
-// the large titles that anchor each screen.
+// ─── Typography: Gloock for titles, Manrope for everything else ──────────────
+// Each weight is its own font file (loaded in App.tsx), so weight is chosen by
+// family, never by fontWeight: a fontWeight on top would make browsers fake a
+// bolder bold. Use `weight()` wherever text needs to be heavier.
 
-const serif = Platform.select({
-  web: 'ui-serif, "New York", "Iowan Old Style", Georgia, serif',
-  ios: 'Georgia',
-  default: 'serif',
-});
+export const fonts = {
+  display: 'Gloock_400Regular',
+  regular: 'Manrope_400Regular',
+  medium: 'Manrope_500Medium',
+  semibold: 'Manrope_600SemiBold',
+  bold: 'Manrope_700Bold',
+} as const;
 
-const sans = Platform.select({
-  web: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif',
-  default: undefined,
-});
+export type Weight = '400' | '500' | '600' | '700';
+const FAMILY_BY_WEIGHT: Record<Weight, string> = { 400: fonts.regular, 500: fonts.medium, 600: fonts.semibold, 700: fonts.bold };
+
+/** A heavier (or lighter) Manrope, in place of fontWeight. */
+export const weight = (w: Weight): TextStyle => ({ fontFamily: FAMILY_BY_WEIGHT[w], fontWeight: 'normal' });
 
 const tabular = { fontVariant: ['tabular-nums'] } as TextStyle;
 
+const sans = (w: Weight) => weight(w);
+
 export const type = {
-  display:    { fontFamily: serif, fontSize: 34, lineHeight: 40, fontWeight: '600', letterSpacing: -0.4 },
-  largeTitle: { fontFamily: sans, fontSize: 34, lineHeight: 40, fontWeight: '700', letterSpacing: 0.4 },
-  title:      { fontFamily: sans, fontSize: 22, lineHeight: 28, fontWeight: '700', letterSpacing: -0.2 },
-  headline:   { fontFamily: sans, fontSize: 17, lineHeight: 24, fontWeight: '600', letterSpacing: -0.4 },
-  body:       { fontFamily: sans, fontSize: 17, lineHeight: 24, fontWeight: '400', letterSpacing: -0.4 },
-  callout:    { fontFamily: sans, fontSize: 15, lineHeight: 20, fontWeight: '400', letterSpacing: -0.2 },
-  footnote:   { fontFamily: sans, fontSize: 13, lineHeight: 16, fontWeight: '400', letterSpacing: -0.1 },
-  caption:    { fontFamily: sans, fontSize: 12, lineHeight: 16, fontWeight: '600', letterSpacing: 0 },
+  display:    { fontFamily: fonts.display, fontWeight: 'normal', fontSize: 36, lineHeight: 42, letterSpacing: -0.2 },
+  largeTitle: { fontFamily: fonts.display, fontWeight: 'normal', fontSize: 34, lineHeight: 40, letterSpacing: -0.2 },
+  title:      { fontFamily: fonts.display, fontWeight: 'normal', fontSize: 24, lineHeight: 30, letterSpacing: 0 },
+  headline:   { ...sans('700'), fontSize: 16, lineHeight: 22, letterSpacing: -0.2 },
+  body:       { ...sans('500'), fontSize: 16, lineHeight: 23, letterSpacing: -0.2 },
+  callout:    { ...sans('500'), fontSize: 15, lineHeight: 20, letterSpacing: -0.1 },
+  footnote:   { ...sans('500'), fontSize: 13, lineHeight: 17, letterSpacing: 0 },
+  caption:    { ...sans('700'), fontSize: 12, lineHeight: 16, letterSpacing: 0.1 },
 } satisfies Record<string, TextStyle>;
+
+/** Small spaced capitals for section labels and eyebrows ("EXPLORE OUR COLLECTION"). */
+export const eyebrow: TextStyle = { ...weight('700'), fontSize: 11, lineHeight: 14, letterSpacing: 1.4, textTransform: 'uppercase' };
 
 export type TypeVariant = keyof typeof type;
 export const tabularNums = tabular;

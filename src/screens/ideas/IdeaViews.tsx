@@ -43,22 +43,27 @@ function scheduled(idea: Idea): TimeSlot | null {
 
 // ─── Vote control ────────────────────────────────────────────────────────────
 
-export function VoteButton({ count, voted, onPress }: { count: number; voted: boolean; onPress: () => void }) {
+/**
+ * Join an idea: a labeled pill, so it's clear what it does. "I'm in" until
+ * you've joined, then a solid olive "In" with a check. How many are in is
+ * written out on the row itself.
+ */
+export function InButton({ count, voted, onPress }: { count: number; voted: boolean; onPress: () => void }) {
   const { c } = useTheme();
   return (
     <Tappable
       feedback="opacity"
       onPress={onPress}
-      accessibilityLabel={voted ? `Remove your vote, ${count} votes` : `Vote, ${count} votes`}
+      accessibilityLabel={voted ? `You're in. ${count} in. Tap to leave` : `I'm in. ${count} in so far`}
       accessibilityState={{ selected: voted }}
       style={{
-        width: 48, height: 56, borderRadius: radius.row, ...continuous,
-        alignItems: 'center', justifyContent: 'center',
+        flexDirection: 'row', alignItems: 'center', gap: space.hair,
+        height: 34, paddingHorizontal: space.m - 2, borderRadius: radius.pill, ...continuous,
         backgroundColor: voted ? c.tint : c.fill,
       }}
     >
-      <Icon name={voted ? 'arrow-up' : 'arrow-up-outline'} size={18} color={voted ? c.onTint : c.tint} />
-      <Txt v="callout" semibold style={[tabularNums, { color: voted ? c.onTint : c.label }]}>{count}</Txt>
+      {voted ? <Icon name="checkmark" size={15} color={c.onTint} /> : null}
+      <Txt v="footnote" semibold style={{ color: voted ? c.onTint : c.tint }}>{voted ? 'In' : 'I’m in'}</Txt>
     </Tappable>
   );
 }
@@ -94,31 +99,22 @@ export function IdeaRow({ idea, voted, meId, audienceSummary, selected, onVote, 
     : booked ? `${stage === 'happened' ? '' : 'On '}${slotLabel(booked)}`
     : stage === 'happened' ? 'Happened'
     : statusStamp(idea);
-  const meta = [where, audienceSummary ? `For ${audienceSummary}` : null, idea.profiles?.full_name ? `by ${idea.profiles.full_name.split(' ')[0]}` : null]
+  // Ideas lead with how many are in, in words.
+  const inCount = stage === 'idea' && !ready && !needsYou && idea.votes ? `${idea.votes} ${idea.votes === 1 ? 'person' : 'people'} in` : null;
+  const meta = [inCount, where, audienceSummary ? `For ${audienceSummary}` : null, idea.profiles?.full_name ? `by ${idea.profiles.full_name.split(' ')[0]}` : null]
     .filter(Boolean).join(' · ');
   const strong = needsYou || ready;
   const draft = idea.status === 'draft';
 
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.s, paddingLeft: space.m }}>
-      {draft ? (
-        <View style={{ width: 48, height: 56, alignItems: 'center', justifyContent: 'center' }}>
-          <Icon name="create-outline" size={22} color={c.secondaryLabel} />
-        </View>
-      ) : stage === 'idea' || stage === 'dates' ? (
-        <VoteButton count={idea.votes} voted={voted} onPress={onVote} />
-      ) : (
-        <View style={{ width: 48, height: 56, alignItems: 'center', justifyContent: 'center' }}>
-          <Icon name={stage === 'on' ? 'calendar' : 'checkmark-done'} size={22} color={stage === 'on' ? c.tint : c.secondaryLabel} />
-        </View>
-      )}
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.s, paddingLeft: space.s, paddingRight: space.m }}>
       <Tappable
         onPress={onPress}
         selected={selected}
         accessibilityLabel={[idea.title, meta || null].filter(Boolean).join(', ')}
         style={{
           flex: 1, minWidth: 0, minHeight: 72, justifyContent: 'center',
-          paddingVertical: space.s, paddingHorizontal: space.s, marginRight: space.s,
+          paddingVertical: space.s, paddingHorizontal: space.s,
           borderRadius: radius.row, ...continuous,
         }}
       >
@@ -126,6 +122,7 @@ export function IdeaRow({ idea, voted, meId, audienceSummary, selected, onVote, 
         {idea.description ? <Txt v="callout" tone="secondary" numberOfLines={1}>{idea.description}</Txt> : null}
         {meta ? <Txt v="footnote" tone={strong ? 'tint' : 'secondary'} semibold={strong} numberOfLines={1} style={{ marginTop: 2 }}>{meta}</Txt> : null}
       </Tappable>
+      {!draft && (stage === 'idea' || stage === 'dates') ? <InButton count={idea.votes} voted={voted} onPress={onVote} /> : null}
     </View>
   );
 }
@@ -188,7 +185,7 @@ export function IdeaDetail({ idea, voted, voters, audience, audienceGroupNames, 
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.m }}>
           <Button
             label={voted ? 'You’re in' : 'I’m in'}
-            icon={voted ? 'checkmark' : 'arrow-up'}
+            icon={voted ? 'checkmark' : undefined}
             variant={voted ? 'gray' : 'filled'}
             onPress={onVote}
           />
