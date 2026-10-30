@@ -162,7 +162,7 @@ export default function PeopleScreen() {
     const ids = groups.map(g => g.id).join(',');
     const [{ data: ev }, { data: id }] = await Promise.all([
       supabase.from('events').select('*').or(`group_id.in.(${ids}),attendees.cs.{${meId}}`).lt('start_time', to.toISOString()),
-      supabase.from('ideas').select('*').in('group_id', groups.map(g => g.id)).eq('status', 'proposed'),
+      supabase.from('ideas').select('*').eq('status', 'proposed'),   // RLS: yours, your groups', or shared with you
     ]);
     setPlanEvents(expandEvents((ev as Event[]) ?? [], from, to));
     setOpenIdeas((id as Idea[]) ?? []);

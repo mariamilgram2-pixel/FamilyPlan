@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { awaitingYourDates, readyToSend } from '../plans';
+import { awaitingYourDates, declinedBy, readyToSend, responders, responseOf, stageOf, tentativeBy } from '../plans';
 import { awaitedVoters, dateVoters } from '../rsvp';
 import { Idea } from '../../types';
 
@@ -54,5 +54,74 @@ describe('readyToSend', () => {
 
   it('“none of these work” still counts as answering', () => {
     expect(readyToSend(idea({ ana: [], ben: [] }), 'org')).toBe(true);
+  });
+});
+
+describe('Ideas → Finish planning → Coming up', () => {
+  it('starting to plan moves an idea on, and it stays even with no dates yet', () => {
+    const fresh = { ...idea({}), proposed_slots: [] };
+    expect(stageOf(fresh)).toBe('idea');
+    expect(stageOf({ ...fresh, planning_started_at: new Date().toISOString() })).toBe('dates');
+  });
+
+  it('once it’s booked, nobody is asked for dates anymore', () => {
+    const booked = { ...idea({}), status: 'planned' as const, proposed_slots: [a], event_id: 'e1' };
+    expect(awaitingYourDates(booked, 'ana')).toBe(false);
+    expect(readyToSend({ ...booked, slot_votes: { ana: [], ben: [] } }, 'org')).toBe(false);
+  });
+
+  it('nobody is asked for dates until there are dates to pick', () => {
+    const started = { ...idea({}), proposed_slots: [], planning_started_at: new Date().toISOString() };
+    expect(awaitingYourDates(started, 'ana')).toBe(false);
+    expect(readyToSend({ ...started, slot_votes: { ana: [], ben: [] } }, 'org')).toBe(false);
+  });
+});
+
+describe('can’t make it', () => {
+  const out = { ...idea({ ben: [a.start] }), declined_user_ids: ['ana'] };
+
+  it('takes you off who’s asked, and stops asking you', () => {
+    expect(declinedBy(out, 'ana')).toBe(true);
+    expect(dateVoters(out)).not.toContain('ana');
+    expect(awaitingYourDates(out, 'ana')).toBe(false);
+  });
+
+  it('the rest can finish without you', () => {
+    expect(readyToSend(out, 'org')).toBe(true);
+  });
+});
+
+describe('maybe: plan without me', () => {
+  const maybe = { ...idea({ ben: [b.start] }), tentative_user_ids: ['ana'] };
+
+  it('stays on the plan, but nobody waits on you', () => {
+    expect(tentativeBy(maybe, 'ana')).toBe(true);
+    expect(dateVoters(maybe)).toContain('ana');        // still told, still invited
+    expect(awaitedVoters(maybe)).not.toContain('ana');
+    expect(awaitingYourDates(maybe, 'ana')).toBe(false);
+  });
+
+  it('the organizer can send once everyone else has answered', () => {
+    expect(readyToSend(maybe, 'org')).toBe(true);
+  });
+});
+
+describe('answers: In, Maybe, Can’t', () => {
+  const answered = {
+    ...idea({}),
+    idea_votes: [{ id: 'v1', idea_id: 'i1', user_id: 'ben', created_at: '' }],
+    tentative_user_ids: ['ana'],
+    declined_user_ids: ['cy'],
+  };
+
+  it('reads each person’s answer', () => {
+    expect(responseOf(answered, 'ben')).toBe('in');
+    expect(responseOf(answered, 'ana')).toBe('maybe');
+    expect(responseOf(answered, 'cy')).toBe('cant');
+    expect(responseOf(answered, 'dee')).toBeNull();
+  });
+
+  it('lists who said what', () => {
+    expect(responders(answered)).toEqual({ in: ['ben'], maybe: ['ana'], cant: ['cy'] });
   });
 });

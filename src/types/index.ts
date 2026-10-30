@@ -37,6 +37,7 @@ export type Database = {
       person_notes: Table<PersonNote, PersonNoteInsert>;
       notifications: Table<AppNotification, AppNotificationInsert>;
       plan_comments: Table<PlanComment, PlanCommentInsert>;
+      hidden_ideas: Table<HiddenIdea, Omit<HiddenIdea, 'created_at'>>;
       categories: Table<Category, CategoryInsert>;
       // Rows are created and synced by the server; the app reads and deletes.
       calendar_connections: Table<CalendarConnection, Omit<CalendarConnection, 'id' | 'created_at'>>;
@@ -49,6 +50,7 @@ export type Database = {
       claim_assignment: Rpc<{ p_event: string; p_item: string; p_claim: boolean }>;
       set_rsvp: Rpc<{ p_event: string; p_status: string; p_note?: string | null }>;
       set_slot_votes: Rpc<{ p_idea: string; p_starts: string[] }>;
+      set_idea_response: Rpc<{ p_idea: string; p_response: IdeaResponse | 'none' }>;
       set_calendar_included: Rpc<{ p_connection: string; p_included: boolean }>;
       availability_estimate: Rpc<
         { p_member_ids: string[]; p_slots: EstimateSlot[]; p_timezone?: string },
@@ -146,7 +148,7 @@ export type EventInsert = Omit<Event, 'id' | 'created_at' | 'profiles' | 'series
 
 export interface Idea {
   id: string;
-  group_id: string;
+  group_id: string | null;           // null: just yours, or shared only with people
   title: string;
   description: string | null;
   votes: number;
@@ -163,14 +165,31 @@ export interface Idea {
   category_id?: string | null;
   created_by: string | null;
   created_at: string;
+  // The whiteboard: description doubles as notes anyone on the idea can edit.
+  season?: Season | null;            // the time of year it's best in
+  notes_edited_by?: string | null;
+  notes_edited_at?: string | null;
+  last_activity_at?: string | null;  // notes, suggestions, sharing (stamped by the server)
+  last_activity_by?: string | null;
+  planning_started_at?: string | null;   // in Finish planning from here until it's booked
+  declined_user_ids?: string[];      // said they can't make it (still see it; not asked or invited)
+  tentative_user_ids?: string[];     // maybe: still invited, but nobody waits on their dates
   // joined relations
   profiles?: Pick<Profile, 'id' | 'full_name' | 'email'>;
   idea_votes?: IdeaVote[];
 }
 
+export type Season = 'spring' | 'summer' | 'fall' | 'winter';
+
+/** Your answer on an idea or plan, like an RSVP. */
+export type IdeaResponse = 'in' | 'maybe' | 'cant';
+
+/** An idea you've hidden from your own Plans. Everyone else still sees it. */
+export interface HiddenIdea { user_id: string; idea_id: string; created_at: string }
+
 export interface TimeSlot { start: string; end: string; fit?: SlotFit }   // ISO timestamps; fit = calendar fit when suggested
 
-export type IdeaInsert = Omit<Idea, 'id' | 'votes' | 'created_at' | 'profiles' | 'idea_votes'>;
+export type IdeaInsert = Omit<Idea, 'id' | 'votes' | 'created_at' | 'profiles' | 'idea_votes' | 'notes_edited_by' | 'notes_edited_at' | 'last_activity_at' | 'last_activity_by'>;
 
 export interface Contact {
   id: string;

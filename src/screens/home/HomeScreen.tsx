@@ -109,7 +109,8 @@ export default function HomeScreen() {
       supabase.from('events').select('*')
         .or(`group_id.in.(${groupIds.join(',')}),attendees.cs.{${meId}}`)
         .lt('start_time', to.toISOString()),
-      supabase.from('ideas').select('*, idea_votes(id, user_id)').in('group_id', groupIds).eq('status', 'proposed'),
+      // Every idea you can see: your groups', and any shared with you by name.
+      supabase.from('ideas').select('*, idea_votes(id, user_id)').eq('status', 'proposed'),
     ]);
     setEvents(expandEvents((ev as Event[]) ?? [], from, to));
     setIdeas((id as Idea[]) ?? []);

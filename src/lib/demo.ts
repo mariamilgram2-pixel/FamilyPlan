@@ -151,7 +151,7 @@ export function addDemoEvent(e: Omit<Event, 'id' | 'created_at' | 'group_id'>): 
 const daysAgo = (n: number) => new Date(Date.now() - n * 86400000).toISOString();
 
 function idea(id: string, title: string, description: string | null, status: Idea['status'], voters: string[], by: string, audienceUsers: string[] = [], proposedDaysAgo = 0, plannedDaysAgo: number | null = null): Idea {
-  const author = DEMO_MEMBERS.find(m => m.id === by)!;
+  const author = DEMO_PEOPLE.find(m => m.id === by)!;
   return {
     id, group_id: DEMO_GROUP_ID, title, description, status,
     votes: voters.length,
@@ -159,6 +159,7 @@ function idea(id: string, title: string, description: string | null, status: Ide
     location: null, target_date: null, proposed_slots: [], event_id: null,
     planned_at: plannedDaysAgo === null ? null : daysAgo(plannedDaysAgo),
     created_by: by, created_at: daysAgo(proposedDaysAgo),
+    last_activity_at: daysAgo(proposedDaysAgo), last_activity_by: by,
     profiles: { id: author.id, full_name: author.full_name, email: author.email },
     idea_votes: voters.map((u, i) => ({ id: `${id}-v${i}`, idea_id: id, user_id: u, created_at: now })),
   };
@@ -170,11 +171,39 @@ export const DEMO_IDEAS: Idea[] = [
   idea('i3', 'Pottery class', null, 'proposed', ['demo-ana'], DEMO_ME, ['demo-ana', 'demo-chloe'], 1),
   idea('i4', 'Visit the aquarium', 'Kids are asking. Weekday mornings are quieter.', 'planned', [DEMO_ME, 'demo-ben', 'demo-chloe'], 'demo-ben', [], 20, 3),
   idea('i5', 'Board game marathon', null, 'done', ['demo-dev', 'demo-eli'], 'demo-dev', [], 40, 30),
-  // More ideas gathering interest, so the Ideas deck has cards to swipe through.
+  // More ideas on the whiteboard, some with notes and suggestions going.
   idea('i6', 'Fall foliage weekend in Vermont', 'Rent a farmhouse, cider donuts, maybe a covered bridge or two.', 'proposed', ['demo-ben', DEMO_ME, 'demo-ana'], 'demo-ben', [], 3),
   idea('i7', 'Sunrise hike to the fire tower', 'Short but steep. Thermos of coffee at the top.', 'proposed', ['demo-ana', 'demo-dev'], 'demo-ana', [], 5),
   idea('i8', 'Coffee crawl in the West Village', 'Four cafés, one afternoon, rank them all.', 'proposed', ['demo-chloe'], 'demo-chloe', [], 2),
+  // Just for you: a someday idea, not shared yet.
+  idea('i9', 'Food tour in Queens', 'Flushing for dumplings, then Jackson Heights for momos.', 'draft', [], DEMO_ME, [], 4),
+  // From another group: Plans shows every group's, not just the family's.
+  idea('i10', 'Camping trip to the Gunks', 'Climb Saturday, campfire, climb again Sunday.', 'proposed', ['demo-gabe', 'demo-hana'], 'demo-gabe', [], 7),
 ];
+DEMO_IDEAS[8].group_id = null;           // a draft belongs to no group until it's shared
+DEMO_IDEAS[9].group_id = 'demo-climb';
+
+// The whiteboard: Vermont's notes have grown, and its season is here.
+{
+  const hoursAgo = (n: number) => new Date(Date.now() - n * 3600000).toISOString();
+  const vermont = DEMO_IDEAS[5];
+  Object.assign(vermont, {
+    season: 'fall',
+    description: 'Rent a farmhouse, cider donuts, maybe a covered bridge or two.\n\nAna: Woodstock or Stowe? Woodstock is closer and very walkable.\nBen: Peak color is usually early to mid October.',
+    notes_edited_by: 'demo-ana', notes_edited_at: hoursAgo(3),
+    last_activity_at: hoursAgo(3), last_activity_by: 'demo-ana',
+    // Not everyone's in: Chloe's a maybe, Dev can't.
+    tentative_user_ids: ['demo-chloe'], declined_user_ids: ['demo-dev'],
+  });
+  DEMO_IDEAS[0].season = 'spring';
+  // Eli started planning the camping trip and stopped halfway: it waits in Finish planning.
+  DEMO_IDEAS[0].planning_started_at = hoursAgo(30);
+  Object.assign(DEMO_IDEAS[7], { last_activity_at: hoursAgo(20), last_activity_by: 'demo-dev' });
+}
+
+// The aquarium got booked: its invite is on the calendar, and you haven't answered yet.
+DEMO_EVENTS.push({ ...ev('e17', 'Visit the aquarium', 6, 10, 0, 180, 'New York Aquarium', ['demo-ben', DEMO_ME, 'demo-chloe', 'demo-ana']), rsvps: { 'demo-chloe': 'going', 'demo-ana': 'maybe' } });
+DEMO_IDEAS[3].event_id = 'e17';
 
 // Date options waiting on votes: one you proposed, one waiting on you.
 const slot = (day: number, h: number, durMin: number) => {
@@ -192,6 +221,9 @@ const slot = (day: number, h: number, durMin: number) => {
   const [t1, t2, t3] = tacos.proposed_slots.map(s => s.start);
   tacos.slot_votes = { 'demo-chloe': [t1, t2, t3], 'demo-dev': [t2, t3] };
 }
+
+/** Ideas you've hidden in the demo. One to start, so the Hidden folder has something in it. */
+export const DEMO_HIDDEN = new Set<string>(['i7']);
 
 /** Save a demo idea (new or edited) so every screen sees it. */
 export function upsertDemoIdea(idea: Idea) {
@@ -216,6 +248,9 @@ export const DEMO_COMMENTS: PlanComment[] = [
   { id: 'm1', event_id: 'e2', idea_id: null, user_id: 'demo-ana', body: 'I can bring extra chairs if we need them.', created_at: ago(300) },
   { id: 'm2', event_id: 'e2', idea_id: null, user_id: 'demo-ben', body: 'Sourdough or baguette?', created_at: ago(120) },
   { id: 'm3', event_id: null, idea_id: 'i3', user_id: 'demo-ana', body: 'Evenings are easier for me, but I can do the Tuesday.', created_at: ago(600) },
+  { id: 'm8', event_id: null, idea_id: 'i6', user_id: 'demo-ben', body: 'Found a farmhouse that sleeps 8, about $90 a night each.', created_at: ago(26 * 60) },
+  { id: 'm9', event_id: null, idea_id: 'i6', user_id: 'demo-ana', body: 'Any weekend works for me. Woodstock gets my vote.', created_at: ago(3 * 60) },
+  { id: 'm10', event_id: null, idea_id: 'i8', user_id: 'demo-dev', body: 'Add Partners to the list, the cortado is unreal.', created_at: ago(20 * 60) },
   { id: 'm4', event_id: 'e8', idea_id: null, user_id: 'demo-ben', body: 'Those pancakes. We need to go back.', created_at: ago(1500) },
   // Memories with photos, so people's Together timelines have some.
   { id: 'm5', event_id: 'e13', idea_id: null, user_id: 'demo-ana', body: 'Best haul yet.', photo_urls: [photo('apples', 1), photo('apples', 2), photo('apples', 3)], created_at: ago(30 * 1440) },

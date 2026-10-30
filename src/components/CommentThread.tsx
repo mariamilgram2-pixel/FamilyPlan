@@ -1,6 +1,8 @@
 // A short conversation on a plan: sort out rides, ask a question, say you're
 // excited. Once the event has happened the same thread becomes "Memories",
-// where people add photos and notes through the Add Memories sheet.
+// where people add photos and notes through the Add Memories sheet. On an
+// idea that's still on the whiteboard, it's for suggestions: places, links,
+// "what about Stowe instead?".
 
 import React, { useEffect, useState } from 'react';
 import { Image, Modal, Pressable, ScrollView, View } from 'react-native';
@@ -23,7 +25,7 @@ function ago(iso: string) {
   return `${Math.round(min / 1440)}d`;
 }
 
-export default function CommentThread({ eventId, ideaId, planTitle, meId, myName, personOf, recipients, isDemo, memories, onAddMemories }: {
+export default function CommentThread({ eventId, ideaId, planTitle, meId, myName, personOf, recipients, isDemo, memories, suggestions, onAddMemories, onPosted }: {
   eventId?: string;
   ideaId?: string;
   planTitle: string;
@@ -33,7 +35,9 @@ export default function CommentThread({ eventId, ideaId, planTitle, meId, myName
   recipients: string[];        // who hears about a new comment (you're left out)
   isDemo: boolean;
   memories?: boolean;          // after the event
+  suggestions?: boolean;       // an idea nobody's planning yet
   onAddMemories?: () => void;  // photos + note sheet, instead of the text box
+  onPosted?: () => void;       // the idea moved up; refresh the list
 }) {
   const { c } = useTheme();
   const { version } = usePlanComposer();
@@ -66,6 +70,7 @@ export default function CommentThread({ eventId, ideaId, planTitle, meId, myName
       DEMO_COMMENTS.push({ ...row, id: `m-${Date.now()}`, created_at: new Date().toISOString() });
       setDraft('');
       load();
+      onPosted?.();
       return;
     }
     setSending(true);
@@ -73,21 +78,24 @@ export default function CommentThread({ eventId, ideaId, planTitle, meId, myName
     if (error) { setSending(false); return notify('Couldn’t post', error.message); }
     await sendNotifications(recipients.filter(id => id !== meId).map(uid => ({
       user_id: uid, actor_id: meId, kind: 'comment' as const, idea_id: ideaId ?? null, event_id: eventId ?? null,
-      title: `${myName} ${memories ? 'shared a memory from' : 'commented on'} ${planTitle}`,
+      title: `${myName} ${memories ? 'shared a memory from' : suggestions ? 'added a suggestion to' : 'commented on'} ${planTitle}`,
       body: body.length > 140 ? `${body.slice(0, 139)}…` : body,
     })), false);
     setSending(false);
     setDraft('');
     load();
+    onPosted?.();
   }
 
   return (
     <View style={{ gap: space.s }}>
-      <ListSection header={memories ? `Memories${items.length ? ` · ${items.length}` : ''}` : `Conversation${items.length ? ` · ${items.length}` : ''}`} separatorInset={60}>
+      <ListSection header={`${memories ? 'Memories' : suggestions ? 'Suggestions' : 'Conversation'}${items.length ? ` · ${items.length}` : ''}`} separatorInset={60}>
         {items.length === 0 ? (
           <View style={{ padding: space.m }}>
             <Txt v="callout" tone="secondary">
-              {memories ? 'No memories yet. Add photos or a note from the day.' : 'Sort out rides, ask a question, or say you’re excited.'}
+              {memories ? 'No memories yet. Add photos or a note from the day.'
+                : suggestions ? 'Places, links, a better weekend. Anything that helps it happen.'
+                : 'Sort out rides, ask a question, or say you’re excited.'}
             </Txt>
           </View>
         ) : items.map(m => {
@@ -121,8 +129,8 @@ export default function CommentThread({ eventId, ideaId, planTitle, meId, myName
             <Field
               value={draft}
               onChangeText={setDraft}
-              placeholder={memories ? 'Add a memory…' : 'Add a comment…'}
-              accessibilityLabel={memories ? 'Add a memory' : 'Add a comment'}
+              placeholder={memories ? 'Add a memory…' : suggestions ? 'Add a suggestion…' : 'Add a comment…'}
+              accessibilityLabel={memories ? 'Add a memory' : suggestions ? 'Add a suggestion' : 'Add a comment'}
               maxLength={1000}
               multiline
             />
