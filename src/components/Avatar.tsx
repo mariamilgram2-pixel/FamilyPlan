@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, Image, ViewStyle } from 'react-native';
-import { initialsFor, useTheme } from '../theme';
+import { initialsFor, useTheme, weight } from '../theme';
 
 export interface AvatarPerson {
   id: string;
@@ -41,7 +41,7 @@ export default function Avatar({ person, size = 32, ring = false, ringColor, hig
       {person?.avatar_url ? (
         <Image source={{ uri: person.avatar_url }} style={{ width: size, height: size }} />
       ) : (
-        <Text style={{ color: highlight ? c.onTint : c.background, fontSize: Math.round(size * 0.4), fontWeight: '600' }}>
+        <Text style={{ color: highlight ? c.onTint : c.background, fontSize: Math.round(size * 0.4), ...weight('700') }}>
           {label}
         </Text>
       )}

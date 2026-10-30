@@ -217,7 +217,9 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
     if (existing) {
       setTitle(existing.title); setDescription(existing.description ?? '');
       setLocation(existing.location ?? ''); setDate(existing.target_date);
-      setSelectedGroupIds(new Set(existing.audience_group_ids ?? []));
+      // Everything already settled carries over: its own group too, not just
+      // the extra ones, so Who reads "You and My Family" instead of empty.
+      setSelectedGroupIds(new Set([...(existing.group_id ? [existing.group_id] : []), ...(existing.audience_group_ids ?? [])]));
       setSelectedUserIds(new Set(existing.audience_user_ids ?? []));
       setSelectedContactIds(new Set(existing.audience_contact_ids ?? []));
       const hint = parseIdeaText(existing.title, { today: todayKey(), people: [] });
@@ -233,9 +235,14 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
           day: existing.target_date ? { kind: 'date', date: existing.target_date } : pd.range ? { kind: 'range', range: pd.range } : pd.date ? { kind: 'date', date: pd.date } : { kind: 'any' },
           time: pd.start ? { kind: 'exact', start: pd.start, end: pd.end } : pd.part ? { kind: 'part', part: pd.part } : { kind: 'any' },
         });
-        // Who's in was saved with the draft; typing more doesn't reset it.
-        if ((existing.audience_user_ids ?? []).length || (existing.audience_contact_ids ?? []).length) touch('who');
+      } else {
+        // A day hoped for is the day; the time is still open.
+        setWhen({ day: existing.target_date ? { kind: 'date', date: existing.target_date } : { kind: 'any' }, time: { kind: 'any' } });
       }
+      // What's settled stays settled; typing more doesn't reset it.
+      if (existing.group_id || (existing.audience_group_ids ?? []).length || (existing.audience_user_ids ?? []).length || (existing.audience_contact_ids ?? []).length) touch('who');
+      if (existing.location) touch('place');
+      if (existing.target_date) touch('when');
       setStep(entry!.step);
       if (entry!.step === 'options') {
         const proposed = (existing.proposed_slots ?? []).filter(s => new Date(s.start).getTime() > Date.now());
@@ -245,7 +252,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
       }
     } else {
       setTitle(prefill?.title ?? ''); setDescription(prefill?.notes ?? ''); setLocation(prefill?.location ?? ''); setDate(prefill?.date ?? null);
-      setSelectedGroupIds(new Set()); setSelectedUserIds(new Set(prefill?.people ?? [])); setSelectedContactIds(new Set());
+      setSelectedGroupIds(new Set(prefill?.groups ?? [])); setSelectedUserIds(new Set(prefill?.people ?? [])); setSelectedContactIds(new Set());
       setPrefs(defaultPrefs({ start: prefill?.start, end: prefill?.end, date: prefill?.date ?? null }));
       setWhen({
         day: prefill?.date ? { kind: 'date', date: prefill.date } : { kind: 'any' },
@@ -441,6 +448,8 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
     people.forEach(p => { if (p.groupIds.some(g => selectedGroupIds.has(g))) ids.add(p.profile.id); });
     existing?.idea_votes?.forEach(v => ids.add(v.user_id));
     Object.entries(existing?.slot_votes ?? {}).forEach(([id, starts]) => { if (starts.length) ids.add(id); });
+    // Anyone who said they can't make it isn't asked or invited. Maybes still are.
+    existing?.declined_user_ids?.forEach(id => ids.delete(id));
     if (meId) ids.delete(meId);
     return Array.from(ids);
   }, [selectedUserIds, selectedGroupIds, people, existing, meId]);
@@ -452,24 +461,21 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
   const participantNames = participantIds.map(nameOf);
   const offAppNames = contacts.filter(ct => selectedContactIds.has(ct.id)).map(ct => ct.name);
 
-  // Storage group: pick a home for the idea (needed for RLS).
-  // Prefer the first selected group; else the active group.
+  // The idea's home group: the one it's in, else the first group picked.
+  // None picked, it belongs to no group: just yours and whoever's named.
   const storageGroupId = useMemo(() => {
-    if (existing) return existing.group_id;
-    if (selectedGroupIds.size > 0) {
-      for (const g of effectiveGroups) if (selectedGroupIds.has(g.id)) return g.id;
-    }
-    return activeGroup?.id ?? effectiveGroups[0]?.id ?? null;
-  }, [existing, selectedGroupIds, activeGroup, effectiveGroups]);
+    if (existing?.group_id) return existing.group_id;
+    for (const g of effectiveGroups) if (selectedGroupIds.has(g.id)) return g.id;
+    return null;
+  }, [existing, selectedGroupIds, effectiveGroups]);
+  // Events still live on a group's calendar: the idea's, else the one you're on.
+  const eventGroupId = storageGroupId ?? activeGroup?.id ?? effectiveGroups[0]?.id ?? null;
 
   // ─── Saving ────────────────────────────────────────────────────────────────
 
   function ready() {
     if (!title.trim() && !describe.trim()) { notify('What’s the idea?', 'Give it a short description first.'); return false; }
-    if (!storageGroupId || !meId) {
-      notify('Pick a group', 'Ideas need to belong to at least one group. Create or join one first.');
-      return false;
-    }
+    if (!meId) return false;
     return true;
   }
 
@@ -493,7 +499,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
       const me = DEMO_MEMBERS[0];
       return {
         id: existing?.id ?? `i-${Date.now()}`,
-        group_id: storageGroupId!,
+        group_id: storageGroupId,
         votes: existing?.votes ?? 0,
         idea_votes: existing?.idea_votes ?? [],
         created_by: existing?.created_by ?? meId,
@@ -568,7 +574,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
    */
   async function handleClose() {
     const typed = describe.trim() || title.trim();
-    const draftable = step === 'compose' && !saving && !!typed && !!storageGroupId && !!meId
+    const draftable = step === 'compose' && !saving && !!typed && !!meId
       && (!existing || existing.status === 'draft');
     if (!draftable) return onClose();
     const idea = await persist({ status: 'draft', proposed_slots: [], event_id: null });
@@ -671,7 +677,9 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
   /** Times that fit, best first, from what's set and everyone's calendars. */
   async function searchTimes(p: PlanPrefs): Promise<TimeSlot[]> {
     const multi = spanOf(p) > 1;
-    const everyone = [meId!, ...participantIds];
+    // Maybes still get the invite, but their calendars don't shape the times.
+    const maybes = new Set(existing?.tentative_user_ids ?? []);
+    const everyone = [meId!, ...participantIds.filter(id => !maybes.has(id))];
     const plans = await loadPlans(everyone, p);
     const hint = parsed ?? parseIdeaText(title, { today: todayKey(), people: [] });
     // Within a day, your own plans and work hours rule a time out; everyone
@@ -727,10 +735,11 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
   async function createInvite(slot: TimeSlot) {
     setSaving('invite');
     const attendees = [meId!, ...participantIds];
-    // Anyone who already said this date works is going.
-    const rsvps = Object.fromEntries(participantIds
-      .filter(id => existing?.slot_votes?.[id]?.includes(slot.start))
-      .map(id => [id, 'going' as const]));
+    // Answers carry over: anyone who said this date works is going, and a
+    // maybe stays a maybe.
+    const rsvps = Object.fromEntries(participantIds.flatMap((id): [string, 'going' | 'maybe'][] =>
+      existing?.slot_votes?.[id]?.includes(slot.start) ? [[id, 'going']]
+      : existing?.tentative_user_ids?.includes(id) ? [[id, 'maybe']] : []));
     let eventId: string | null = null;
     const eventRow = {
       rsvps,
@@ -746,7 +755,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
     if (isDemo) {
       eventId = addDemoEvent(eventRow).id;
     } else {
-      const { data, error } = await supabase.from('events').insert({ ...eventRow, group_id: storageGroupId } as any).select('id').single();
+      const { data, error } = await supabase.from('events').insert({ ...eventRow, group_id: eventGroupId } as any).select('id').single();
       if (error) { setSaving(null); return notify('Couldn’t create the invite', error.message); }
       eventId = (data as { id: string }).id;
     }
@@ -786,7 +795,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
   const shownPeople = showAllPeople ? orderedPeople : orderedPeople.slice(0, CHUNK);
   const shownContacts = showAllContacts ? contacts : contacts.slice(0, CHUNK);
 
-  const sheetTitle = step === 'compose' ? (existing?.status === 'draft' ? 'Draft' : 'New Plan') : step === 'prefs' ? 'Find a Time' : 'Pick a Time';
+  const sheetTitle = step === 'compose' ? (existing?.status === 'draft' ? 'Draft' : existing ? 'Start Planning' : 'New Plan') : step === 'prefs' ? 'Find a Time' : 'Pick a Time';
   // The rows show once there's something to go on, or you chose to fill them in.
   const started = !!describe.trim() || filling || !!existing;
 
@@ -830,7 +839,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
   // is the next step that fits: ask them to pick from the best times, or find one.
   type Action = { label: string; icon: IconName; note: string; run: () => void; busy: boolean };
   const create: Action = {
-    label: 'Create', icon: 'add-circle-outline', run: saveToPlans, busy: saving === 'save' || saving === 'propose',
+    label: existing && existing.status !== 'draft' ? 'Save' : 'Create', icon: 'add-circle-outline', run: saveToPlans, busy: saving === 'save' || saving === 'propose',
     note: hasWho ? `Saves it to Plans, and you choose whether to share it with ${whoShort === 'everyone' ? 'everyone' : whoShort}.` : 'Saves it to Plans. You can add the rest later.',
   };
   const primary: Action = locked ? {
@@ -1214,17 +1223,20 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
     <Sheet visible={visible} onClose={handleClose} title={sheetTitle} cancelLabel={step === 'compose' && !existing && (describe.trim() || title.trim()) ? 'Close' : 'Cancel'}>
       {step === 'compose' && (
         <>
-          <Field
-            ref={describeInput}
-            value={describe}
-            onChangeText={onDescribe}
-            placeholder={KINDS.find(k => k.key === kind)?.example ?? 'Dinner with Ana this week'}
-            multiline
-            autoFocus={!existing && !prefill?.title}
-            blurOnSubmit
-            accessibilityLabel="What do you want to do?"
-            style={{ minHeight: started ? 56 : 88 }}
-          />
+          {/* Planning an idea that already exists: its title is decided, so no box to describe it again. */}
+          {existing ? null : (
+            <Field
+              ref={describeInput}
+              value={describe}
+              onChangeText={onDescribe}
+              placeholder={KINDS.find(k => k.key === kind)?.example ?? 'Dinner with Ana this week'}
+              multiline
+              autoFocus={!prefill?.title}
+              blurOnSubmit
+              accessibilityLabel="What do you want to do?"
+              style={{ minHeight: started ? 56 : 88 }}
+            />
+          )}
 
           {!started ? (
             <>
@@ -1289,7 +1301,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
           {effectiveGroups.length > 0 && (
             <ListSection
               header="Groups"
-              footer={selectedGroupIds.size === 0 ? `Nothing picked — it’ll go to ${activeGroup?.name ?? 'your active group'}.` : undefined}
+              footer={selectedGroupIds.size === 0 ? 'Nothing picked — it’s just for you and anyone you add.' : undefined}
             >
               {effectiveGroups.map(g => (
                 <ListRow

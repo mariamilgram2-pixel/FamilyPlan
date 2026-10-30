@@ -5,7 +5,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Platform, Pressable, View } from 'react-native';
 import { IconButton, Txt } from '../../components/ui';
-import { continuous, space, tabularNums, useLayout, useTheme } from '../../theme';
+import { continuous, space, tabularNums, useLayout, useTheme, weight } from '../../theme';
 import { addDays, dateKey, parseKey, todayKey } from './dates';
 
 interface Props {
@@ -115,7 +115,7 @@ export default function CalendarGrid({ selected, onSelect, marked, expanded, onT
                     style={[
                       tabularNums,
                       { color: isSel ? (isToday ? c.onTint : c.background) : isToday ? c.tint : c.label },
-                      (isSel || isToday) && { fontWeight: '600' },
+                      (isSel || isToday) && weight('700'),
                     ]}
                   >
                     {d.getDate()}

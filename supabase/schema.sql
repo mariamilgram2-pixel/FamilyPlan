@@ -14,6 +14,8 @@ CREATE TABLE public.profiles (
   full_name   TEXT,
   avatar_url  TEXT,
   birthday    TEXT        CHECK (birthday ~ '^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'),   -- MM-DD
+  about       TEXT        CHECK (about IS NULL OR char_length(about) <= 140),             -- shared with people you plan with
+  favorites   TEXT[]      NOT NULL DEFAULT '{}' CHECK (cardinality(favorites) <= 6),      -- "things I love doing"
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -64,6 +66,7 @@ CREATE TABLE public.contacts (
   name        TEXT        NOT NULL,
   email       TEXT,
   note        TEXT,
+  avatar_url  TEXT,                                   -- a photo you set for them
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -80,9 +83,25 @@ CREATE TABLE public.saved_places (
 
 CREATE INDEX saved_places_owner ON public.saved_places (owner_id);
 
+-- Notes and photos you keep about someone, private to you. About a group
+-- member (subject_user_id) or someone you added (subject_contact_id); exactly one.
+CREATE TABLE public.person_notes (
+  id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_id            UUID        NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  subject_user_id     UUID        REFERENCES public.profiles(id) ON DELETE CASCADE,
+  subject_contact_id  UUID        REFERENCES public.contacts(id) ON DELETE CASCADE,
+  body                TEXT        NOT NULL DEFAULT '' CHECK (char_length(body) <= 1000),
+  photo_urls          TEXT[]      NOT NULL DEFAULT '{}' CHECK (cardinality(photo_urls) <= 12),   -- paths in "person-notes"
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK ((subject_user_id IS NULL) <> (subject_contact_id IS NULL)),
+  CHECK (length(btrim(body)) > 0 OR cardinality(photo_urls) > 0)
+);
+
+CREATE INDEX person_notes_owner ON public.person_notes (owner_id);
+
 CREATE TABLE public.ideas (
   id                    UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  group_id              UUID        NOT NULL REFERENCES public.groups(id) ON DELETE CASCADE,
+  group_id              UUID        REFERENCES public.groups(id) ON DELETE CASCADE,   -- null: just yours, or shared only with people
   title                 TEXT        NOT NULL,
   description           TEXT,
   votes                 INTEGER     NOT NULL DEFAULT 0,
@@ -97,10 +116,19 @@ CREATE TABLE public.ideas (
   event_id              UUID        REFERENCES public.events(id) ON DELETE SET NULL,
   planned_at            TIMESTAMPTZ,
   created_by            UUID        REFERENCES public.profiles(id) ON DELETE SET NULL,
-  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  season                TEXT        CHECK (season IN ('spring', 'summer', 'fall', 'winter')),   -- the time of year it's best in
+  notes_edited_by       UUID        REFERENCES public.profiles(id) ON DELETE SET NULL,          -- description doubles as shared notes
+  notes_edited_at       TIMESTAMPTZ,
+  last_activity_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),                                     -- notes, suggestions, sharing
+  last_activity_by      UUID        REFERENCES public.profiles(id) ON DELETE SET NULL,
+  planning_started_at   TIMESTAMPTZ,                                                            -- in Finish planning from here until booked
+  declined_user_ids     UUID[]      NOT NULL DEFAULT '{}',                                      -- said they can't make it
+  tentative_user_ids    UUID[]      NOT NULL DEFAULT '{}'                                       -- maybe: plan without waiting on them
 );
 
 CREATE INDEX ideas_group_votes ON public.ideas (group_id, votes DESC);
+CREATE INDEX ideas_last_activity ON public.ideas (group_id, last_activity_at DESC);
 
 CREATE TABLE public.idea_votes (
   id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -157,6 +185,7 @@ ALTER TABLE public.ideas        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.idea_votes   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.contacts     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.saved_places ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.person_notes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
 
 -- profiles
@@ -216,37 +245,53 @@ CREATE POLICY "Event creator can delete their event"
   ON public.events FOR DELETE USING (auth.uid() = created_by);
 
 -- ideas
-CREATE POLICY "Group members can view ideas"
+CREATE OR REPLACE FUNCTION public.can_see_idea(p_idea UUID)
+RETURNS BOOLEAN LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.ideas i
+    WHERE i.id = p_idea
+      AND (i.created_by = auth.uid()
+           OR (i.status <> 'draft'
+               AND (auth.uid() = ANY(i.audience_user_ids)
+                    OR i.group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid())
+                    OR i.audience_group_ids && ARRAY(SELECT group_id FROM public.group_members WHERE user_id = auth.uid())))));
+$$;
+
+CREATE POLICY "People an idea is for can view it"
   ON public.ideas FOR SELECT
-  USING (group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid())
-         AND (status <> 'draft' OR created_by = auth.uid()));
-CREATE POLICY "Group members can create ideas"
+  USING (created_by = auth.uid()
+         OR (status <> 'draft'
+             AND (auth.uid() = ANY(audience_user_ids)
+                  OR group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid())
+                  OR audience_group_ids && ARRAY(SELECT group_id FROM public.group_members WHERE user_id = auth.uid()))));
+
+CREATE POLICY "Anyone can create their own ideas"
   ON public.ideas FOR INSERT
-  WITH CHECK (group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid()) AND auth.uid() = created_by);
-CREATE POLICY "Group members can update ideas (status / votes)"
+  WITH CHECK (auth.uid() = created_by
+              AND (group_id IS NULL OR group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid())));
+
+CREATE POLICY "People an idea is for can update it"
   ON public.ideas FOR UPDATE
-  USING (group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid())
-         AND (status <> 'draft' OR created_by = auth.uid()));
+  USING (created_by = auth.uid()
+         OR (status <> 'draft'
+             AND (auth.uid() = ANY(audience_user_ids)
+                  OR group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid())
+                  OR audience_group_ids && ARRAY(SELECT group_id FROM public.group_members WHERE user_id = auth.uid()))))
+  WITH CHECK (group_id IS NULL OR group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid())
+              OR created_by <> auth.uid());
+
 CREATE POLICY "Idea creator can delete their idea"
   ON public.ideas FOR DELETE USING (auth.uid() = created_by);
 
--- idea_votes
-CREATE POLICY "Group members can view votes"
-  ON public.idea_votes FOR SELECT
-  USING (idea_id IN (
-    SELECT i.id FROM public.ideas i
-    JOIN public.group_members gm ON gm.group_id = i.group_id
-    WHERE gm.user_id = auth.uid()
-  ));
-CREATE POLICY "Users can vote on ideas in their groups"
-  ON public.idea_votes FOR INSERT
-  WITH CHECK (auth.uid() = user_id AND idea_id IN (
-    SELECT i.id FROM public.ideas i
-    JOIN public.group_members gm ON gm.group_id = i.group_id
-    WHERE gm.user_id = auth.uid()
-  ));
+-- idea_votes: "I'm in" follows who can see the idea, not just its group.
+CREATE POLICY "People on an idea can view votes"
+  ON public.idea_votes FOR SELECT USING (public.can_see_idea(idea_id));
+
+CREATE POLICY "People on an idea can vote"
+  ON public.idea_votes FOR INSERT WITH CHECK (auth.uid() = user_id AND public.can_see_idea(idea_id));
 CREATE POLICY "Users can remove their own vote"
   ON public.idea_votes FOR DELETE USING (auth.uid() = user_id);
+
 
 -- contacts (per-user address book of people you plan with who aren't app users)
 CREATE POLICY "Users can view their own contacts"
@@ -265,6 +310,14 @@ CREATE POLICY "Users can save places as themselves"
   ON public.saved_places FOR INSERT WITH CHECK (auth.uid() = owner_id);
 CREATE POLICY "Users can delete their own saved places"
   ON public.saved_places FOR DELETE USING (auth.uid() = owner_id);
+
+-- person_notes (private to whoever wrote them; the person never sees them)
+CREATE POLICY "Users can view their own notes about people"
+  ON public.person_notes FOR SELECT USING (auth.uid() = owner_id);
+CREATE POLICY "Users can write notes about people as themselves"
+  ON public.person_notes FOR INSERT WITH CHECK (auth.uid() = owner_id);
+CREATE POLICY "Users can delete their own notes about people"
+  ON public.person_notes FOR DELETE USING (auth.uid() = owner_id);
 
 -- notifications (in-app inbox; anyone can notify, only the recipient reads)
 CREATE POLICY "Users can view their own notifications"
@@ -363,11 +416,7 @@ RETURNS BOOLEAN LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS
       WHERE e.id = p_event
         AND (auth.uid() = ANY(e.attendees)
              OR e.group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid())))
-    ELSE EXISTS (
-      SELECT 1 FROM public.ideas i
-      WHERE i.id = p_idea
-        AND (auth.uid() = ANY(i.audience_user_ids)
-             OR i.group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid())))
+    ELSE public.can_see_idea(p_idea)
   END;
 $$;
 
@@ -402,6 +451,27 @@ DROP POLICY IF EXISTS "People can remove their own photos" ON storage.objects;
 CREATE POLICY "People can remove their own photos"
   ON storage.objects FOR DELETE
   USING (bucket_id = 'memories' AND (storage.foldername(name))[2] = auth.uid()::text);
+
+-- Person-note photos
+-- Private bucket. Paths are "<owner id>/<file>"; only the owner can touch them.
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('person-notes', 'person-notes', false)
+ON CONFLICT (id) DO NOTHING;
+
+DROP POLICY IF EXISTS "People can see their own person-note photos" ON storage.objects;
+CREATE POLICY "People can see their own person-note photos"
+  ON storage.objects FOR SELECT
+  USING (bucket_id = 'person-notes' AND (storage.foldername(name))[1] = auth.uid()::text);
+
+DROP POLICY IF EXISTS "People can add their own person-note photos" ON storage.objects;
+CREATE POLICY "People can add their own person-note photos"
+  ON storage.objects FOR INSERT
+  WITH CHECK (bucket_id = 'person-notes' AND (storage.foldername(name))[1] = auth.uid()::text);
+
+DROP POLICY IF EXISTS "People can remove their own person-note photos" ON storage.objects;
+CREATE POLICY "People can remove their own person-note photos"
+  ON storage.objects FOR DELETE
+  USING (bucket_id = 'person-notes' AND (storage.foldername(name))[1] = auth.uid()::text);
 
 -- ─── Time zones ──────────────────────────────────────────────
 
@@ -703,5 +773,139 @@ BEGIN
   FROM verdicts v
   GROUP BY v.s_start, v.s_end
   ORDER BY v.s_start;
+END;
+$$;
+
+-- ─── Ideas whiteboard: activity stamps ─────────────────────────────────────
+
+-- The server keeps the stamps, so nobody's client has to remember to:
+-- editing the notes says who and when; sharing a draft counts as activity.
+CREATE OR REPLACE FUNCTION public.stamp_idea_activity()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    NEW.last_activity_at := NOW();
+    NEW.last_activity_by := NEW.created_by;
+    RETURN NEW;
+  END IF;
+  IF NEW.description IS DISTINCT FROM OLD.description THEN
+    NEW.notes_edited_by := auth.uid();
+    NEW.notes_edited_at := NOW();
+    NEW.last_activity_at := NOW();
+    NEW.last_activity_by := auth.uid();
+  ELSIF OLD.status = 'draft' AND NEW.status <> 'draft' THEN
+    NEW.last_activity_at := NOW();
+    NEW.last_activity_by := auth.uid();
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS ideas_stamp_activity ON public.ideas;
+CREATE TRIGGER ideas_stamp_activity
+  BEFORE INSERT OR UPDATE ON public.ideas
+  FOR EACH ROW EXECUTE FUNCTION public.stamp_idea_activity();
+
+-- A suggestion on an idea moves it up too. Commenters may not be allowed to
+-- update the idea itself (audience-only people), hence SECURITY DEFINER.
+CREATE OR REPLACE FUNCTION public.bump_idea_on_comment()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF NEW.idea_id IS NOT NULL THEN
+    UPDATE public.ideas SET last_activity_at = NEW.created_at, last_activity_by = NEW.user_id WHERE id = NEW.idea_id;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS plan_comments_bump_idea ON public.plan_comments;
+CREATE TRIGGER plan_comments_bump_idea
+  AFTER INSERT ON public.plan_comments
+  FOR EACH ROW EXECUTE FUNCTION public.bump_idea_on_comment();
+
+-- ─── Hidden ideas: per person, not deleted ─────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS public.hidden_ideas (
+  user_id     UUID        NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  idea_id     UUID        NOT NULL REFERENCES public.ideas(id) ON DELETE CASCADE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, idea_id)
+);
+
+ALTER TABLE public.hidden_ideas ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "You see what you hid" ON public.hidden_ideas;
+CREATE POLICY "You see what you hid"
+  ON public.hidden_ideas FOR SELECT USING (auth.uid() = user_id);
+DROP POLICY IF EXISTS "You hide ideas for yourself" ON public.hidden_ideas;
+CREATE POLICY "You hide ideas for yourself"
+  ON public.hidden_ideas FOR INSERT WITH CHECK (auth.uid() = user_id AND public.can_see_idea(idea_id));
+DROP POLICY IF EXISTS "You unhide your own" ON public.hidden_ideas;
+CREATE POLICY "You unhide your own"
+  ON public.hidden_ideas FOR DELETE USING (auth.uid() = user_id);
+
+-- ─── Finish planning: can't make it ────────────────────────────────────────
+
+-- On: a maybe, nobody waits on you. Off: counted in again.
+CREATE OR REPLACE FUNCTION public.set_tentative(p_idea UUID, p_on BOOLEAN)
+RETURNS VOID LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE me UUID := auth.uid();
+BEGIN
+  IF NOT public.can_see_idea(p_idea) THEN RAISE EXCEPTION 'You’re not on this plan'; END IF;
+  UPDATE public.ideas SET tentative_user_ids = CASE
+    WHEN p_on THEN array_append(array_remove(tentative_user_ids, me), me)
+    ELSE array_remove(tentative_user_ids, me)
+  END
+  WHERE id = p_idea;
+END;
+$$;
+
+-- Can't make it: as before, and no longer a maybe.
+CREATE OR REPLACE FUNCTION public.decline_plan(p_idea UUID)
+RETURNS VOID LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE me UUID := auth.uid();
+BEGIN
+  IF NOT public.can_see_idea(p_idea) THEN RAISE EXCEPTION 'You’re not on this plan'; END IF;
+  IF EXISTS (SELECT 1 FROM public.ideas WHERE id = p_idea AND created_by = me) THEN
+    RAISE EXCEPTION 'You started this plan; delete it instead';
+  END IF;
+  DELETE FROM public.idea_votes WHERE idea_id = p_idea AND user_id = me;
+  UPDATE public.ideas SET
+    declined_user_ids = array_append(array_remove(declined_user_ids, me), me),
+    tentative_user_ids = array_remove(tentative_user_ids, me),
+    audience_user_ids = array_remove(audience_user_ids, me),
+    slot_votes = slot_votes - me::text,
+    votes = (SELECT COUNT(*) FROM public.idea_votes WHERE idea_id = p_idea)
+  WHERE id = p_idea;
+END;
+$$;
+
+-- ─── Answers on an idea: In, Maybe, Can't ──────────────────────────────────
+-- (Supersedes set_tentative and decline_plan, which the app no longer calls.)
+
+CREATE OR REPLACE FUNCTION public.set_idea_response(p_idea UUID, p_response TEXT)
+RETURNS VOID LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE me UUID := auth.uid();
+BEGIN
+  IF p_response NOT IN ('in', 'maybe', 'cant', 'none') THEN RAISE EXCEPTION 'Unknown answer: %', p_response; END IF;
+  IF NOT public.can_see_idea(p_idea) THEN RAISE EXCEPTION 'You’re not on this plan'; END IF;
+  IF p_response IN ('maybe', 'cant') AND EXISTS (SELECT 1 FROM public.ideas WHERE id = p_idea AND created_by = me) THEN
+    RAISE EXCEPTION 'You started this plan';
+  END IF;
+
+  IF p_response = 'in' THEN
+    INSERT INTO public.idea_votes (idea_id, user_id) VALUES (p_idea, me) ON CONFLICT (idea_id, user_id) DO NOTHING;
+  ELSE
+    DELETE FROM public.idea_votes WHERE idea_id = p_idea AND user_id = me;
+  END IF;
+
+  UPDATE public.ideas SET
+    tentative_user_ids = CASE WHEN p_response = 'maybe'
+      THEN array_append(array_remove(tentative_user_ids, me), me) ELSE array_remove(tentative_user_ids, me) END,
+    declined_user_ids = CASE WHEN p_response = 'cant'
+      THEN array_append(array_remove(declined_user_ids, me), me) ELSE array_remove(declined_user_ids, me) END,
+    slot_votes = CASE WHEN p_response = 'cant' THEN slot_votes - me::text ELSE slot_votes END,
+    votes = (SELECT COUNT(*) FROM public.idea_votes WHERE idea_id = p_idea)
+  WHERE id = p_idea;
 END;
 $$;

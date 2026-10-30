@@ -47,7 +47,9 @@
           "photosPermission": "Allow sheep to access your photos so you can import a work schedule screenshot.",
           "cameraPermission": false
         }
-      ]
+      ],
+      "expo-font",
+      "expo-status-bar"
     ]
   }
 }

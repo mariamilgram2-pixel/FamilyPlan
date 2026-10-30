@@ -3,7 +3,7 @@
 
 import { useEffect, useState } from 'react';
 import { supabase } from './supabase';
-import { DEMO_EXTRA_GROUPS, DEMO_MEMBERS, DEMO_ME, isDemoGroup } from './demo';
+import { DEMO_EXTRA_GROUPS, DEMO_MEMBERS, DEMO_ME, DEMO_PEOPLE, isDemoGroup } from './demo';
 import { Group, Profile } from '../types';
 import { useGroup } from '../contexts/GroupContext';
 
@@ -25,7 +25,7 @@ export function useCircle(active: boolean, meId: string | null) {
       if (isDemo) {
         rows = [
           { group: activeGroup!, members: DEMO_MEMBERS },
-          ...DEMO_EXTRA_GROUPS.map(g => ({ group: g.group, members: DEMO_MEMBERS.filter(m => g.memberIds.includes(m.id)) })),
+          ...DEMO_EXTRA_GROUPS.map(g => ({ group: g.group, members: DEMO_PEOPLE.filter(m => g.memberIds.includes(m.id)) })),
         ];
       } else {
         const list = groups.length ? groups : activeGroup ? [activeGroup] : [];

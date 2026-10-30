@@ -1,73 +1,173 @@
-// Home's visual vocabulary: circles for people and plans, thin lines that
-// connect them, and as few words as possible. Full sentences live in the
+// Home's visual vocabulary: four rounded tiles (each with a little sheep from
+// the hillside) that open a panel below, circles for people and plans, thin
+// lines that connect them, and as few words as possible. Full sentences live in the
 // accessibility labels, so VoiceOver still reads "Chloe invited you to…".
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, Easing, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { Animated, Easing, Image, Platform, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Avatar, { AvatarPerson } from '../../components/Avatar';
 import AvatarStack from '../../components/AvatarStack';
 import { Sheep, useReducedMotion } from '../../components/Sheep';
-import { Icon, IconName, Menu, Tappable, Txt } from '../../components/ui';
-import { continuous, radius, space, tabularNums, useTheme } from '../../theme';
+import { Icon, IconButton, IconName, Menu, Tappable, TextInputRef, Txt } from '../../components/ui';
+import { continuous, radius, space, tabularNums, type, useTheme, brand } from '../../theme';
 
 const native = Platform.OS !== 'web';
 
-// ─── Collapsible category ────────────────────────────────────────────────────
+// ─── Tiles: four rounded cards that open a panel below ──────────────────────
 
-const COLLAPSED_KEY = 'home_collapsed';
+const OPEN_KEY = 'home_open_tile';
 
-/** Which categories you've folded away, remembered on this device. */
-export function useCollapsed() {
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+/**
+ * Which tile is open, remembered on this device. One at a time; `null` when
+ * all are closed. Until you choose, the first tile with something in it opens.
+ */
+export function useOpenTile(fallback: string | null) {
+  const [chosen, setChosen] = useState<string | null | undefined>(undefined);   // undefined: not chosen yet
   useEffect(() => {
-    AsyncStorage.getItem(COLLAPSED_KEY)
-      .then(raw => { if (raw) setCollapsed(new Set(JSON.parse(raw))); })
+    AsyncStorage.getItem(OPEN_KEY)
+      .then(raw => { if (raw !== null) setChosen(raw === 'none' ? null : raw); })
       .catch(() => {});
   }, []);
   function toggle(key: string) {
-    setCollapsed(prev => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key); else next.add(key);
-      AsyncStorage.setItem(COLLAPSED_KEY, JSON.stringify(Array.from(next))).catch(() => {});
+    setChosen(prev => {
+      const current = prev === undefined ? fallback : prev;
+      const next = current === key ? null : key;
+      AsyncStorage.setItem(OPEN_KEY, next ?? 'none').catch(() => {});
       return next;
     });
   }
-  return { collapsed, toggle };
+  return { open: chosen === undefined ? fallback : chosen, toggle };
 }
 
-export function Category({ title, icon, count, open, onToggle, accent, children }: {
-  title: string; icon: IconName; count: number; open: boolean; onToggle: () => void; accent?: boolean; children: React.ReactNode;
-}) {
-  const { c } = useTheme();
+export interface TileSpec {
+  key: string;
+  title: string;
+  sheep: { source: number; w: number; h: number };   // one of the hillside drawings
+  count: number;
+  empty: string;            // shown when count is 0: "All caught up"
+  accent?: boolean;         // the one that wants attention: olive when it has something
+}
+
+/** Two by two. Each tile: a little sheep in its meadow, a count, a serif title. */
+export function TileGrid({ tiles, open, onToggle }: { tiles: TileSpec[]; open: string | null; onToggle: (key: string) => void }) {
+  return (
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.s + 2 }}>
+      {tiles.map(t => <Tile key={t.key} tile={t} open={open === t.key} onPress={() => onToggle(t.key)} />)}
+    </View>
+  );
+}
+
+function Tile({ tile: t, open, onPress }: { tile: TileSpec; open: boolean; onPress: () => void }) {
+  const { c, isDark } = useTheme();
+  const lit = !!t.accent && t.count > 0;
+  const ink = lit ? c.onTint : c.label;
   const turn = useRef(new Animated.Value(open ? 1 : 0)).current;
   useEffect(() => {
     Animated.timing(turn, { toValue: open ? 1 : 0, duration: 180, easing: Easing.out(Easing.quad), useNativeDriver: native }).start();
   }, [open]);
-  const rotate = turn.interpolate({ inputRange: [0, 1], outputRange: ['-90deg', '0deg'] });
-
+  const rotate = turn.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '180deg'] });
+  const sheepH = 23;
   return (
-    <View style={{ gap: space.s }}>
+    <Tappable
+      feedback="opacity"
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ expanded: open }}
+      accessibilityLabel={`${t.title}, ${t.count || t.empty}. ${open ? 'Hide' : 'Show'}`}
+      style={{
+        flexBasis: '45%', flexGrow: 1, minHeight: 100, padding: space.m - 2, justifyContent: 'space-between',
+        borderRadius: radius.group, ...continuous,
+        backgroundColor: lit ? c.tint : c.fill,
+        borderWidth: 2, borderColor: open ? (lit ? c.tintSoft : c.tint) : 'transparent',
+      }}
+    >
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+        {/* A little window onto the meadow, the same sage in light and dark so the drawing always reads. */}
+        <View style={{
+          width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'flex-end', paddingBottom: 5,
+          backgroundColor: brand.meadow, opacity: isDark && !lit ? 0.92 : 1,
+        }}>
+          <Image
+            source={t.sheep.source}
+            accessibilityIgnoresInvertColors
+            style={{ width: (t.sheep.w / t.sheep.h) * sheepH, height: sheepH }}
+          />
+        </View>
+        {t.count > 0 ? (
+          <View style={{
+            minWidth: 26, height: 26, paddingHorizontal: space.s - 1, borderRadius: 13, alignItems: 'center', justifyContent: 'center',
+            backgroundColor: lit ? c.onTint : c.tint,
+          }}>
+            <Txt v="footnote" semibold style={[tabularNums, { color: lit ? c.tint : c.onTint }]}>{t.count}</Txt>
+          </View>
+        ) : null}
+      </View>
+      <View style={{ gap: 2 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.hair }}>
+          <Txt v="title" numberOfLines={1} style={{ color: ink, fontSize: 18, lineHeight: 23, flexShrink: 1 }}>{t.title}</Txt>
+          <Animated.View style={{ transform: [{ rotate }] }}>
+            <Icon name="chevron-down" size={15} color={lit ? c.onTint : c.secondaryLabel} />
+          </Animated.View>
+        </View>
+        {t.count === 0 ? <Txt v="footnote" style={{ color: lit ? c.onTint : c.secondaryLabel }}>{t.empty}</Txt> : null}
+      </View>
+    </Tappable>
+  );
+}
+
+/** What an open tile holds, in a soft card under the grid. */
+export function TilePanel({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  const { c } = useTheme();
+  return (
+    <View style={{ backgroundColor: c.fill, borderRadius: radius.group, paddingVertical: space.m, gap: space.s, ...continuous }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingLeft: space.m, paddingRight: space.s }}>
+        <Txt v="title" style={{ fontSize: 20, lineHeight: 25 }}>{title}</Txt>
+        <IconButton icon="close" label={`Hide ${title}`} onPress={onClose} />
+      </View>
+      <View style={{ paddingHorizontal: space.m }}>{children}</View>
+    </View>
+  );
+}
+
+// ─── Plan bar: where planning starts ─────────────────────────────────────────
+
+/**
+ * A big, friendly field that says "Plan something…". The first keystroke
+ * opens New Plan with what you typed; the arrow opens it empty.
+ */
+export function PlanBar({ inputRef, onType, onOpen }: {
+  inputRef?: React.Ref<TextInputRef>; onType: (text: string) => void; onOpen: () => void;
+}) {
+  const { c } = useTheme();
+  const [focused, setFocused] = useState(false);
+  return (
+    <View style={{
+      flexDirection: 'row', alignItems: 'center', gap: space.s,
+      height: 64, paddingLeft: space.l - 4, paddingRight: space.s, borderRadius: radius.pill, ...continuous,
+      backgroundColor: c.fill, borderWidth: 2, borderColor: focused ? c.tint : 'transparent',
+    }}>
+      <Icon name="sparkles" size={20} color={c.tint} />
+      <TextInput
+        ref={inputRef}
+        value=""
+        onChangeText={(t) => { if (t) onType(t); }}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        placeholder="Plan something…"
+        placeholderTextColor={c.secondaryLabel}
+        accessibilityLabel="Plan something. Describe it in your own words"
+        accessibilityHint="Opens New Plan with what you type"
+        style={[type.body, { flex: 1, minWidth: 0, fontSize: 18, color: c.label }, Platform.OS === 'web' && ({ outlineStyle: 'none' } as any)]}
+      />
       <Tappable
         feedback="opacity"
-        onPress={onToggle}
-        accessibilityRole="button"
-        accessibilityState={{ expanded: open }}
-        accessibilityLabel={`${title}, ${count}. ${open ? 'Hide' : 'Show'}`}
-        style={{ flexDirection: 'row', alignItems: 'center', gap: space.s, minHeight: 44 }}
+        onPress={onOpen}
+        accessibilityLabel="New plan"
+        style={{ width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: c.tint }}
       >
-        <View style={{ width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: accent ? c.tint : c.tintSoft }}>
-          <Icon name={icon} size={16} color={accent ? c.onTint : c.tint} />
-        </View>
-        <Txt v="headline" style={{ flex: 1 }}>{title}</Txt>
-        <View style={{ minWidth: 24, height: 24, paddingHorizontal: space.s, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: c.fill }}>
-          <Txt v="footnote" semibold style={tabularNums}>{count}</Txt>
-        </View>
-        <Animated.View style={{ transform: [{ rotate }] }}>
-          <Icon name="chevron-down" size={18} color={c.secondaryLabel} />
-        </Animated.View>
+        <Icon name="arrow-forward" size={20} color={c.onTint} />
       </Tappable>
-      {open ? children : null}
     </View>
   );
 }

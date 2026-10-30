@@ -9,7 +9,7 @@
 import React from 'react';
 import { Image, Text, View, ViewStyle } from 'react-native';
 import { Group } from '../types';
-import { initialsFor, useTheme } from '../theme';
+import { initialsFor, useTheme, weight } from '../theme';
 
 /** Soft circles with readable text in both themes. */
 export const GROUP_COLORS: Record<string, { light: string; dark: string; ink: { light: string; dark: string } }> = {
@@ -75,7 +75,7 @@ export default function GroupAvatar({ group, size = 32, style }: {
       ) : emoji ? (
         <Text style={{ fontSize: Math.round(size * 0.62), lineHeight: size }}>{emoji}</Text>
       ) : (
-        <Text style={{ fontSize: Math.round(size * 0.4), fontWeight: '600', color: isDark ? palette.ink.dark : palette.ink.light }}>
+        <Text style={{ fontSize: Math.round(size * 0.4), ...weight('700'), color: isDark ? palette.ink.dark : palette.ink.light }}>
           {initialsFor(group.name)}
         </Text>
       )}

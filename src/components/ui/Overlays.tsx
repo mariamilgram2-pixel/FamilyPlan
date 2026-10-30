@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Icon, IconName, Tappable, Txt } from './primitives';
+import { Icon, IconName, Tappable, Txt, ViewRef } from './primitives';
 import { continuous, radius, space, useLayout, useTheme } from '../../theme';
 
 // ─── Material ────────────────────────────────────────────────────────────────
@@ -133,7 +133,7 @@ export function Sheet({ visible, onClose, title, action, cancelLabel, scroll = t
               ? { width: '100%', height: '92%', borderTopLeftRadius: radius.sheet, borderTopRightRadius: radius.sheet }
               : {
                   width, maxWidth: '92%', height: '80%', maxHeight: 720, borderRadius: radius.sheet,
-                  shadowColor: '#000', shadowOpacity: 0.24, shadowRadius: 40, shadowOffset: { width: 0, height: 16 },
+                  shadowColor: c.shadow, shadowOpacity: 0.24, shadowRadius: 40, shadowOffset: { width: 0, height: 16 },
                 },
           ]}
         >
@@ -171,7 +171,7 @@ export function Menu({ sections, title, children }: MenuProps) {
   const { compact } = useLayout();
   const { width: winW, height: winH } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const anchorRef = useRef<View>(null);
+  const anchorRef = useRef<ViewRef>(null);
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const popover = Platform.OS === 'web' && !compact;
@@ -201,7 +201,7 @@ export function Menu({ sections, title, children }: MenuProps) {
     overlay = (
       <Modal visible transparent animationType="none" onRequestClose={() => setOpen(false)}>
         <Pressable style={StyleSheet.absoluteFill} onPress={() => setOpen(false)} accessibilityLabel="Close menu" />
-        <Material style={[styles.popover, { left, top, maxHeight: winH - top - space.m, borderColor: c.separator }]}>
+        <Material style={[styles.popover, { left, top, maxHeight: winH - top - space.m, borderColor: c.separator, shadowColor: c.shadow }]}>
           <ScrollView contentContainerStyle={{ padding: space.hair + 2 }}>
             {visibleSections.map((s, si) => (
               <View key={si}>
@@ -276,7 +276,7 @@ const styles = StyleSheet.create({
   popover: {
     position: 'absolute', width: POPOVER_WIDTH, borderRadius: radius.row,
     borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden',
-    shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 24, shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.18, shadowRadius: 24, shadowOffset: { width: 0, height: 8 },
   },
   popItem: {
     flexDirection: 'row', alignItems: 'center', gap: space.s,

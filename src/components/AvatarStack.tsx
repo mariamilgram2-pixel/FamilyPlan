@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, ViewStyle } from 'react-native';
 import Avatar, { AvatarPerson } from './Avatar';
-import { useTheme } from '../theme';
+import { useTheme, weight } from '../theme';
 
 interface Props {
   people: AvatarPerson[];
@@ -35,7 +35,7 @@ export default function AvatarStack({ people, max = 3, size = 24, ringColor, sty
           backgroundColor: c.fill, borderWidth: Math.max(2, Math.round(size * 0.08)), borderColor: ring,
           alignItems: 'center', justifyContent: 'center',
         }}>
-          <Text style={{ color: c.label, fontSize: Math.round(size * 0.4), fontWeight: '600' }}>+{extra}</Text>
+          <Text style={{ color: c.label, fontSize: Math.round(size * 0.4), ...weight('700') }}>+{extra}</Text>
         </View>
       )}
     </View>

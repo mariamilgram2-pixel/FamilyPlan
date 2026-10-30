@@ -185,8 +185,12 @@ export default function ProfileScreen() {
     if (await confirmAction('Sign out', 'You’ll need to sign in again to see your groups.', 'Sign Out')) signOut();
   }
 
-  const displayName = profile?.full_name || user?.email || 'Guest';
-  const me = { id: user?.id ?? 'me', full_name: displayName, avatar_url: avatarUri };
+  // Demo: you're Jordan, as Home and everyone else see you.
+  const demoMe = isDemo ? DEMO_MEMBERS[0] : null;
+  const displayName = profile?.full_name || user?.email || demoMe?.full_name || 'Guest';
+  // Demo: Jordan's portrait until you pick your own.
+  const myPhoto = avatarUri ?? (isDemo ? DEMO_MEMBERS[0].avatar_url : null);
+  const me = { id: user?.id ?? 'me', full_name: displayName, avatar_url: myPhoto };
   const reminderLabel = REMINDER_OPTIONS.find(o => o.value === defaultReminder)?.label ?? 'None';
   const hiddenCount = hiddenFriends.filter(id => groupMembers.some(m => m.id === id)).length;
 
@@ -202,7 +206,7 @@ export default function ProfileScreen() {
           <ListRow
             leading={<Avatar person={me} size={56} highlight />}
             title={displayName}
-            subtitle={user?.email ?? 'Not signed in'}
+            subtitle={user?.email ?? (demoMe ? 'Demo account' : 'Not signed in')}
             chevron
             onPress={() => setSheet('profile')}
             style={{ minHeight: 80 }}
@@ -301,10 +305,12 @@ export default function ProfileScreen() {
         visible={sheet === 'profile'}
         onClose={() => setSheet(null)}
         isDemo={isDemo}
-        initialName={profile?.full_name ?? ''}
-        initialEmail={user?.email ?? ''}
+        initialName={profile?.full_name ?? demoMe?.full_name ?? ''}
+        initialEmail={user?.email ?? demoMe?.email ?? ''}
         initialBirthday={profile?.birthday ?? (isDemo ? DEMO_MEMBERS[0].birthday ?? null : null)}
-        avatarUri={avatarUri}
+        initialAbout={(profile ?? (isDemo ? DEMO_MEMBERS[0] : null))?.about ?? ''}
+        initialFavorites={(profile ?? (isDemo ? DEMO_MEMBERS[0] : null))?.favorites ?? []}
+        avatarUri={myPhoto}
         onAvatar={setAvatar}
         userId={user?.id ?? null}
         currentEmail={user?.email ?? null}
@@ -336,14 +342,22 @@ function parseBirthday(text: string): string | null | undefined {
   return `${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
 }
 
-function EditProfileSheet({ visible, onClose, isDemo, initialName, initialEmail, initialBirthday, avatarUri, onAvatar, userId, currentEmail, onSaved }: {
+/** "hiking, board games,  " → ["hiking", "board games"]; at most six, each short. */
+function parseFavorites(text: string): string[] {
+  return text.split(',').map(t => t.trim().slice(0, 30)).filter(Boolean).slice(0, 6);
+}
+
+function EditProfileSheet({ visible, onClose, isDemo, initialName, initialEmail, initialBirthday, initialAbout, initialFavorites, avatarUri, onAvatar, userId, currentEmail, onSaved }: {
   visible: boolean; onClose: () => void; isDemo: boolean; initialName: string; initialEmail: string; initialBirthday: string | null;
+  initialAbout: string; initialFavorites: string[];
   avatarUri: string | null; onAvatar: (u: string | null) => void; userId: string | null; currentEmail: string | null;
   onSaved: () => Promise<void>;
 }) {
   const [name, setName] = useState(initialName);
   const [email, setEmail] = useState(initialEmail);
   const [birthday, setBirthday] = useState('');
+  const [about, setAbout] = useState('');
+  const [favorites, setFavorites] = useState('');
   const [urlMode, setUrlMode] = useState(false);
   const [photoUrl, setPhotoUrl] = useState('');
   const [saving, setSaving] = useState(false);
@@ -352,6 +366,7 @@ function EditProfileSheet({ visible, onClose, isDemo, initialName, initialEmail,
     if (!visible) return;
     setName(initialName); setEmail(initialEmail); setUrlMode(false); setPhotoUrl('');
     setBirthday(initialBirthday ? initialBirthday.replace('-', '/') : '');
+    setAbout(initialAbout); setFavorites(initialFavorites.join(', '));
   }, [visible]);
 
   function pickFile() {
@@ -382,7 +397,9 @@ function EditProfileSheet({ visible, onClose, isDemo, initialName, initialEmail,
     if (bday === undefined) return notify('Check your birthday', 'Use month and day, like 10/23.');
     if (isDemo || !userId) return notify('Demo mode', 'Sign in to save profile changes.');
     setSaving(true);
-    const { error } = await supabase.from('profiles').update({ full_name: name.trim(), birthday: bday } as any).eq('id', userId);
+    const { error } = await supabase.from('profiles').update({
+      full_name: name.trim(), birthday: bday, about: about.trim() || null, favorites: parseFavorites(favorites),
+    } as any).eq('id', userId);
     if (error) { setSaving(false); return notify('Couldn’t save', error.message); }
 
     const newEmail = email.trim();
@@ -425,6 +442,20 @@ function EditProfileSheet({ visible, onClose, isDemo, initialName, initialEmail,
         placeholder="MM/DD"
         keyboardType="numbers-and-punctuation"
         hint="Just the month and day. People you plan with get a nudge to celebrate."
+      />
+      <Field
+        label="About you"
+        value={about}
+        onChangeText={setAbout}
+        placeholder="Optional"
+        maxLength={140}
+      />
+      <Field
+        label="Things you love doing"
+        value={favorites}
+        onChangeText={setFavorites}
+        placeholder="Hiking, board games, trying new tacos"
+        hint="Separate with commas. Shown on your profile to people you plan with."
       />
       <Field label="Email" value={email} onChangeText={setEmail} placeholder="you@example.com" keyboardType="email-address" autoCapitalize="none" hint="Changing your email sends a confirmation link." />
     </Sheet>

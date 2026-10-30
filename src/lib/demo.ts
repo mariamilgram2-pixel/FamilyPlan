@@ -1,7 +1,7 @@
 // Sample content for "Skip to demo" so first-run exploration isn't an empty
 // shell. Dates are generated relative to today. Nothing here touches Supabase.
 
-import { Contact, Event, Group, Idea, PlanComment, Profile } from '../types';
+import { Contact, Event, Group, Idea, PersonNote, PlanComment, Profile } from '../types';
 
 export const DEMO_GROUP_ID = 'demo';
 export const DEMO_ME = 'demo-me';
@@ -12,19 +12,33 @@ export function isDemoGroup(g: Pick<Group, 'id'> | null | undefined) {
 
 const now = new Date().toISOString();
 
-const person = (id: string, full_name: string): Profile => ({
-  id, full_name, email: `${full_name.split(' ')[0].toLowerCase()}@example.com`, avatar_url: null, created_at: now,
+const person = (id: string, full_name: string, photo: string | null = null): Profile => ({
+  id, full_name, email: `${full_name.split(' ')[0].toLowerCase()}@example.com`, avatar_url: photo, created_at: now,
 });
 
+// Stock portraits. A couple of people never set one, like real life.
+const portrait = (kind: 'men' | 'women', n: number) => `https://randomuser.me/api/portraits/${kind}/${n}.jpg`;
+
+/** The demo group (My Family). */
 export const DEMO_MEMBERS: Profile[] = [
-  person(DEMO_ME, 'Jordan Lee'),
-  person('demo-ana', 'Ana Reyes'),
-  person('demo-ben', 'Ben Okafor'),
-  person('demo-chloe', 'Chloe Park'),
-  person('demo-dev', 'Dev Shah'),
+  person(DEMO_ME, 'Jordan Lee', portrait('women', 32)),
+  person('demo-ana', 'Ana Reyes', portrait('women', 44)),
+  person('demo-ben', 'Ben Okafor', portrait('men', 46)),
+  person('demo-chloe', 'Chloe Park', portrait('women', 65)),
+  person('demo-dev', 'Dev Shah', portrait('men', 75)),
   person('demo-eli', 'Eli Brooks'),
-  person('demo-fran', 'Fran Ito'),
+  person('demo-fran', 'Fran Ito', portrait('women', 68)),
 ];
+
+/** People you only share another group with (Climbing crew). */
+export const DEMO_FRIENDS: Profile[] = [
+  person('demo-gabe', 'Gabe Moreno', portrait('men', 52)),
+  person('demo-hana', 'Hana Kim', portrait('women', 79)),
+  person('demo-iris', 'Iris Novak'),
+];
+
+/** Everyone in any demo group, for looking people up by id. */
+export const DEMO_PEOPLE: Profile[] = [...DEMO_MEMBERS, ...DEMO_FRIENDS];
 
 // Birthdays a week or few out, so Home has something to suggest.
 const mmdd = (daysOut: number) => {
@@ -33,6 +47,18 @@ const mmdd = (daysOut: number) => {
 };
 DEMO_MEMBERS[1].birthday = mmdd(9);    // Ana
 DEMO_MEMBERS[2].birthday = mmdd(24);   // Ben
+DEMO_MEMBERS[3].birthday = '04-17';    // Chloe
+
+// What people chose to share. Uneven on purpose: some say a lot, some a
+// little, Eli hasn't filled anything in.
+Object.assign(DEMO_MEMBERS[0], { favorites: ['Hiking', 'Movie nights'] });
+Object.assign(DEMO_MEMBERS[1], { about: 'Book club ringleader. Always up for a farmers market.', favorites: ['Farmers markets', 'Hiking', 'Reading'] });
+Object.assign(DEMO_MEMBERS[2], { favorites: ['Baking bread', 'Soccer', 'Brunch'] });
+Object.assign(DEMO_MEMBERS[3], { about: 'Piano, plants, and pancakes.' });
+Object.assign(DEMO_MEMBERS[4], { favorites: ['Karaoke', 'Board games', 'Sci-fi'] });
+Object.assign(DEMO_MEMBERS[6], { about: 'New in town. Show me your favorite spots!', favorites: ['Karaoke', 'Dancing'] });
+Object.assign(DEMO_FRIENDS[0], { about: 'Belay partner for life. Will drive to the Gunks.', favorites: ['Climbing', 'Coffee', 'Camping'] });
+Object.assign(DEMO_FRIENDS[1], { favorites: ['Bouldering', 'Ramen', 'Film photography'], birthday: mmdd(17) });
 
 function at(dayOffset: number, hour: number, minute = 0) {
   const d = new Date();
@@ -77,6 +103,15 @@ DEMO_EVENTS[6].rsvps = { 'demo-dev': 'going' };
 DEMO_EVENTS.push(
   { ...ev('e8', 'Brunch at Café Lola', -2, 11, 0, 90, 'Café Lola', [DEMO_ME, 'demo-ana', 'demo-ben']), rsvps: { 'demo-ana': 'going', 'demo-ben': 'going' } },
   { ...ev('e9', 'Karaoke night', -47, 21, 0, 150, 'Gagopa', ['demo-fran', DEMO_ME, 'demo-dev']), rsvps: { [DEMO_ME]: 'going', 'demo-dev': 'going' } },
+  { ...ev('e13', 'Apple picking', -30, 10, 0, 240, 'Fishkill Farms', [DEMO_ME, 'demo-ana', 'demo-chloe']), rsvps: { 'demo-ana': 'going', 'demo-chloe': 'going' } },
+);
+
+// Climbing crew: a regular gym night, a big day out, and an invite from Gabe
+// you haven't answered.
+DEMO_EVENTS.push(
+  { ...ev('e14', 'Bouldering night', -10, 19, 0, 120, 'Brooklyn Boulders', ['demo-gabe', DEMO_ME, 'demo-hana', 'demo-dev']), group_id: 'demo-climb', rsvps: { [DEMO_ME]: 'going', 'demo-hana': 'going', 'demo-dev': 'going' } },
+  { ...ev('e15', 'Gunks day trip', -58, 7, 0, 600, 'Mohonk Preserve', ['demo-iris', DEMO_ME, 'demo-gabe']), group_id: 'demo-climb', rsvps: { [DEMO_ME]: 'going', 'demo-gabe': 'going' } },
+  { ...ev('e16', 'Climbing gym', 4, 18, 30, 120, 'Brooklyn Boulders', ['demo-gabe', DEMO_ME, 'demo-hana', 'demo-iris']), group_id: 'demo-climb', rsvps: { 'demo-hana': 'going' } },
 );
 
 // A tradition: Sunday supper, every week, hosts take turns. Started three
@@ -116,7 +151,7 @@ export function addDemoEvent(e: Omit<Event, 'id' | 'created_at' | 'group_id'>): 
 const daysAgo = (n: number) => new Date(Date.now() - n * 86400000).toISOString();
 
 function idea(id: string, title: string, description: string | null, status: Idea['status'], voters: string[], by: string, audienceUsers: string[] = [], proposedDaysAgo = 0, plannedDaysAgo: number | null = null): Idea {
-  const author = DEMO_MEMBERS.find(m => m.id === by)!;
+  const author = DEMO_PEOPLE.find(m => m.id === by)!;
   return {
     id, group_id: DEMO_GROUP_ID, title, description, status,
     votes: voters.length,
@@ -124,6 +159,7 @@ function idea(id: string, title: string, description: string | null, status: Ide
     location: null, target_date: null, proposed_slots: [], event_id: null,
     planned_at: plannedDaysAgo === null ? null : daysAgo(plannedDaysAgo),
     created_by: by, created_at: daysAgo(proposedDaysAgo),
+    last_activity_at: daysAgo(proposedDaysAgo), last_activity_by: by,
     profiles: { id: author.id, full_name: author.full_name, email: author.email },
     idea_votes: voters.map((u, i) => ({ id: `${id}-v${i}`, idea_id: id, user_id: u, created_at: now })),
   };
@@ -135,7 +171,39 @@ export const DEMO_IDEAS: Idea[] = [
   idea('i3', 'Pottery class', null, 'proposed', ['demo-ana'], DEMO_ME, ['demo-ana', 'demo-chloe'], 1),
   idea('i4', 'Visit the aquarium', 'Kids are asking. Weekday mornings are quieter.', 'planned', [DEMO_ME, 'demo-ben', 'demo-chloe'], 'demo-ben', [], 20, 3),
   idea('i5', 'Board game marathon', null, 'done', ['demo-dev', 'demo-eli'], 'demo-dev', [], 40, 30),
+  // More ideas on the whiteboard, some with notes and suggestions going.
+  idea('i6', 'Fall foliage weekend in Vermont', 'Rent a farmhouse, cider donuts, maybe a covered bridge or two.', 'proposed', ['demo-ben', DEMO_ME, 'demo-ana'], 'demo-ben', [], 3),
+  idea('i7', 'Sunrise hike to the fire tower', 'Short but steep. Thermos of coffee at the top.', 'proposed', ['demo-ana', 'demo-dev'], 'demo-ana', [], 5),
+  idea('i8', 'Coffee crawl in the West Village', 'Four cafés, one afternoon, rank them all.', 'proposed', ['demo-chloe'], 'demo-chloe', [], 2),
+  // Just for you: a someday idea, not shared yet.
+  idea('i9', 'Food tour in Queens', 'Flushing for dumplings, then Jackson Heights for momos.', 'draft', [], DEMO_ME, [], 4),
+  // From another group: Plans shows every group's, not just the family's.
+  idea('i10', 'Camping trip to the Gunks', 'Climb Saturday, campfire, climb again Sunday.', 'proposed', ['demo-gabe', 'demo-hana'], 'demo-gabe', [], 7),
 ];
+DEMO_IDEAS[8].group_id = null;           // a draft belongs to no group until it's shared
+DEMO_IDEAS[9].group_id = 'demo-climb';
+
+// The whiteboard: Vermont's notes have grown, and its season is here.
+{
+  const hoursAgo = (n: number) => new Date(Date.now() - n * 3600000).toISOString();
+  const vermont = DEMO_IDEAS[5];
+  Object.assign(vermont, {
+    season: 'fall',
+    description: 'Rent a farmhouse, cider donuts, maybe a covered bridge or two.\n\nAna: Woodstock or Stowe? Woodstock is closer and very walkable.\nBen: Peak color is usually early to mid October.',
+    notes_edited_by: 'demo-ana', notes_edited_at: hoursAgo(3),
+    last_activity_at: hoursAgo(3), last_activity_by: 'demo-ana',
+    // Not everyone's in: Chloe's a maybe, Dev can't.
+    tentative_user_ids: ['demo-chloe'], declined_user_ids: ['demo-dev'],
+  });
+  DEMO_IDEAS[0].season = 'spring';
+  // Eli started planning the camping trip and stopped halfway: it waits in Finish planning.
+  DEMO_IDEAS[0].planning_started_at = hoursAgo(30);
+  Object.assign(DEMO_IDEAS[7], { last_activity_at: hoursAgo(20), last_activity_by: 'demo-dev' });
+}
+
+// The aquarium got booked: its invite is on the calendar, and you haven't answered yet.
+DEMO_EVENTS.push({ ...ev('e17', 'Visit the aquarium', 6, 10, 0, 180, 'New York Aquarium', ['demo-ben', DEMO_ME, 'demo-chloe', 'demo-ana']), rsvps: { 'demo-chloe': 'going', 'demo-ana': 'maybe' } });
+DEMO_IDEAS[3].event_id = 'e17';
 
 // Date options waiting on votes: one you proposed, one waiting on you.
 const slot = (day: number, h: number, durMin: number) => {
@@ -154,6 +222,9 @@ const slot = (day: number, h: number, durMin: number) => {
   tacos.slot_votes = { 'demo-chloe': [t1, t2, t3], 'demo-dev': [t2, t3] };
 }
 
+/** Ideas you've hidden in the demo. One to start, so the Hidden folder has something in it. */
+export const DEMO_HIDDEN = new Set<string>(['i7']);
+
 /** Save a demo idea (new or edited) so every screen sees it. */
 export function upsertDemoIdea(idea: Idea) {
   const i = DEMO_IDEAS.findIndex(x => x.id === idea.id);
@@ -170,22 +241,52 @@ export function removeDemoIdea(id: string) {
   if (i >= 0) DEMO_IDEAS.splice(i, 1);
 }
 
-// Conversations on plans.
+// Conversations on plans. Photos are stand-in images, stable per seed.
+const photo = (seed: string, n: number) => `https://picsum.photos/seed/sheep-${seed}-${n}/400/400`;
 const ago = (min: number) => new Date(Date.now() - min * 60000).toISOString();
 export const DEMO_COMMENTS: PlanComment[] = [
   { id: 'm1', event_id: 'e2', idea_id: null, user_id: 'demo-ana', body: 'I can bring extra chairs if we need them.', created_at: ago(300) },
   { id: 'm2', event_id: 'e2', idea_id: null, user_id: 'demo-ben', body: 'Sourdough or baguette?', created_at: ago(120) },
   { id: 'm3', event_id: null, idea_id: 'i3', user_id: 'demo-ana', body: 'Evenings are easier for me, but I can do the Tuesday.', created_at: ago(600) },
+  { id: 'm8', event_id: null, idea_id: 'i6', user_id: 'demo-ben', body: 'Found a farmhouse that sleeps 8, about $90 a night each.', created_at: ago(26 * 60) },
+  { id: 'm9', event_id: null, idea_id: 'i6', user_id: 'demo-ana', body: 'Any weekend works for me. Woodstock gets my vote.', created_at: ago(3 * 60) },
+  { id: 'm10', event_id: null, idea_id: 'i8', user_id: 'demo-dev', body: 'Add Partners to the list, the cortado is unreal.', created_at: ago(20 * 60) },
   { id: 'm4', event_id: 'e8', idea_id: null, user_id: 'demo-ben', body: 'Those pancakes. We need to go back.', created_at: ago(1500) },
+  // Memories with photos, so people's Together timelines have some.
+  { id: 'm5', event_id: 'e13', idea_id: null, user_id: 'demo-ana', body: 'Best haul yet.', photo_urls: [photo('apples', 1), photo('apples', 2), photo('apples', 3)], created_at: ago(30 * 1440) },
+  { id: 'm6', event_id: 'e8', idea_id: null, user_id: DEMO_ME, body: '', photo_urls: [photo('brunch', 1), photo('brunch', 2)], created_at: ago(2 * 1440) },
+  { id: 'm7', event_id: 'e14', idea_id: null, user_id: 'demo-hana', body: 'Sent the V4!', photo_urls: [photo('climb', 1), photo('climb', 2)], created_at: ago(10 * 1440) },
 ];
+
+// Cover photos for demo groups, by id. Looked up rather than stored on the
+// group, so a demo group saved before photos existed still gets one.
+const unsplash = (id: string) => `https://images.unsplash.com/photo-${id}?w=800&q=70&auto=format&fit=crop`;
+export const DEMO_GROUP_PHOTOS: Record<string, string> = {
+  [DEMO_GROUP_ID]: unsplash('1511795409834-ef04bbd61622'),   // a dinner table with flowers
+  'demo-books': unsplash('1481627834876-b7833e8f5570'),      // a warm library
+  'demo-climb': unsplash('1564769662533-4f00a87b4056'),      // a climbing gym
+  'demo-soccer': unsplash('1574629810360-7efbbe195018'),     // a ball on grass
+};
 
 /** Extra demo groups, so the invite picker has more than one to choose from. */
 export const DEMO_EXTRA_GROUPS: { group: Group; memberIds: string[] }[] = [
   { group: { id: 'demo-soccer', name: 'Soccer parents', description: null, invite_code: 'SOCCER01', created_by: 'demo-ben', created_at: now }, memberIds: ['demo-ben', 'demo-eli'] },
   { group: { id: 'demo-books', name: 'Book club', description: null, invite_code: 'BOOKS001', created_by: 'demo-ana', created_at: now }, memberIds: ['demo-ana', 'demo-dev', DEMO_ME] },
+  { group: { id: 'demo-climb', name: 'Climbing crew', description: 'Tuesday gym nights, the occasional road trip.', invite_code: 'CLIMB777', created_by: 'demo-gabe', created_at: now }, memberIds: ['demo-gabe', DEMO_ME, 'demo-hana', 'demo-iris', 'demo-dev'] },
+];
+
+/** Your private notes about people. */
+export const DEMO_PERSON_NOTES: PersonNote[] = [
+  { id: 'pn1', owner_id: DEMO_ME, subject_user_id: 'demo-ana', subject_contact_id: null, body: 'Walnut allergy. Skip them in anything you bring.', photo_urls: [], created_at: daysAgo(90) },
+  { id: 'pn2', owner_id: DEMO_ME, subject_user_id: 'demo-dev', subject_contact_id: null, body: 'Wants to try the new ramen place on 5th.', photo_urls: [], created_at: daysAgo(10) },
+  { id: 'pn3', owner_id: DEMO_ME, subject_user_id: null, subject_contact_id: 'c1', body: 'Loves lilies. Best to call Sunday mornings.', photo_urls: [], created_at: daysAgo(60) },
 ];
 
 export const DEMO_CONTACTS: Contact[] = [
   { id: 'c1', owner_id: DEMO_ME, name: 'Grandma Rose', email: null, note: 'Hosts Sunday dinners', created_at: now },
   { id: 'c2', owner_id: DEMO_ME, name: 'Coach Miller', email: 'miller@example.com', note: null, created_at: now },
+  { id: 'c3', owner_id: DEMO_ME, name: 'Aunt Linda', email: null, note: 'Thanksgiving host', avatar_url: portrait('women', 57), created_at: now },
+  { id: 'c4', owner_id: DEMO_ME, name: 'Sam Patel', email: 'sam@example.com', note: 'Neighbor, dog named Biscuit', avatar_url: portrait('men', 11), created_at: now },
+  { id: 'c5', owner_id: DEMO_ME, name: 'Priya Nair', email: 'priya@example.com', note: 'Work trivia team', created_at: now },
+  { id: 'c6', owner_id: DEMO_ME, name: 'Marcus Hill', email: null, note: null, avatar_url: portrait('men', 36), created_at: now },
 ];
