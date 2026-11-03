@@ -5,7 +5,7 @@
 // (Manrope) for everything else. Dark mode is warm charcoal with sage.
 //
 // The palette is deliberately tiny: one tint, one background, one container
-// fill, and two label levels. Everything else (separators, materials, pressed
+// fill, one raised card surface, and two label levels. Everything else (separators, materials, pressed
 // states) is derived from those, so light and dark stay in lockstep.
 // All text/background pairs below clear WCAG AA (4.5:1).
 
@@ -18,6 +18,7 @@ export type Palette = {
   onTint: string;          // text/icons placed on a tint fill
   background: string;      // the one neutral surface
   fill: string;            // the one subtle container (grouped rows, inputs, sidebar)
+  card: string;            // a raised card that stands off the page (a clean surface, not a shade of it)
   label: string;           // primary text
   secondaryLabel: string;  // secondary text
   // Derived — not new hues.
@@ -55,7 +56,8 @@ const light: Palette = {
   tint: '#3E4A2E',          // deep olive
   onTint: '#F4EFE6',
   background: '#F4EFE6',    // cream
-  fill: '#EAE3D6',          // a shade deeper: cards, inputs
+  fill: '#EAE3D6',          // a shade deeper: grouped rows, inputs
+  card: '#FFFDF9',          // warm white: raised cards
   label: '#23261D',
   secondaryLabel: '#6B675B',
   separator: 'rgba(62,52,30,0.13)',
@@ -74,6 +76,7 @@ const dark: Palette = {
   onTint: '#171812',
   background: '#151612',    // warm charcoal
   fill: '#21231C',
+  card: '#1E201A',          // a step up from the page
   label: '#F2EEE4',
   secondaryLabel: '#A8A393',
   separator: 'rgba(242,238,228,0.12)',
@@ -97,7 +100,9 @@ export const HIT = 44;
 
 // ─── Radii: continuous (squircle) curves on iOS ──────────────────────────────
 
-export const radius = { control: 10, row: 14, group: 22, sheet: 28, pill: 999 } as const;
+// `block` is for structural content (a card that holds things), kept sharper
+// than anything you tap, so buttons read as buttons.
+export const radius = { block: 8, control: 10, row: 14, group: 22, sheet: 28, pill: 999 } as const;
 
 export const continuous: ViewStyle = Platform.OS === 'ios' ? ({ borderCurve: 'continuous' } as ViewStyle) : {};
 

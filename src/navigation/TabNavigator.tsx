@@ -1,7 +1,7 @@
 // The adaptive shell.
 //
 // One navigator, two presentations of the same four destinations — Home,
-// Calendar, Plans, People:
+// Plans, Calendar, People:
 //   compact  → a floating olive capsule just above the bottom edge (thumb
 //              zone); settings ("You") open from your avatar on Home
 //   sidebar  → a left source list with sections, your groups, and your
@@ -32,8 +32,8 @@ const Tab = createBottomTabNavigator<TabParamList>();
 
 const DESTINATIONS: { name: keyof TabParamList; label: string; icon: IconName; iconActive: IconName }[] = [
   { name: 'Home',     label: 'Home',     icon: 'home-outline',     iconActive: 'home' },
-  { name: 'Calendar', label: 'Calendar', icon: 'calendar-outline', iconActive: 'calendar' },
   { name: 'Plans',    label: 'Plans',    icon: 'sparkles-outline', iconActive: 'sparkles' },
+  { name: 'Calendar', label: 'Calendar', icon: 'calendar-outline', iconActive: 'calendar' },
   { name: 'People',   label: 'People',   icon: 'people-outline',   iconActive: 'people' },
 ];
 
@@ -47,8 +47,8 @@ export default function TabNavigator() {
         tabBar={(props) => (hasSidebar ? <Sidebar {...props} /> : <TabBar {...props} />)}
       >
         <Tab.Screen name="Home" component={HomeScreen} />
-        <Tab.Screen name="Calendar" component={CalendarScreen} />
         <Tab.Screen name="Plans" component={PlansScreen} />
+        <Tab.Screen name="Calendar" component={CalendarScreen} />
         <Tab.Screen name="People" component={PeopleScreen} />
         <Tab.Screen name="You" component={ProfileScreen} />
       </Tab.Navigator>

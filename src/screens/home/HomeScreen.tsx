@@ -1,9 +1,11 @@
-// Home — what's next with your people, at a glance.
+// Home — make plans happen.
 //
-// A sheep to poke and this week's flock up top, then folding categories
-// drawn in circles and lines rather than sentences: what needs you, a
-// timeline of what's coming up, how recent plans went, and nudges toward the
-// next one (birthdays, someone free when you are, people you haven't seen).
+// Made for the moment someone at dinner says "we should…": a sheep, the
+// mission, and one box to plan in. Everything else is behind the sheep's
+// speech bubble ("See home ›"), on its own screen, Your plans: what needs
+// you, what's coming up, how recent plans went, and nudges toward the next
+// one (birthdays, someone free when you are, people you haven't seen).
+// Tapping the Home tab again goes back to the sheep.
 // Activity (the inbox) sits behind the bell; settings behind your avatar.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -27,11 +29,11 @@ import Avatar, { AvatarPerson } from '../../components/Avatar';
 import { usePlanComposer } from '../../components/PlanComposer';
 import { Sheep } from '../../components/Sheep';
 import {
-  Button, EmptyState, IconButton, IconName, ListRow, ListSection, ReadingColumn,
+  Button, Icon, IconButton, IconName, ListRow, ListSection, ReadingColumn,
   ScreenHeader, Screen, Sheet, Tappable, Txt,
 TextInputRef, } from '../../components/ui';
 import { NotificationList } from '../ideas/IdeaViews';
-import { Bubble, BubbleRow, Hero, PlanBar, Stop, TileGrid, TilePanel, TileSpec, Timeline, useOpenTile } from './HomeViews';
+import { Bubble, BubbleRow, Hero, NewPlanButton, PillCloud, PlanBar, Polaroids, SectionTop, Stop, TicketRow, Timeline, useOpenTile } from './HomeViews';
 import { ART, FieldFlock, useFieldFlockInset } from './FieldFlock';
 import { addDays, dateKey, keyOf, parseKey, relativeDay, shortDate, timeParts, todayKey } from '../calendar/dates';
 import { space, useLayout, useTheme } from '../../theme';
@@ -252,7 +254,6 @@ export default function HomeScreen() {
 
   const hhmm = (iso: string) => { const d = new Date(iso); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
   const shortTime = (iso: string) => { const { hm, ampm } = timeParts(iso); return `${hm.replace(':00', '')} ${ampm}`; };
-  const nothing = !todos.length && !upNext.length && !recent.length && !reconnect.length && !freeTogether.length && !birthdays.length;
 
   // ─── Pieces ────────────────────────────────────────────────────────────────
   const stops: Stop[] = upNext.map(e => {
@@ -342,9 +343,9 @@ export default function HomeScreen() {
     return Array.from(ids).map(personOf);
   }, [mine, people]);
 
-  // What the sheep says: your week first, then something silly.
+  // What the sheep says: "See home" first (tap the bubble for it), then puns.
   const lines = [
-    todos.length ? `${todos.length} thing${todos.length === 1 ? '' : 's'} need${todos.length === 1 ? 's' : ''} you!` : 'All caught up. Baa-rilliant.',
+    'See home',
     upNext.length ? `Ewe’ve got ${upNext.length} plan${upNext.length === 1 ? '' : 's'} ahead.` : 'Flock together soon?',
     flock.length ? `Shear joy: ${flock.length} friend${flock.length === 1 ? '' : 's'} this week.` : 'Who haven’t you seen lately?',
     birthdays.length ? `Psst… ${first(birthdays[0].p)}’s birthday is coming up.` : 'Baa-ck to planning?',
@@ -352,26 +353,68 @@ export default function HomeScreen() {
     'No sheepish excuses this week.',
   ];
 
-  // ─── Tiles ─────────────────────────────────────────────────────────────────
-  // Four rounded tiles, each with a sheep from the hillside in a matching pose.
-  const tiles: TileSpec[] = [
-    { key: 'needs', title: 'Your turn', sheep: ART.standing3, count: todos.length, empty: 'All caught up', accent: true },
-    { key: 'upcoming', title: 'Coming up', sheep: ART.grazing2, count: stops.length, empty: 'Nothing planned' },
-    { key: 'recent', title: 'How was it?', sheep: ART.lying1, count: memories.length, empty: 'No new memories' },
-    { key: 'nudges', title: 'Make plans', sheep: ART.sitting1, count: nudges.length, empty: 'Ideas soon' },
-  ];
-  const { open: openTile, toggle: toggleTile } = useOpenTile(tiles.find(t => t.count > 0)?.key ?? null);
-  const openSpec = tiles.find(t => t.key === openTile && t.count > 0) ?? null;
+  // ─── Your plans ────────────────────────────────────────────────────────────
+  // The home view, its own screen. One section opens all the way at a time.
+  const [view, setView] = useState<'start' | 'plans'>('start');
+  useEffect(() => navigation.addListener('tabPress' as any, () => setView('start')), [navigation]);
+  const { open: openTile, toggle: toggleTile } = useOpenTile(null);
+  const section = (key: string) => ({ open: openTile === key, onToggle: () => toggleTile(key) });
+
+  const plansView = (
+    <View style={{ gap: space.xl, paddingTop: space.s }}>
+      <View style={{ gap: space.s }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Tappable onPress={() => setView('start')} accessibilityLabel="Back" hitSlop={8}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 2, paddingVertical: space.hair, borderRadius: 6 }}>
+            <Icon name="chevron-back" size={20} color={c.tint} />
+            <Txt v="body" tone="tint">Back</Txt>
+          </Tappable>
+          <NewPlanButton onPress={() => composer.newPlan()} />
+        </View>
+        <Txt v="largeTitle" accessibilityRole="header">Your plans</Txt>
+      </View>
+      {loading ? <ActivityIndicator color={c.secondaryLabel} /> : null}
+
+      {/* Your turn: the faces waiting on you. */}
+      <View style={{ gap: space.m }}>
+        <SectionTop title="Your turn" sheep={ART.standing3} hint={todos.length ? null : 'All caught up'}
+          canOpen={todos.length > 4} {...section('needs')} />
+        {todos.length ? <BubbleRow items={openTile === 'needs' ? todos : todos.slice(0, 4)} wrap={openTile === 'needs'} /> : null}
+      </View>
+
+      {/* Coming up: calendar pages to swipe; open, the whole timeline. */}
+      <View style={{ gap: space.m }}>
+        <SectionTop title="Coming up" sheep={ART.grazing2} hint={stops.length ? null : 'Nothing planned'}
+          canOpen={stops.length > 0} {...section('upcoming')} />
+        {stops.length ? (openTile === 'upcoming' ? <Timeline stops={stops} /> : <TicketRow stops={stops} />) : null}
+      </View>
+
+      {/* How was it?: polaroids. */}
+      <View style={{ gap: space.s }}>
+        <SectionTop title="How was it?" sheep={ART.lying1} hint={memories.length ? 'Add photos or a note' : 'No new memories'}
+          canOpen={memories.length > 2} {...section('recent')} />
+        {memories.length ? <Polaroids items={memories} wrap={openTile === 'recent'} /> : null}
+      </View>
+
+      {/* Make plans: pills to tap. */}
+      <View style={{ gap: space.m }}>
+        <SectionTop title="Make plans" sheep={ART.sitting1} hint={nudges.length ? 'Birthdays, free time, old friends' : 'Ideas soon'}
+          canOpen={nudges.length > 4} {...section('nudges')} />
+        {nudges.length ? <PillCloud items={openTile === 'nudges' ? nudges : nudges.slice(0, 4)} /> : null}
+      </View>
+    </View>
+  );
 
   // ─── Render ────────────────────────────────────────────────────────────────
   return (
     <Screen>
       <ReadingColumn
         style={{ flex: 1 }}
-        footer={<FieldFlock />}
+        footer={view === 'start' ? <FieldFlock /> : undefined}
         onLayout={(e) => setViewport(e.nativeEvent.layout.height)}
         contentContainerStyle={{ paddingTop: 0, paddingBottom: 0, paddingHorizontal: compact ? space.m : space.l }}
       >
+        {view === 'plans' ? plansView : (
         <View onLayout={(e) => setStack(e.nativeEvent.layout.height)} style={{ gap: space.l }}>
         <View style={{ marginHorizontal: compact ? -space.m : -space.l, marginBottom: -space.m }}>
           <ScreenHeader
@@ -406,10 +449,12 @@ export default function HomeScreen() {
           />
         </View>
 
-        {/* Planning starts in the bar under the sheep; Home has no floating New Plan
+        {/* Planning starts in the box under the sheep; Home has no floating New Plan
             button, so nothing covers the flock on the hill. */}
         <Hero
           lines={lines}
+          onBubble={() => setView('plans')}
+          bubbleHint="Opens your home view: what needs you, what’s coming up, how plans went, and ideas for more."
           below={(
             <PlanBar
               inputRef={describeInput}
@@ -422,30 +467,9 @@ export default function HomeScreen() {
           )}
         />
 
-        {loading ? <ActivityIndicator color={c.secondaryLabel} /> : null}
-
-        {!nothing ? (
-          <>
-            <TileGrid tiles={tiles} open={openTile} onToggle={toggleTile} />
-            {openSpec ? (
-              <TilePanel title={openSpec.title} onClose={() => toggleTile(openSpec.key)}>
-                {openSpec.key === 'upcoming' ? <Timeline stops={stops} />
-                  : <BubbleRow items={openSpec.key === 'needs' ? todos : openSpec.key === 'recent' ? memories : nudges} />}
-              </TilePanel>
-            ) : null}
-          </>
-        ) : null}
-
-        {nothing && !loading ? (
-          <EmptyState
-            icon="sparkles-outline"
-            title="Wide open meadow"
-            body="Float an idea and see who’s in."
-            action={{ label: 'New Plan', onPress: () => composer.newPlan() }}
-          />
-        ) : null}
         </View>
-        <View style={{ height: hillGap }} />
+        )}
+        <View style={{ height: view === 'plans' ? space.xxl * 2 : hillGap }} />
       </ReadingColumn>
 
 
