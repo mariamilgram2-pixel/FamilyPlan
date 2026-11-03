@@ -133,41 +133,69 @@ export function TilePanel({ title, onClose, children }: { title: string; onClose
 // ─── Plan bar: where planning starts ─────────────────────────────────────────
 
 /**
- * A big, friendly field that says "Plan something…". The first keystroke
- * opens New Plan with what you typed; the arrow opens it empty.
+ * A big, friendly field that says "Plan something…". Typing stays right here:
+ * the box grows to fit, and Save under it opens New Plan with what you wrote,
+ * the title already done, for who, when and where (or just saving it). With
+ * nothing typed, the arrow opens New Plan empty.
  */
-export function PlanBar({ inputRef, onType, onOpen }: {
-  inputRef?: React.Ref<TextInputRef>; onType: (text: string) => void; onOpen: () => void;
+export function PlanBar({ inputRef, onSave, onOpen }: {
+  inputRef?: React.Ref<TextInputRef>;
+  onSave: (text: string) => void;
+  onOpen: () => void;
 }) {
   const { c } = useTheme();
   const [focused, setFocused] = useState(false);
+  const [text, setText] = useState('');
+  const [height, setHeight] = useState(0);   // the text's own height, so the box grows line by line
+  const typed = text.trim();
+  const save = () => { if (!typed) return; setText(''); onSave(typed); };
   return (
     <View style={{
-      flexDirection: 'row', alignItems: 'center', gap: space.s,
-      height: 64, paddingLeft: space.l - 4, paddingRight: space.s, borderRadius: radius.pill, ...continuous,
+      gap: space.s, paddingLeft: space.l - 4, paddingRight: space.s, paddingVertical: typed ? space.m : space.s,
+      borderRadius: typed ? radius.group : radius.pill, ...continuous,
       backgroundColor: c.fill, borderWidth: 2, borderColor: focused ? c.tint : 'transparent',
     }}>
-      <Icon name="sparkles" size={20} color={c.tint} />
-      <TextInput
-        ref={inputRef}
-        value=""
-        onChangeText={(t) => { if (t) onType(t); }}
-        onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
-        placeholder="Plan something…"
-        placeholderTextColor={c.secondaryLabel}
-        accessibilityLabel="Plan something. Describe it in your own words"
-        accessibilityHint="Opens New Plan with what you type"
-        style={[type.body, { flex: 1, minWidth: 0, fontSize: 18, color: c.label }, Platform.OS === 'web' && ({ outlineStyle: 'none' } as any)]}
-      />
-      <Tappable
-        feedback="opacity"
-        onPress={onOpen}
-        accessibilityLabel="New plan"
-        style={{ width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: c.tint }}
-      >
-        <Icon name="arrow-forward" size={20} color={c.onTint} />
-      </Tappable>
+      <View style={{ flexDirection: 'row', alignItems: typed ? 'flex-start' : 'center', gap: space.s, minHeight: typed ? 0 : 44 }}>
+        <Icon name="sparkles" size={20} color={c.tint} style={typed ? { marginTop: 3 } : undefined} />
+        <TextInput
+          ref={inputRef}
+          value={text}
+          onChangeText={setText}
+          multiline
+          numberOfLines={1}
+          onContentSizeChange={e => setHeight(e.nativeEvent.contentSize.height)}
+          blurOnSubmit
+          onSubmitEditing={save}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          placeholder="Plan something…"
+          placeholderTextColor={c.secondaryLabel}
+          accessibilityLabel="Plan something. Describe it in your own words"
+          style={[type.body, { flex: 1, minWidth: 0, fontSize: 18, color: c.label, height: Math.min(120, Math.max(24, height)), paddingTop: 0, paddingBottom: 0 }, Platform.OS === 'web' && ({ outlineStyle: 'none' } as any)]}
+        />
+        {typed ? null : (
+          <Tappable
+            feedback="opacity"
+            onPress={onOpen}
+            accessibilityLabel="New plan"
+            style={{ width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: c.tint }}
+          >
+            <Icon name="arrow-forward" size={20} color={c.onTint} />
+          </Tappable>
+        )}
+      </View>
+      {typed ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: space.s }}>
+          <Tappable
+            feedback="opacity"
+            onPress={save}
+            accessibilityLabel="Save, then add who, when and where"
+            style={{ flexDirection: 'row', alignItems: 'center', gap: space.hair + 2, height: 40, paddingHorizontal: space.l, borderRadius: radius.pill, backgroundColor: c.tint }}
+          >
+            <Txt v="callout" semibold style={{ color: c.onTint }}>Save</Txt>
+          </Tappable>
+        </View>
+      ) : null}
     </View>
   );
 }

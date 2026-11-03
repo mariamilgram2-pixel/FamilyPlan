@@ -26,6 +26,8 @@ export interface PlanPrefill {
   end?: string;
   /** Raw “Describe it” sentence. The New Plan sheet parses it on open. */
   sentence?: string;
+  /** Saved on Home: the sentence is the title, done (still a tap to rename). */
+  titleDone?: boolean;
 }
 
 interface PlanComposerValue {

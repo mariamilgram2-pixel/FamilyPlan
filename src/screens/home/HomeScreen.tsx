@@ -413,9 +413,9 @@ export default function HomeScreen() {
           below={(
             <PlanBar
               inputRef={describeInput}
-              onType={(text) => {
-                composer.newPlan({ sentence: text });
+              onSave={(text) => {
                 describeInput.current?.blur();
+                composer.newPlan({ sentence: text, titleDone: true });
               }}
               onOpen={() => composer.newPlan()}
             />

@@ -38,17 +38,27 @@ export function Material({ style, children }: { style?: StyleProp<ViewStyle>; ch
 
 // ─── Keyboard helper (web) ───────────────────────────────────────────────────
 
+// Open layers, newest last. Only the top one hears keys, so Esc in a sheet
+// opened from another sheet (or a menu in one) closes just that.
+const keyLayers: object[] = [];
+
 function useKeys(active: boolean, handlers: { escape?: () => void; submit?: () => void }) {
   const ref = useRef(handlers);
   ref.current = handlers;
   useEffect(() => {
     if (Platform.OS !== 'web' || !active) return;
+    const layer = {};
+    keyLayers.push(layer);
     const onKey = (e: KeyboardEvent) => {
+      if (keyLayers[keyLayers.length - 1] !== layer) return;
       if (e.key === 'Escape') { e.preventDefault(); ref.current.escape?.(); }
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); ref.current.submit?.(); }
     };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      keyLayers.splice(keyLayers.indexOf(layer), 1);
+    };
   }, [active]);
 }
 
@@ -105,6 +115,8 @@ export function Sheet({ visible, onClose, title, action, cancelLabel, scroll = t
       style={{ flex: 1 }}
       contentContainerStyle={{ padding: space.m, paddingBottom: space.xxl + insets.bottom, gap: space.l }}
       keyboardShouldPersistTaps="handled"
+      // Scrolling down to the rest of a sheet puts the keyboard away.
+      keyboardDismissMode="on-drag"
     >
       {children}
     </ScrollView>

@@ -32,7 +32,9 @@ export interface PlanPrefs {
 }
 
 export const MAX_SPAN_DAYS = 30;
-export const spanOf = (prefs: PlanPrefs) => Math.min(MAX_SPAN_DAYS, Math.max(1, prefs.spanDays ?? 1));
+// Typed lengths ("10 days") stop at a month; days picked on the calendar can run up to a year.
+export const MAX_PICKED_DAYS = 366;
+export const spanOf = (prefs: PlanPrefs) => Math.min(MAX_PICKED_DAYS, Math.max(1, prefs.spanDays ?? 1));
 
 /** When the length doesn't matter (dinner), suggestions still hold this much time. */
 export const DEFAULT_DURATION = 120;
@@ -122,7 +124,9 @@ export function spanHint(text: string): Pick<PlanPrefs, 'spanDays' | 'days'> | n
   if (nights) return { spanDays: NUMBERS[nights[1]] + 1, days: 'any' };
   const days = t.match(/\b(two|three|four|five|2|3|4|5)[\s-]+days?\b/);
   if (days) return { spanDays: NUMBERS[days[1]], days: 'any' };
-  if (/\bweekend\b/.test(t)) return { spanDays: 2, days: 'weekends' };
+  // "Ski weekend", "a weekend in Napa": a trip. "Brunch this weekend", "on
+  // the weekend": just when, a few hours some time Saturday or Sunday.
+  if (/\bweekend\b/.test(t.replace(/\b(this|next|the|coming|that|on|at|by|over|every)\s+weekends?\b/g, ''))) return { spanDays: 2, days: 'weekends' };
   return null;
 }
 
