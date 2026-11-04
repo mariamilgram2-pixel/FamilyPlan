@@ -4,6 +4,9 @@ import { Platform } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { DarkTheme, DefaultTheme, NavigationContainer } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { useFonts } from 'expo-font';
+import { Gloock_400Regular } from '@expo-google-fonts/gloock';
+import { Manrope_400Regular, Manrope_500Medium, Manrope_600SemiBold, Manrope_700Bold } from '@expo-google-fonts/manrope';
 import { AuthProvider } from './src/contexts/AuthContext';
 import { GroupProvider } from './src/contexts/GroupContext';
 import AppNavigator from './src/navigation/AppNavigator';
@@ -13,6 +16,13 @@ import ErrorBoundary from './src/components/ErrorBoundary';
 import AlertHost from './src/components/ui/AlertHost';
 
 export default function App() {
+  // Titles are Gloock and everything else is Manrope; wait for them so text
+  // doesn't flash in a fallback face. If loading fails, carry on with it.
+  const [fontsLoaded, fontError] = useFonts({
+    Gloock_400Regular, Manrope_400Regular, Manrope_500Medium, Manrope_600SemiBold, Manrope_700Bold,
+  });
+  if (!fontsLoaded && !fontError) return null;
+
   return (
     <SafeAreaProvider>
       <ThemeProvider>

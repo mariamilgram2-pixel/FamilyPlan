@@ -1,16 +1,19 @@
-// Home — what's next with your people, at a glance.
+// Two tabs from one screen:
 //
-// A sheep to poke and this week's flock up top, then folding categories
-// drawn in circles and lines rather than sentences: what needs you, a
-// timeline of what's coming up, how recent plans went, and nudges toward the
-// next one (birthdays, someone free when you are, people you haven't seen).
-// Activity (the inbox) sits behind the bell; settings behind your avatar.
+// Sheep — make plans happen. Made for the moment someone at dinner says "we
+// should…": a sheep, the mission, and one box to plan in. The sheep's speech
+// bubble ("See home ›") goes to the Home tab. Activity (the inbox) sits behind
+// the bell; settings behind your avatar.
+//
+// Home — what needs you, what's coming up, how recent plans went, and nudges
+// toward the next one (birthdays, someone free when you are, people you
+// haven't seen).
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, TextInput, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { supabase } from '../../lib/supabase';
-import { DEMO_EVENTS, DEMO_IDEAS, DEMO_MEMBERS, DEMO_ME, isDemoGroup } from '../../lib/demo';
+import { DEMO_EVENTS, DEMO_IDEAS, DEMO_MEMBERS, DEMO_ME, DEMO_PEOPLE, isDemoGroup } from '../../lib/demo';
 import { expandEvents } from '../../lib/recurrence';
 import { blocksTime, needsReply, replyOf } from '../../lib/rsvp';
 import { awaitingYourDates, hostOf, readyToSend } from '../../lib/plans';
@@ -20,6 +23,7 @@ import { useWorkSchedules } from '../../lib/workSchedule';
 import { useNotifications } from '../../lib/notifications';
 import { useCircle } from '../../lib/people';
 import { useShortcut } from '../../lib/shortcuts';
+import { useDismissed } from '../../lib/dismissed';
 import { AppNotification, Event, Idea, Profile } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
 import { useGroup } from '../../contexts/GroupContext';
@@ -27,13 +31,12 @@ import Avatar, { AvatarPerson } from '../../components/Avatar';
 import { usePlanComposer } from '../../components/PlanComposer';
 import { Sheep } from '../../components/Sheep';
 import {
-  Button, EmptyState, IconButton, IconName, ListRow, ListSection, PrimaryAction, ReadingColumn,
+  Button, Icon, IconButton, IconName, ListRow, ListSection, ReadingColumn,
   ScreenHeader, Screen, Sheet, Tappable, Txt,
-} from '../../components/ui';
+TextInputRef, } from '../../components/ui';
 import { NotificationList } from '../ideas/IdeaViews';
-import { Bubble, BubbleRow, Category, Hero, Stop, Timeline, useCollapsed } from './HomeViews';
-import { FieldFlock, useFieldFlockInset } from './FieldFlock';
-import { DescribeField } from '../calendar/EventViews';
+import { Bubble, BubbleRow, Hero, NewPlanButton, PillCloud, PlanBar, Polaroids, SectionTop, Stop, TicketRow, Timeline, useOpenTile } from './HomeViews';
+import { ART, FieldFlock, useFieldFlockInset } from './FieldFlock';
 import { addDays, dateKey, keyOf, parseKey, relativeDay, shortDate, timeParts, todayKey } from '../calendar/dates';
 import { space, useLayout, useTheme } from '../../theme';
 
@@ -64,7 +67,17 @@ function nextBirthday(mmdd: string): string {
   return dateKey(next);
 }
 
+/** The Home tab: your plans at a glance. */
 export default function HomeScreen() {
+  return <HomeView view="plans" />;
+}
+
+/** The Sheep tab: the sheep, the mission, and the box to plan in. */
+export function SheepScreen() {
+  return <HomeView view="start" />;
+}
+
+function HomeView({ view }: { view: 'start' | 'plans' }) {
   const { user, profile } = useAuth();
   const { activeGroup, groups } = useGroup();
   const { c, isDark, toggleColorScheme } = useTheme();
@@ -82,9 +95,7 @@ export default function HomeScreen() {
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [loading, setLoading] = useState(true);
   const [inboxOpen, setInboxOpen] = useState(false);
-  const describeInput = useRef<TextInput>(null);
-  const scrollY = useRef(0);
-  const viewH = useRef(0);
+  const describeInput = useRef<TextInputRef>(null);
   const [viewport, setViewport] = useState(0);
   const [stack, setStack] = useState(0);
   const hill = useFieldFlockInset();
@@ -93,17 +104,6 @@ export default function HomeScreen() {
   // cutting through a row. Expanding a section lengthens the stack and the
   // hill moves down with it.
   const hillGap = Math.max(space.xxl, viewport - stack - space.l - hill.height);
-  const heroTop = useRef(0);
-  const fieldBox = useRef({ y: 0, height: 0 });
-  const [composerInView, setComposerInView] = useState(true);
-
-  const publishComposer = useCallback(() => {
-    const { y, height } = fieldBox.current;
-    if (!height || !viewH.current) return;
-    const top = heroTop.current + y;
-    const inView = top + height > scrollY.current && top < scrollY.current + viewH.current;
-    setComposerInView(prev => (prev === inView ? prev : inView));
-  }, []);
 
   // ─── Data ──────────────────────────────────────────────────────────────────
   // Your events from the last four months (for "haven't seen") through the
@@ -123,7 +123,8 @@ export default function HomeScreen() {
       supabase.from('events').select('*')
         .or(`group_id.in.(${groupIds.join(',')}),attendees.cs.{${meId}}`)
         .lt('start_time', to.toISOString()),
-      supabase.from('ideas').select('*, idea_votes(id, user_id)').in('group_id', groupIds).eq('status', 'proposed'),
+      // Every idea you can see: your groups', and any shared with you by name.
+      supabase.from('ideas').select('*, idea_votes(id, user_id)').eq('status', 'proposed'),
     ]);
     setEvents(expandEvents((ev as Event[]) ?? [], from, to));
     setIdeas((id as Idea[]) ?? []);
@@ -136,7 +137,7 @@ export default function HomeScreen() {
 
   const people = useMemo(() => {
     const map = new Map<string, Profile>(circle.people.map(p => [p.profile.id, p.profile]));
-    if (isDemo) DEMO_MEMBERS.forEach(p => map.set(p.id, p));
+    if (isDemo) DEMO_PEOPLE.forEach(p => map.set(p.id, p));
     return map;
   }, [circle.people, isDemo]);
   const personOf = (id: string): AvatarPerson => people.get(id) ?? { id };
@@ -265,9 +266,6 @@ export default function HomeScreen() {
 
   const hhmm = (iso: string) => { const d = new Date(iso); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
   const shortTime = (iso: string) => { const { hm, ampm } = timeParts(iso); return `${hm.replace(':00', '')} ${ampm}`; };
-  const nothing = !todos.length && !upNext.length && !recent.length && !reconnect.length && !freeTogether.length && !birthdays.length;
-  const { collapsed, toggle } = useCollapsed();
-  const isOpen = (k: string) => !collapsed.has(k);
 
   // ─── Pieces ────────────────────────────────────────────────────────────────
   const stops: Stop[] = upNext.map(e => {
@@ -322,7 +320,11 @@ export default function HomeScreen() {
     ],
   }));
 
-  const nudges: Bubble[] = [
+  // Suggestions you can clear. "It's been a while" with someone shares its key
+  // with Friends' Been a while, so clearing one clears both.
+  const { hidden, dismiss } = useDismissed();
+  const clearKey = (key: string) => key.startsWith('r-') ? `quiet:${key.slice(2)}` : `home:${key}`;
+  const allNudges: Bubble[] = [
     ...birthdays.map(({ p, key }) => {
       const days = Math.round((parseKey(key).getTime() - parseKey(todayKey()).getTime()) / DAY);
       return {
@@ -348,6 +350,9 @@ export default function HomeScreen() {
       onPress: () => composer.newPlan({ people: [id] }),
     })),
   ];
+  const nudges: Bubble[] = allNudges
+    .filter(b => !hidden(clearKey(b.key)))
+    .map(b => ({ ...b, onDismiss: () => dismiss(clearKey(b.key)) }));
 
   // This week's flock: everyone you'll see in the next seven days.
   const flock = useMemo(() => {
@@ -357,9 +362,9 @@ export default function HomeScreen() {
     return Array.from(ids).map(personOf);
   }, [mine, people]);
 
-  // What the sheep says: your week first, then something silly.
+  // What the sheep says: "See home" first (tap the bubble for it), then puns.
   const lines = [
-    todos.length ? `${todos.length} thing${todos.length === 1 ? '' : 's'} need${todos.length === 1 ? 's' : ''} you!` : 'All caught up. Baa-rilliant.',
+    'See home',
     upNext.length ? `Ewe’ve got ${upNext.length} plan${upNext.length === 1 ? '' : 's'} ahead.` : 'Flock together soon?',
     flock.length ? `Shear joy: ${flock.length} friend${flock.length === 1 ? '' : 's'} this week.` : 'Who haven’t you seen lately?',
     birthdays.length ? `Psst… ${first(birthdays[0].p)}’s birthday is coming up.` : 'Baa-ck to planning?',
@@ -367,25 +372,61 @@ export default function HomeScreen() {
     'No sheepish excuses this week.',
   ];
 
+  // ─── Home ──────────────────────────────────────────────────────────────────
+  // The Home tab. One section opens all the way at a time.
+  const { open: openTile, toggle: toggleTile } = useOpenTile(null);
+  const section = (key: string) => ({ open: openTile === key, onToggle: () => toggleTile(key) });
+
+  const plansView = (
+    <View style={{ gap: space.xl, paddingTop: space.s }}>
+      <View style={{ gap: space.s }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: space.s }}>
+          <Txt v="display" accessibilityRole="header">Home</Txt>
+          <NewPlanButton onPress={() => composer.newPlan()} />
+        </View>
+      </View>
+      {loading ? <ActivityIndicator color={c.secondaryLabel} /> : null}
+
+      {/* Your turn: the faces waiting on you. */}
+      <View style={{ gap: space.m }}>
+        <SectionTop title="Your turn" sheep={ART.standing3} hint={todos.length ? null : 'All caught up'}
+          canOpen={todos.length > 4} {...section('needs')} />
+        {todos.length ? <BubbleRow items={openTile === 'needs' ? todos : todos.slice(0, 4)} wrap={openTile === 'needs'} /> : null}
+      </View>
+
+      {/* Coming up: calendar pages to swipe; open, the whole timeline. */}
+      <View style={{ gap: space.m }}>
+        <SectionTop title="Coming up" sheep={ART.grazing2} hint={stops.length ? null : 'Nothing planned'}
+          canOpen={stops.length > 0} {...section('upcoming')} />
+        {stops.length ? (openTile === 'upcoming' ? <Timeline stops={stops} /> : <TicketRow stops={stops} />) : null}
+      </View>
+
+      {/* How was it?: polaroids. */}
+      <View style={{ gap: space.s }}>
+        <SectionTop title="How was it?" sheep={ART.lying1} hint={memories.length ? 'Add photos or a note' : 'No new memories'}
+          canOpen={memories.length > 2} {...section('recent')} />
+        {memories.length ? <Polaroids items={memories} wrap={openTile === 'recent'} /> : null}
+      </View>
+
+      {/* Make plans: pills to tap. */}
+      <View style={{ gap: space.m }}>
+        <SectionTop title="Make plans" sheep={ART.sitting1} hint={nudges.length ? 'Birthdays, free time, old friends' : 'Ideas soon'}
+          canOpen={nudges.length > 4} {...section('nudges')} />
+        {nudges.length ? <PillCloud items={openTile === 'nudges' ? nudges : nudges.slice(0, 4)} /> : null}
+      </View>
+    </View>
+  );
+
   // ─── Render ────────────────────────────────────────────────────────────────
   return (
     <Screen>
       <ReadingColumn
         style={{ flex: 1 }}
-        footer={<FieldFlock />}
-        scrollEventThrottle={16}
-        onLayout={(e) => {
-          viewH.current = e.nativeEvent.layout.height;
-          setViewport(e.nativeEvent.layout.height);
-          publishComposer();
-        }}
-        onScroll={(e) => {
-          scrollY.current = e.nativeEvent.contentOffset.y;
-          viewH.current = e.nativeEvent.layoutMeasurement.height;
-          publishComposer();
-        }}
+        footer={view === 'start' ? <FieldFlock /> : undefined}
+        onLayout={(e) => setViewport(e.nativeEvent.layout.height)}
         contentContainerStyle={{ paddingTop: 0, paddingBottom: 0, paddingHorizontal: compact ? space.m : space.l }}
       >
+        {view === 'plans' ? plansView : (
         <View onLayout={(e) => setStack(e.nativeEvent.layout.height)} style={{ gap: space.l }}>
         <View style={{ marginHorizontal: compact ? -space.m : -space.l, marginBottom: -space.m }}>
           <ScreenHeader
@@ -420,72 +461,51 @@ export default function HomeScreen() {
           />
         </View>
 
-        <View onLayout={(e) => { heroTop.current = e.nativeEvent.layout.y; publishComposer(); }}>
-          <Hero
-            lines={lines}
-            below={(
-              <View onLayout={(e) => { fieldBox.current = { y: e.nativeEvent.layout.y, height: e.nativeEvent.layout.height }; publishComposer(); }}>
-                <DescribeField
-                  inputRef={describeInput}
-                  value=""
-                  autoFocus={false}
-                  labeled={false}
-                  parsed={null}
-                  placeholder="Natasha and I want to try Lilia for dinner"
-                  accessibilityLabel="Describe a plan in your own words"
-                  onChange={(text) => {
-                    if (!text) return;
-                    composer.newPlan({ sentence: text });
-                    describeInput.current?.blur();
-                  }}
-                />
-              </View>
-            )}
-          />
+        {/* Planning starts in the box under the sheep; Home has no floating New Plan
+            button, so nothing covers the flock on the hill. */}
+        <Hero
+          lines={lines}
+          onBubble={() => navigation.navigate('Home')}
+          bubbleHint="Opens Home: what needs you, what’s coming up, how plans went, and ideas for more."
+          below={(
+            <View style={{ gap: space.s }}>
+              <PlanBar
+                inputRef={describeInput}
+                onSave={(text) => {
+                  describeInput.current?.blur();
+                  composer.newPlan({ sentence: text, titleDone: true });
+                }}
+                onOpen={() => composer.newPlan()}
+              />
+              {/* Or start from who: pick people, then the plan opens with them in it. */}
+              <Tappable
+                feedback="opacity"
+                onPress={() => composer.newPlan({ pickWho: true })}
+                accessibilityLabel="Plan with someone"
+                accessibilityHint="Pick people, then plan with them"
+                style={{ alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: space.hair + 2, paddingVertical: space.hair, paddingHorizontal: space.s, borderRadius: 999 }}
+              >
+                <Icon name="person-add-outline" size={15} color={c.tint} />
+                <Txt v="footnote" tone="tint" semibold>Plan with someone</Txt>
+              </Tappable>
+            </View>
+          )}
+        />
+
         </View>
-
-        {loading ? <ActivityIndicator color={c.secondaryLabel} /> : null}
-
-        {todos.length > 0 && (
-          <Category title="Needs you" icon="flash" accent count={todos.length} open={isOpen('needs')} onToggle={() => toggle('needs')}>
-            <BubbleRow items={todos} />
-          </Category>
         )}
-
-        {stops.length > 0 && (
-          <Category title="Coming up" icon="calendar" count={stops.length} open={isOpen('upcoming')} onToggle={() => toggle('upcoming')}>
-            <Timeline stops={stops} />
-          </Category>
-        )}
-
-        {memories.length > 0 && (
-          <Category title="How was it?" icon="heart" count={memories.length} open={isOpen('recent')} onToggle={() => toggle('recent')}>
-            <BubbleRow items={memories} />
-          </Category>
-        )}
-
-        {nudges.length > 0 && (
-          <Category title="Make plans" icon="sparkles" count={nudges.length} open={isOpen('nudges')} onToggle={() => toggle('nudges')}>
-            <BubbleRow items={nudges} />
-          </Category>
-        )}
-
-        {nothing && !loading ? (
-          <EmptyState
-            icon="sparkles-outline"
-            title="Wide open meadow"
-            body="Float an idea and see who’s in."
-            action={{ label: 'New Plan', onPress: () => composer.newPlan() }}
-          />
-        ) : null}
-        </View>
-        <View style={{ height: hillGap }} />
+        <View style={{ height: view === 'plans' ? space.xxl * 2 : hillGap }} />
       </ReadingColumn>
 
-      <PrimaryAction label="New Plan" hidden={composerInView} onPress={() => composer.newPlan()} />
 
-      <Sheet visible={inboxOpen} onClose={closeInbox} title="Activity" cancelLabel="Done">
-        <NotificationList items={inbox.items} onOpen={openNotification} />
+      <Sheet
+        visible={inboxOpen}
+        onClose={closeInbox}
+        title="Activity"
+        cancelLabel="Done"
+        action={inbox.items.length ? { label: 'Clear All', onPress: () => inbox.remove(inbox.items.map(n => n.id)) } : undefined}
+      >
+        <NotificationList items={inbox.items} onOpen={openNotification} onClear={(n) => inbox.remove([n.id])} />
       </Sheet>
     </Screen>
   );

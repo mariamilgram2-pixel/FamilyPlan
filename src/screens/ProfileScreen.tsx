@@ -7,14 +7,17 @@
 import React, { useEffect, useState } from 'react';
 import { Platform, Share, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import { useGroup } from '../contexts/GroupContext';
 import { supabase } from '../lib/supabase';
 import { notify, confirmAction } from '../lib/alert';
-import { DEMO_MEMBERS, DEMO_ME, DEMO_EVENTS, isDemoGroup } from '../lib/demo';
+import { DEMO_EXTRA_GROUPS, DEMO_MEMBERS, DEMO_ME, DEMO_EVENTS, isDemoGroup } from '../lib/demo';
+import { useVisibleGroups } from '../components/GroupSwitcher';
+import { ColorMode, PALETTE, PERSONAL, calendarColor, colorName } from '../lib/calendarColors';
+import { useCalendarColors } from '../lib/calendarColorsStore';
 import { exitDemo } from '../navigation/AppNavigator';
-import { Profile, Event } from '../types';
+import { Profile, Event, Group } from '../types';
 import Avatar from '../components/Avatar';
 import WorkScheduleSheet from './work/WorkScheduleSheet';
 import { WorkSchedule, summarizePattern, summarizeScope, useWorkSchedules } from '../lib/workSchedule';
@@ -29,8 +32,6 @@ import { WeekendMode } from '../types';
 import { splitPlace, useSavedPlaces } from '../lib/places';
 import { space, useLayout, useTheme } from '../theme';
 
-// User-chosen labels for their own events — content, not chrome.
-const CATEGORY_COLORS = ['#C0392B', '#D68910', '#B7950B', '#229954', '#17A589', '#2471A3', '#7D3C98', '#717D7E'];
 
 // "When should Sheep suggest plans?" — private, soft, optional.
 const WEEKEND_OPTIONS: { key: WeekendMode; label: string; detail: string }[] = [
@@ -47,12 +48,6 @@ const REMINDER_OPTIONS = [
   { label: '1 hour before', value: 60 },
   { label: '1 day before', value: 1440 },
 ];
-
-export interface EventCategory {
-  id: string;
-  name: string;
-  color: string;
-}
 
 interface NotificationPrefs {
   eventInvites: boolean;
@@ -77,12 +72,23 @@ export default function ProfileScreen() {
   const [sharedWithFriends, setSharedWithFriends] = useState(true);
   const [hiddenFriends, setHiddenFriends] = useState<string[]>([]);
   const [groupMembers, setGroupMembers] = useState<Profile[]>([]);
-  const [categories, setCategories] = useState<EventCategory[]>([]);
   const [notifPrefs, setNotifPrefs] = useState<NotificationPrefs>(DEFAULT_NOTIF_PREFS);
   const [defaultReminder, setDefaultReminder] = useState(15);
   const [exporting, setExporting] = useState(false);
 
-  const [sheet, setSheet] = useState<null | 'profile' | 'categories' | 'hidden' | 'availability'>(null);
+  const [sheet, setSheet] = useState<null | 'profile' | 'colors' | 'hidden' | 'availability'>(null);
+  const colors = useCalendarColors();
+  // "Edit Categories and Colors…" from an event opens straight to the sheet.
+  const route = useRoute<any>();
+  useEffect(() => {
+    if (route.params?.open !== 'colors') return;
+    setSheet('colors');
+    navigation.setParams({ open: undefined });
+  }, [route.params?.open]);
+  // Same order as the calendar, so a calendar's starting color matches there.
+  const visibleGroups = useVisibleGroups();
+  const allCalendars: Group[] = [...visibleGroups, ...(isDemo ? DEMO_EXTRA_GROUPS.map(g => g.group).filter(g => !visibleGroups.some(v => v.id === g.id)) : [])];
+  const calendars = allCalendars.filter(g => !isDemo || visibleGroups.some(v => v.id === g.id) || DEMO_EXTRA_GROUPS.some(x => x.group.id === g.id && x.memberIds.includes(DEMO_ME)));
   const { prefs: suggestPrefs, save: saveSuggestPrefs } = useMyPrefs(user?.id ?? null);
   const workSchedules = useWorkSchedules();
   const hasOngoing = workSchedules.some(w => w.scope.kind === 'ongoing');
@@ -94,7 +100,6 @@ export default function ProfileScreen() {
   useEffect(() => {
     const read = (k: string, fn: (v: any) => void) =>
       AsyncStorage.getItem(k).then(d => { if (d !== null) fn(k === 'profile_avatar' ? d : JSON.parse(d)); });
-    read('event_categories', setCategories);
     read('shared_with_friends', setSharedWithFriends);
     read('hidden_friends', setHiddenFriends);
     read('notification_prefs', setNotifPrefs);
@@ -118,7 +123,6 @@ export default function ProfileScreen() {
   const setShared = persist('shared_with_friends', setSharedWithFriends);
   const setShowEmailP = persist('show_email', setShowEmail);
   const setReminder = persist('default_reminder', setDefaultReminder);
-  const setCats = persist('event_categories', setCategories);
   const setHidden = persist('hidden_friends', setHiddenFriends);
   const setNotif = (key: keyof NotificationPrefs, val: boolean) =>
     persist('notification_prefs', setNotifPrefs)({ ...notifPrefs, [key]: val });
@@ -135,7 +139,9 @@ export default function ProfileScreen() {
     setExporting(true);
     let events: Event[] = DEMO_EVENTS;
     if (!isDemoGroup(activeGroup)) {
-      const { data, error } = await supabase.from('events').select('*').eq('group_id', activeGroup.id).order('start_time', { ascending: true });
+      // This group's calendar, plus your own plans with people (no group).
+      const q = supabase.from('events').select('*');
+      const { data, error } = await (user ? q.or(`group_id.eq.${activeGroup.id},attendees.cs.{${user.id}}`) : q.eq('group_id', activeGroup.id)).order('start_time', { ascending: true });
       if (error) { setExporting(false); return notify('Couldn’t export', error.message); }
       events = (data ?? []) as Event[];
     }
@@ -185,8 +191,12 @@ export default function ProfileScreen() {
     if (await confirmAction('Sign out', 'You’ll need to sign in again to see your groups.', 'Sign Out')) signOut();
   }
 
-  const displayName = profile?.full_name || user?.email || 'Guest';
-  const me = { id: user?.id ?? 'me', full_name: displayName, avatar_url: avatarUri };
+  // Demo: you're Jordan, as Home and everyone else see you.
+  const demoMe = isDemo ? DEMO_MEMBERS[0] : null;
+  const displayName = profile?.full_name || user?.email || demoMe?.full_name || 'Guest';
+  // Demo: Jordan's portrait until you pick your own.
+  const myPhoto = avatarUri ?? (isDemo ? DEMO_MEMBERS[0].avatar_url : null);
+  const me = { id: user?.id ?? 'me', full_name: displayName, avatar_url: myPhoto };
   const reminderLabel = REMINDER_OPTIONS.find(o => o.value === defaultReminder)?.label ?? 'None';
   const hiddenCount = hiddenFriends.filter(id => groupMembers.some(m => m.id === id)).length;
 
@@ -195,14 +205,14 @@ export default function ProfileScreen() {
       <ReadingColumn contentContainerStyle={{ paddingTop: 0, paddingBottom: bottomClearance, paddingHorizontal: compact ? space.m : space.l }}>
         <View style={{ marginHorizontal: compact ? -space.m : -space.l }}>
           {/* Reached from your avatar on Home; on phones it's not in the tab bar. */}
-          <ScreenHeader title="You" trailing={compact ? <Button label="Done" variant="gray" onPress={() => navigation.navigate('Home')} /> : undefined} />
+          <ScreenHeader title="You" trailing={compact ? <Button label="Done" variant="gray" onPress={() => navigation.navigate('Sheep')} /> : undefined} />
         </View>
 
         <ListSection>
           <ListRow
             leading={<Avatar person={me} size={56} highlight />}
             title={displayName}
-            subtitle={user?.email ?? 'Not signed in'}
+            subtitle={user?.email ?? (demoMe ? 'Demo account' : 'Not signed in')}
             chevron
             onPress={() => setSheet('profile')}
             style={{ minHeight: 80 }}
@@ -270,7 +280,7 @@ export default function ProfileScreen() {
           >
             {(open) => <ListRow title="Default reminder" value={reminderLabel} chevron onPress={open} />}
           </Menu>
-          <ListRow title="Event categories" value={categories.length ? String(categories.length) : 'None'} chevron onPress={() => setSheet('categories')} />
+          <ListRow title="Calendar colors" value={MODE_LABEL[colors.prefs.mode]} chevron onPress={() => setSheet('colors')} />
           <ListRow
             title={exporting ? 'Exporting…' : 'Export calendar (.ics)'}
             tintTitle
@@ -301,17 +311,19 @@ export default function ProfileScreen() {
         visible={sheet === 'profile'}
         onClose={() => setSheet(null)}
         isDemo={isDemo}
-        initialName={profile?.full_name ?? ''}
-        initialEmail={user?.email ?? ''}
+        initialName={profile?.full_name ?? demoMe?.full_name ?? ''}
+        initialEmail={user?.email ?? demoMe?.email ?? ''}
         initialBirthday={profile?.birthday ?? (isDemo ? DEMO_MEMBERS[0].birthday ?? null : null)}
-        avatarUri={avatarUri}
+        initialAbout={(profile ?? (isDemo ? DEMO_MEMBERS[0] : null))?.about ?? ''}
+        initialFavorites={(profile ?? (isDemo ? DEMO_MEMBERS[0] : null))?.favorites ?? []}
+        avatarUri={myPhoto}
         onAvatar={setAvatar}
         userId={user?.id ?? null}
         currentEmail={user?.email ?? null}
         onSaved={refreshProfile}
       />
       <WorkScheduleSheet visible={!!workSheet} onClose={() => setWorkSheet(null)} editing={workSheet?.editing ?? null} hasOngoing={hasOngoing} />
-      <CategoriesSheet visible={sheet === 'categories'} onClose={() => setSheet(null)} categories={categories} onChange={setCats} />
+      <ColorsSheet visible={sheet === 'colors'} onClose={() => setSheet(null)} calendars={calendars} order={allCalendars.map(g => g.id)} />
       <AvailabilitySheet
         visible={sheet === 'availability'}
         onClose={() => setSheet(null)}
@@ -336,14 +348,22 @@ function parseBirthday(text: string): string | null | undefined {
   return `${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
 }
 
-function EditProfileSheet({ visible, onClose, isDemo, initialName, initialEmail, initialBirthday, avatarUri, onAvatar, userId, currentEmail, onSaved }: {
+/** "hiking, board games,  " → ["hiking", "board games"]; at most six, each short. */
+function parseFavorites(text: string): string[] {
+  return text.split(',').map(t => t.trim().slice(0, 30)).filter(Boolean).slice(0, 6);
+}
+
+function EditProfileSheet({ visible, onClose, isDemo, initialName, initialEmail, initialBirthday, initialAbout, initialFavorites, avatarUri, onAvatar, userId, currentEmail, onSaved }: {
   visible: boolean; onClose: () => void; isDemo: boolean; initialName: string; initialEmail: string; initialBirthday: string | null;
+  initialAbout: string; initialFavorites: string[];
   avatarUri: string | null; onAvatar: (u: string | null) => void; userId: string | null; currentEmail: string | null;
   onSaved: () => Promise<void>;
 }) {
   const [name, setName] = useState(initialName);
   const [email, setEmail] = useState(initialEmail);
   const [birthday, setBirthday] = useState('');
+  const [about, setAbout] = useState('');
+  const [favorites, setFavorites] = useState('');
   const [urlMode, setUrlMode] = useState(false);
   const [photoUrl, setPhotoUrl] = useState('');
   const [saving, setSaving] = useState(false);
@@ -352,6 +372,7 @@ function EditProfileSheet({ visible, onClose, isDemo, initialName, initialEmail,
     if (!visible) return;
     setName(initialName); setEmail(initialEmail); setUrlMode(false); setPhotoUrl('');
     setBirthday(initialBirthday ? initialBirthday.replace('-', '/') : '');
+    setAbout(initialAbout); setFavorites(initialFavorites.join(', '));
   }, [visible]);
 
   function pickFile() {
@@ -382,7 +403,9 @@ function EditProfileSheet({ visible, onClose, isDemo, initialName, initialEmail,
     if (bday === undefined) return notify('Check your birthday', 'Use month and day, like 10/23.');
     if (isDemo || !userId) return notify('Demo mode', 'Sign in to save profile changes.');
     setSaving(true);
-    const { error } = await supabase.from('profiles').update({ full_name: name.trim(), birthday: bday } as any).eq('id', userId);
+    const { error } = await supabase.from('profiles').update({
+      full_name: name.trim(), birthday: bday, about: about.trim() || null, favorites: parseFavorites(favorites),
+    } as any).eq('id', userId);
     if (error) { setSaving(false); return notify('Couldn’t save', error.message); }
 
     const newEmail = email.trim();
@@ -425,6 +448,20 @@ function EditProfileSheet({ visible, onClose, isDemo, initialName, initialEmail,
         placeholder="MM/DD"
         keyboardType="numbers-and-punctuation"
         hint="Just the month and day. People you plan with get a nudge to celebrate."
+      />
+      <Field
+        label="About you"
+        value={about}
+        onChangeText={setAbout}
+        placeholder="Optional"
+        maxLength={140}
+      />
+      <Field
+        label="Things you love doing"
+        value={favorites}
+        onChangeText={setFavorites}
+        placeholder="Hiking, board games, trying new tacos"
+        hint="Separate with commas. Shown on your profile to people you plan with."
       />
       <Field label="Email" value={email} onChangeText={setEmail} placeholder="you@example.com" keyboardType="email-address" autoCapitalize="none" hint="Changing your email sends a confirmation link." />
     </Sheet>
@@ -469,61 +506,105 @@ function AvailabilitySheet({ visible, onClose, prefs, onChange }: {
   );
 }
 
-// ─── Categories ──────────────────────────────────────────────────────────────
+// ─── Calendar colors ─────────────────────────────────────────────────────────
 
-function CategoriesSheet({ visible, onClose, categories, onChange }: {
-  visible: boolean; onClose: () => void; categories: EventCategory[]; onChange: (c: EventCategory[]) => void;
-}) {
+const MODE_LABEL: Record<ColorMode, string> = { none: 'One color', calendar: 'By calendar', category: 'By category' };
+const MODES: { key: ColorMode; title: string; detail: string }[] = [
+  { key: 'none', title: 'One color', detail: 'Everything in olive, the clean look.' },
+  { key: 'calendar', title: 'By calendar', detail: 'Each calendar in its own color.' },
+  { key: 'category', title: 'By category', detail: 'Unfiled events use their calendar’s.' },
+];
+
+function Swatch({ color, size = 14 }: { color: string; size?: number }) {
+  return <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: color }} />;
+}
+
+/** A swatch that opens the palette: tap, pick. */
+function ColorPick({ color, label, onPick }: { color: string; label: string; onPick: (c: string) => void }) {
   const { c } = useTheme();
+  return (
+    <Menu title={label} sections={[{ items: PALETTE.map(p => ({
+      key: p.color, label: p.name, checked: p.color.toLowerCase() === color.toLowerCase(), leading: <Swatch color={p.color} size={18} />, onSelect: () => onPick(p.color),
+    })) }]}>
+      {(open) => (
+        <Tappable feedback="opacity" onPress={open} accessibilityLabel={`${label}: ${colorName(color)}. Change color`} hitSlop={6}
+          style={{ flexDirection: 'row', alignItems: 'center', gap: space.hair + 2, paddingVertical: space.hair, paddingHorizontal: space.s, borderRadius: 14, borderWidth: 1, borderColor: c.separator }}>
+          <Swatch color={color} />
+          <Txt v="footnote" tone="secondary">{colorName(color)}</Txt>
+        </Tappable>
+      )}
+    </Menu>
+  );
+}
+
+/**
+ * Calendar colors, all in one place: how to color events, each calendar's
+ * color, and your categories with theirs. Yours alone; nobody else's calendar changes.
+ */
+function ColorsSheet({ visible, onClose, calendars, order }: { visible: boolean; onClose: () => void; calendars: Group[]; order: string[] }) {
+  const { prefs, setMode, setCalendarColor, addCategory, setCategoryColor, removeCategory } = useCalendarColors();
   const [name, setName] = useState('');
-  const [color, setColor] = useState(CATEGORY_COLORS[0]);
+  const [color, setColor] = useState(PALETTE[4].color);
 
   function add() {
     if (!name.trim()) return;
-    onChange([...categories, { id: Date.now().toString(), name: name.trim(), color }]);
+    addCategory(name, color);
     setName('');
   }
 
-  async function remove(cat: EventCategory) {
-    if (await confirmAction('Delete category', `Delete “${cat.name}”?`, 'Delete')) onChange(categories.filter(x => x.id !== cat.id));
+  async function remove(id: string, label: string) {
+    if (await confirmAction('Delete category', `Delete “${label}”? Events filed under it go back to their calendar’s color.`, 'Delete')) removeCategory(id);
   }
 
   return (
-    <Sheet visible={visible} onClose={onClose} title="Event Categories" cancelLabel="Done" width={480}>
-      {categories.length > 0 && (
-        <ListSection separatorInset={56}>
-          {categories.map(cat => (
-            <ListRow
-              key={cat.id}
-              leading={<View style={{ width: 24, alignItems: 'center' }}><View style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: cat.color }} /></View>}
-              title={cat.name}
-              trailing={<IconButton icon="trash-outline" label={`Delete ${cat.name}`} onPress={() => remove(cat)} />}
-            />
-          ))}
-        </ListSection>
-      )}
+    <Sheet visible={visible} onClose={onClose} title="Calendar Colors" cancelLabel="Done" width={480}>
+      <ListSection header="Color events" footer="Only you see your colors. Nobody else’s calendar changes.">
+        {MODES.map(m => (
+          <ListRow key={m.key} title={m.title} subtitle={m.detail} checked={prefs.mode === m.key} onPress={() => setMode(m.key)} />
+        ))}
+      </ListSection>
+
+      <ListSection header="Calendars" separatorInset={56}>
+        {/* Plans with people but no group: you and Fran, say. */}
+        {(() => {
+          const col = calendarColor(null, prefs, order);
+          return (
+            <ListRow leading={<View style={{ width: 24, alignItems: 'center' }}><Swatch color={col} /></View>} title="Personal" subtitle="Plans with people, not a group"
+              trailing={<ColorPick color={col} label="Personal" onPick={cl => setCalendarColor(PERSONAL, cl)} />} />
+          );
+        })()}
+        {calendars.map(g => {
+          const col = calendarColor(g.id, prefs, order);
+          return (
+            <ListRow key={g.id} leading={<View style={{ width: 24, alignItems: 'center' }}><Swatch color={col} /></View>} title={g.name}
+              trailing={<ColorPick color={col} label={g.name} onPick={cl => setCalendarColor(g.id, cl)} />} />
+          );
+        })}
+      </ListSection>
+
+      <ListSection header="Categories" footer="File an event under a category from the event itself." separatorInset={56}>
+        {prefs.categories.map(cat => (
+          <ListRow
+            key={cat.id}
+            leading={<View style={{ width: 24, alignItems: 'center' }}><Swatch color={cat.color} /></View>}
+            title={cat.name}
+            trailing={
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.hair }}>
+                <ColorPick color={cat.color} label={cat.name} onPick={cl => setCategoryColor(cat.id, cl)} />
+                <IconButton icon="trash-outline" label={`Delete ${cat.name}`} onPress={() => remove(cat.id, cat.name)} />
+              </View>
+            }
+          />
+        ))}
+      </ListSection>
 
       <View style={{ gap: space.m }}>
-        <Field label="New category" value={name} onChangeText={setName} placeholder="Date night, Dinners, Work…" onSubmitEditing={add} />
-        <View accessibilityRole="radiogroup" style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.s }}>
-          {CATEGORY_COLORS.map(col => (
-            <Tappable
-              key={col}
-              feedback="opacity"
-              accessibilityRole="radio"
-              accessibilityState={{ checked: col === color }}
-              accessibilityLabel={`Color ${col}`}
-              onPress={() => setColor(col)}
-              style={{
-                width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center',
-                borderWidth: 2, borderColor: col === color ? c.label : 'transparent',
-              }}
-            >
-              <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: col }} />
-            </Tappable>
-          ))}
+        <Field label="New category" value={name} onChangeText={setName} placeholder="Date night, Work, Fitness…" onSubmitEditing={add} />
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.s }}>
+          <ColorPick color={color} label="New category color" onPick={setColor} />
+          <View style={{ flex: 1 }} />
+          <Button label="Add Category" variant="gray" icon="add" onPress={add} disabled={!name.trim()} />
         </View>
-        <Button label="Add Category" variant="gray" icon="add" onPress={add} disabled={!name.trim()} />
       </View>
     </Sheet>
   );

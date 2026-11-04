@@ -83,6 +83,11 @@ describe('finding several days in a row', () => {
     expect(spanHint('Ski weekend')).toEqual({ spanDays: 2, days: 'weekends' });
     expect(spanHint('4 days in Lisbon')).toEqual({ spanDays: 4, days: 'any' });
     expect(spanHint('Dinner at 7')).toBeNull();
+    expect(spanHint('Brunch with Ben this weekend')).toBeNull();
+    expect(spanHint('Bowling next weekend')).toBeNull();
+    expect(spanHint('Hike on the weekend')).toBeNull();
+    expect(spanHint('A weekend in Napa')).toEqual({ spanDays: 2, days: 'weekends' });
+    expect(spanHint('Ski weekend next weekend')).toEqual({ spanDays: 2, days: 'weekends' });
   });
 });
 

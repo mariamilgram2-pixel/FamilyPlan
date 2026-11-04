@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Icon, IconName, Tappable, Txt } from './primitives';
+import { Icon, IconName, Tappable, Txt, ViewRef } from './primitives';
 import { continuous, radius, space, useLayout, useTheme } from '../../theme';
 
 // ─── Material ────────────────────────────────────────────────────────────────
@@ -38,17 +38,27 @@ export function Material({ style, children }: { style?: StyleProp<ViewStyle>; ch
 
 // ─── Keyboard helper (web) ───────────────────────────────────────────────────
 
+// Open layers, newest last. Only the top one hears keys, so Esc in a sheet
+// opened from another sheet (or a menu in one) closes just that.
+const keyLayers: object[] = [];
+
 function useKeys(active: boolean, handlers: { escape?: () => void; submit?: () => void }) {
   const ref = useRef(handlers);
   ref.current = handlers;
   useEffect(() => {
     if (Platform.OS !== 'web' || !active) return;
+    const layer = {};
+    keyLayers.push(layer);
     const onKey = (e: KeyboardEvent) => {
+      if (keyLayers[keyLayers.length - 1] !== layer) return;
       if (e.key === 'Escape') { e.preventDefault(); ref.current.escape?.(); }
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); ref.current.submit?.(); }
     };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      keyLayers.splice(keyLayers.indexOf(layer), 1);
+    };
   }, [active]);
 }
 
@@ -105,6 +115,8 @@ export function Sheet({ visible, onClose, title, action, cancelLabel, scroll = t
       style={{ flex: 1 }}
       contentContainerStyle={{ padding: space.m, paddingBottom: space.xxl + insets.bottom, gap: space.l }}
       keyboardShouldPersistTaps="handled"
+      // Scrolling down to the rest of a sheet puts the keyboard away.
+      keyboardDismissMode="on-drag"
     >
       {children}
     </ScrollView>
@@ -133,7 +145,7 @@ export function Sheet({ visible, onClose, title, action, cancelLabel, scroll = t
               ? { width: '100%', height: '92%', borderTopLeftRadius: radius.sheet, borderTopRightRadius: radius.sheet }
               : {
                   width, maxWidth: '92%', height: '80%', maxHeight: 720, borderRadius: radius.sheet,
-                  shadowColor: '#000', shadowOpacity: 0.24, shadowRadius: 40, shadowOffset: { width: 0, height: 16 },
+                  shadowColor: c.shadow, shadowOpacity: 0.24, shadowRadius: 40, shadowOffset: { width: 0, height: 16 },
                 },
           ]}
         >
@@ -171,7 +183,7 @@ export function Menu({ sections, title, children }: MenuProps) {
   const { compact } = useLayout();
   const { width: winW, height: winH } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const anchorRef = useRef<View>(null);
+  const anchorRef = useRef<ViewRef>(null);
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const popover = Platform.OS === 'web' && !compact;
@@ -201,7 +213,7 @@ export function Menu({ sections, title, children }: MenuProps) {
     overlay = (
       <Modal visible transparent animationType="none" onRequestClose={() => setOpen(false)}>
         <Pressable style={StyleSheet.absoluteFill} onPress={() => setOpen(false)} accessibilityLabel="Close menu" />
-        <Material style={[styles.popover, { left, top, maxHeight: winH - top - space.m, borderColor: c.separator }]}>
+        <Material style={[styles.popover, { left, top, maxHeight: winH - top - space.m, borderColor: c.separator, shadowColor: c.shadow }]}>
           <ScrollView contentContainerStyle={{ padding: space.hair + 2 }}>
             {visibleSections.map((s, si) => (
               <View key={si}>
@@ -276,7 +288,7 @@ const styles = StyleSheet.create({
   popover: {
     position: 'absolute', width: POPOVER_WIDTH, borderRadius: radius.row,
     borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden',
-    shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 24, shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.18, shadowRadius: 24, shadowOffset: { width: 0, height: 8 },
   },
   popItem: {
     flexDirection: 'row', alignItems: 'center', gap: space.s,
