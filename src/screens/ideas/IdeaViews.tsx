@@ -214,8 +214,10 @@ export function IdeaDetail({ idea, answers, audience, audienceGroupNames, meId, 
   const booked = scheduled(idea);
   const draft = idea.status === 'draft';
   const early = stage === 'idea' || stage === 'dates';
-  const whiteboard = draft || stage === 'idea';
-  const planLabel = idea.planning_started_at ? 'Continue Planning' : 'Start Planning';
+  // Brainstorm ideas get the whiteboard (notes, season, hiding). A plan stays a
+  // plan even while it's a private draft.
+  const whiteboard = draft ? !idea.planning_started_at : stage === 'idea';
+  const planLabel = idea.planning_started_at ? 'Continue Planning' : 'Make It a Plan';
   const facts = [
     booked ? { icon: 'calendar' as const, text: slotLabel(booked) } : null,
     !booked && idea.target_date ? { icon: 'calendar-outline' as const, text: `Hoping for ${shortDate(idea.target_date)}` } : null,
@@ -225,10 +227,10 @@ export function IdeaDetail({ idea, answers, audience, audienceGroupNames, meId, 
   return (
     <View style={{ gap: space.l }}>
       <View style={{ gap: space.s }}>
-        <View style={{ flexDirection: 'row' }}><Tag label={draft ? 'Draft' : STAGE_LABEL[stage]} tone={stage === 'on' ? 'tint' : 'secondary'} /></View>
+        <View style={{ flexDirection: 'row' }}><Tag label={whiteboard ? (draft ? 'Private idea' : STAGE_LABEL.idea) : STAGE_LABEL[stage]} tone={stage === 'on' ? 'tint' : 'secondary'} /></View>
         <Txt v="title" accessibilityRole="header">{idea.title}</Txt>
         <Txt v="callout" tone="secondary">
-          {draft ? `Jotted down ${stampDate(idea.created_at)} · only you can see it`
+          {draft ? `${whiteboard ? 'Jotted down' : 'Started'} ${stampDate(idea.created_at)} · only you can see it`
             : `Proposed${idea.profiles?.full_name ? ` by ${idea.profiles.full_name}` : ''} on ${stampDate(idea.created_at)}`}
         </Txt>
         {/* While it's being finished, the details checklist below says this. */}
@@ -243,7 +245,7 @@ export function IdeaDetail({ idea, answers, audience, audienceGroupNames, meId, 
           <Button label={planLabel} icon="calendar-outline" variant="gray" onPress={onStartPlanning} block />
         </View>
       ) : stage === 'idea' ? (
-        <Button label="Start Planning" icon="calendar-outline" onPress={onStartPlanning} block />
+        <Button label="Make It a Plan" icon="calendar-outline" onPress={onStartPlanning} block />
       ) : null}
 
       {/* Your answer, like an RSVP: In, Maybe, Can't. */}

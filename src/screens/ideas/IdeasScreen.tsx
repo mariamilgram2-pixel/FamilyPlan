@@ -3,7 +3,7 @@
 // Three tabs along the top, the steps a plan moves through, and it keeps
 // whoever it's shared with all the way. What a plan needs decides where it
 // sits, not a status someone has to set:
-//   Ideas            a whiteboard: things you'd like to do someday, with
+//   Brainstorm       a whiteboard: things that'd be fun to do sometime, with
 //                    notes and suggestions anyone on them can add. Jot one
 //                    down and it's a private draft until you share it. What's
 //                    moving (and what's in season) sits on top.
@@ -52,7 +52,12 @@ import { Answers, IdeaDetail, IdeaRow, SharePill } from './IdeaViews';
 import { PlanEntry } from './CreateIdeaScreen';
 import ShareSheet, { ShareTarget } from './ShareSheet';
 import NewIdeaSheet, { NewIdeaText } from './NewIdeaSheet';
-import { keyOf, shortDate } from '../calendar/dates';
+import { FilterChip, FilterStrip, NoteBoard, NoteProps, PlanPart, PlanPath, ProgressCard, QuietCard, SeeAll, SummaryLine, SummaryPart, TicketCard, TidyCard, TidyStep, WaitingCard } from './PlanBoards';
+import { isQuiet, isResting, monthLabel, quietSince, shouldOfferTidy } from '../../lib/quiet';
+import { useQuietStore } from '../../lib/quietStore';
+import { ART } from '../home/FieldFlock';
+import { SEASONS, SEASON_LABEL, seasonOf } from '../../lib/whiteboard';
+import { keyOf, shortDate, todayKey } from '../calendar/dates';
 
 type AudienceFilter =
   | { kind: 'all' }
@@ -61,23 +66,45 @@ type AudienceFilter =
   | { kind: 'user'; id: string }
   | { kind: 'contact'; id: string };
 
-type Bucket = 'draft' | 'needsYou' | Stage;
+// resting: Brainstorm ideas quiet for months, in their own folder. quiet: plans
+// with nothing happening for two weeks. later: booked, past the week ahead.
+type Bucket = 'draft' | 'needsYou' | Stage | 'resting' | 'quiet' | 'later';
 const BUCKETS: { key: Bucket; title: string }[] = [
-  { key: 'draft', title: 'Drafts' },
+  { key: 'draft', title: 'Just you' },
   { key: 'needsYou', title: 'Waiting on you' },
   { key: 'dates', title: 'In progress' },
-  { key: 'idea', title: 'Ideas' },
-  { key: 'on', title: 'Coming up' },
+  { key: 'quiet', title: 'Quiet lately' },
+  { key: 'idea', title: 'Shared' },
+  { key: 'on', title: 'Next up' },
+  { key: 'later', title: 'Later' },
   { key: 'happened', title: 'Happened' },
 ];
-const HAPPENED_SHOWN = 5;
+// The short look: how many each section shows in its own shape before "See
+// all". Whatever needs you always shows, and so does the week ahead (at least
+// three, as tickets). Quiet lately starts folded. The rest open underneath as
+// a compact list, quick to scan; Later and Happened go by month.
+const SHORT: Record<Bucket, number> = { draft: 4, idea: 6, needsYou: Infinity, dates: 3, quiet: 0, on: Infinity, later: 5, happened: 5, resting: Infinity };
+const BY_MONTH: Bucket[] = ['later', 'happened'];
+const FILTERS_FROM = 8;   // the face and season strips show once a stage has more than this
+const WEEK = 7 * 86400000;
 
 type TabKey = 'ideas' | 'finish' | 'coming';
-const TABS: { key: TabKey; label: string; buckets: Bucket[] }[] = [
-  { key: 'ideas', label: 'Ideas', buckets: ['draft', 'idea'] },
-  { key: 'finish', label: 'Finish planning', buckets: ['needsYou', 'dates'] },
-  { key: 'coming', label: 'Coming up', buckets: ['on', 'happened'] },
+const TABS: { key: TabKey; label: string; buckets: Bucket[]; sheep: (typeof ART)[keyof typeof ART] }[] = [
+  { key: 'ideas', label: 'Brainstorm', buckets: ['draft', 'idea', 'resting'], sheep: ART.sitting1 },
+  { key: 'finish', label: 'Finish planning', buckets: ['needsYou', 'dates', 'quiet'], sheep: ART.grazing2 },
+  { key: 'coming', label: 'Coming up', buckets: ['on', 'later', 'happened'], sheep: ART.standing3 },
 ];
+
+// Each stage has its own shape (see PlanBoards): notes on a board, olive cards
+// for what's waiting on you, progress cards, calendar pages. Search results,
+// the Hidden folder, and what already happened stay a plain list.
+type Layout = 'board' | 'waiting' | 'progress' | 'quiet' | 'tickets' | 'rows';
+const LAYOUT: Record<Bucket, Layout> = { draft: 'board', idea: 'board', needsYou: 'waiting', dates: 'progress', quiet: 'quiet', on: 'tickets', later: 'rows', happened: 'rows', resting: 'rows' };
+/** A board section is one item, the whole board; every other item is one plan. */
+/** Past the short look, under See all: one plan as a compact row. */
+type ListItem = Idea | { id: string; board: Idea[] } | { id: string; row: Idea; month?: string };
+const isBoard = (i: ListItem): i is { id: string; board: Idea[] } => 'board' in i;
+const isRow = (i: ListItem): i is { id: string; row: Idea; month?: string } => 'row' in i;
 const tabOf = (b: Bucket) => TABS.find(t => t.buckets.includes(b))!.key;
 
 /** Demo ideas follow their events the way the database does: moved or cancelled. */
@@ -111,7 +138,8 @@ export default function PlansScreen() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [audienceFilter, setAudienceFilter] = useState<AudienceFilter>({ kind: 'all' });
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [showAllHappened, setShowAllHappened] = useState(false);
+  const [opened, setOpened] = useState<Set<Bucket>>(new Set());   // sections showing everything
+  const toggleOpened = (b: Bucket) => setOpened(prev => { const next = new Set(prev); next.has(b) ? next.delete(b) : next.add(b); return next; });
   const [chosenTab, setChosenTab] = useState<TabKey | null>(null);   // null: not chosen yet
   const jumpTo = useRef<string | null>(null);                         // a plan to open once it's loaded
   const [loading, setLoading] = useState(true);
@@ -120,11 +148,15 @@ export default function PlansScreen() {
   const [searchOpen, setSearchOpen] = useState(false);                // the search field, from the header
   const [query, setQuery] = useState('');                             // search
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set()); // hidden from your Plans
-  const [showHidden, setShowHidden] = useState(false);                // the Hidden folder
+  const [folder, setFolder] = useState<'hidden' | 'resting' | null>(null);   // the Hidden or Resting folder, open
+  const showHidden = folder !== null;
+  const [seasonFilter, setSeasonFilter] = useState<Season | null>(null);       // Brainstorm, narrowed to a season
+  const [tidying, setTidying] = useState<{ ids: string[]; index: number } | null>(null);   // the tidy, one idea at a time
   const [comments, setComments] = useState<Pick<PlanComment, 'idea_id' | 'user_id' | 'body'>[]>([]);   // for search
   const [swiped, setSwiped] = useState<string | null>(null);          // the row swiped open
   const [events, setEvents] = useState<Event[]>([]);                  // booked plans' invites, for Going / Maybe / Can't
   const { baseline, seen, markSeen } = useIdeaSeen(isDemo);
+  const { kept, tidyOfferedAt, keep, markTidyOffered } = useQuietStore(isDemo);
 
   const fetchAll = useCallback(async () => {
     if (!activeGroup) return;
@@ -487,23 +519,34 @@ export default function PlansScreen() {
     return list;
   }, [ideas, audienceFilter, groupById]);
 
-  const bucketOf = (i: Idea): Bucket | null =>
-    i.status === 'draft' ? (i.created_by !== meId ? null : i.planning_started_at ? 'dates' : 'draft')
-    : awaitingYourDates(i, meId) || readyToSend(i, meId) ? 'needsYou'
-    : stageOf(i);
+  const bucketOf = (i: Idea): Bucket | null => {
+    const b: Bucket | null = i.status === 'draft' ? (i.created_by !== meId ? null : i.planning_started_at ? 'dates' : 'draft')
+      : awaitingYourDates(i, meId) || readyToSend(i, meId) ? 'needsYou'
+      : stageOf(i);
+    // What's gone quiet folds away by itself (lib/quiet).
+    if ((b === 'draft' || b === 'idea') && isResting(i, kept[i.id])) return 'resting';
+    if (b === 'dates' && isQuiet(i, kept[i.id])) return 'quiet';
+    return b;
+  };
 
   // Hidden only applies on the whiteboard: once someone picks dates, it's back.
-  const whiteboardBucket = (b: Bucket | null) => b === 'draft' || b === 'idea';
+  const whiteboardBucket = (b: Bucket | null) => b === 'draft' || b === 'idea' || b === 'resting';
   const by = useMemo(() => {
-    const out: Record<Bucket, Idea[]> = { draft: [], needsYou: [], dates: [], idea: [], on: [], happened: [] };
+    const out: Record<Bucket, Idea[]> = { draft: [], needsYou: [], dates: [], quiet: [], idea: [], on: [], later: [], happened: [], resting: [] };
     filtered.forEach(i => { const b = bucketOf(i); if (b && !(whiteboardBucket(b) && hiddenIds.has(i.id))) out[b].push(i); });
     const when = (i: Idea) => i.proposed_slots?.[0]?.start ?? '';
     out.idea = sortIdeas(out.idea);
     out.draft = sortIdeas(out.draft);
+    out.dates.sort((a, b) => activityAt(b).localeCompare(activityAt(a)));
     out.on.sort((a, b) => when(a).localeCompare(when(b)));
     out.happened.sort((a, b) => when(b).localeCompare(when(a)));
+    out.resting = sortIdeas(out.resting);
+    out.quiet.sort((a, b) => quietSince(b, kept[b.id]) - quietSince(a, kept[a.id]));
+    // Coming up: the week ahead as tickets (at least three), the rest Later.
+    const soon = out.on.filter(i => Date.parse(when(i)) < Date.now() + WEEK).length;
+    out.later = out.on.splice(Math.max(soon, 3));
     return out;
-  }, [filtered, meId, hiddenIds]);
+  }, [filtered, meId, hiddenIds, kept]);
 
   const hiddenList = useMemo(() =>
     sortIdeas(filtered.filter(i => hiddenIds.has(i.id) && whiteboardBucket(bucketOf(i)))), [filtered, hiddenIds, meId]);
@@ -565,31 +608,56 @@ export default function PlansScreen() {
   }, [ideas]);
 
   // A tab's own groups; or, while searching, the results; or the Hidden folder.
-  type Section = { key: Bucket | 'results' | 'hidden'; title: string; total: number; data: Idea[] };
+  type Section = { key: Bucket | 'results' | 'hidden'; title: string; total: number; shown: number; more: number; layout: Layout; data: ListItem[] };
   const sections = useMemo((): Section[] => {
-    if (searching) return results.length ? [{ key: 'results', title: 'Results', total: results.length, data: results.map(r => r.idea) }] : [];
-    if (showHidden) return hiddenList.length ? [{ key: 'hidden', title: 'Hidden', total: hiddenList.length, data: hiddenList }] : [];
+    if (searching) return results.length ? [{ key: 'results', title: 'Results', total: results.length, shown: results.length, more: 0, layout: 'rows', data: results.map(r => r.idea) }] : [];
+    if (folder === 'hidden') return hiddenList.length ? [{ key: 'hidden', title: 'Hidden', total: hiddenList.length, shown: hiddenList.length, more: 0, layout: 'rows', data: hiddenList }] : [];
+    if (folder === 'resting') return by.resting.length ? [{ key: 'resting', title: 'Resting', total: by.resting.length, shown: by.resting.length, more: 0, layout: 'rows', data: by.resting }] : [];
     const current = TABS.find(t => t.key === tab)!;
+    const ofSeason = (list: Idea[]) => seasonFilter ? list.filter(i => i.season === seasonFilter) : list;
     return BUCKETS
-      .filter(b => current.buckets.includes(b.key))
-      .map(b => ({ key: b.key, title: b.title, total: by[b.key].length, data: b.key === 'happened' && !showAllHappened ? by[b.key].slice(0, HAPPENED_SHOWN) : by[b.key] }))
-      .filter(s => s.data.length > 0);
-  }, [by, tab, showAllHappened, searching, results, showHidden, hiddenList]);
+      .filter(b => current.buckets.includes(b.key) && b.key !== 'resting')
+      .map(b => {
+        const all = LAYOUT[b.key] === 'board' ? ofSeason(by[b.key]) : by[b.key];
+        const shown = Math.min(all.length, SHORT[b.key]);
+        const layout = LAYOUT[b.key];
+        const listed = opened.has(b.key) ? all : all.slice(0, shown);
+        let data: ListItem[];
+        if (layout === 'board') {
+          data = [{ id: `board-${b.key}`, board: all.slice(0, shown) }, ...listed.slice(shown).map(row => ({ id: `row-${row.id}`, row }))];
+        } else if (BY_MONTH.includes(b.key)) {
+          // A month's name above its first plan.
+          data = listed.map((row, i) => {
+            const m = monthLabel(row.proposed_slots?.[0]?.start ?? row.created_at);
+            const prev = i ? monthLabel(listed[i - 1].proposed_slots?.[0]?.start ?? listed[i - 1].created_at) : null;
+            return { id: `row-${row.id}`, row, month: m !== prev ? m : undefined };
+          });
+        } else {
+          data = [...listed.slice(0, shown), ...listed.slice(shown).map(row => ({ id: `row-${row.id}`, row }))];
+        }
+        return { key: b.key, title: b.title, total: all.length, shown, more: all.length - shown, layout, data };
+      })
+      .filter(sec => sec.total > 0);
+  }, [by, tab, opened, searching, results, folder, hiddenList, seasonFilter]);
 
-  // The Hidden folder closes when it empties.
-  useEffect(() => { if (showHidden && !hiddenList.length) setShowHidden(false); }, [showHidden, hiddenList.length]);
+  // A folder closes when it empties.
+  useEffect(() => {
+    if ((folder === 'hidden' && !hiddenList.length) || (folder === 'resting' && !by.resting.length)) setFolder(null);
+  }, [folder, hiddenList.length, by.resting.length]);
 
   /** Swipe left on an idea or draft: Hide (or Unhide), and Delete if it's yours. */
   const swipeActions = (idea: Idea): SwipeAction[] => {
-    if (!whiteboardBucket(bucketOf(idea))) return [];
+    const b = bucketOf(idea);
+    if (!whiteboardBucket(b)) return [];
     const hidden = hiddenIds.has(idea.id);
     return [
+      ...(b === 'resting' && !hidden ? [{ key: 'keep', label: 'Keep', icon: 'pin-outline' as const, onPress: () => keep(idea.id) }] : []),
       { key: 'hide', label: hidden ? 'Unhide' : 'Hide', icon: hidden ? 'eye-outline' : 'eye-off-outline', onPress: () => toggleHidden(idea) },
       ...(idea.created_by === meId ? [{ key: 'delete', label: 'Delete', icon: 'trash-outline' as const, destructive: true, onPress: () => handleDrop(idea) }] : []),
     ];
   };
 
-  const flat = useMemo(() => sections.flatMap(s => s.data), [sections]);
+  const flat = useMemo(() => sections.flatMap(s => s.data.flatMap(i => isBoard(i) ? i.board : isRow(i) ? [i.row] : [i])), [sections]);
 
   // Detail column: keep something selected when there's room to show it.
   // (Only on leaving that layout does compact drop the selection; clearing it
@@ -649,18 +717,175 @@ export default function PlansScreen() {
     audienceFilter.kind === 'user' ? (memberById.get(audienceFilter.id)?.full_name ?? 'someone') :
     audienceFilter.kind === 'contact' ? contactById.get(audienceFilter.id)?.name : null;
 
+  // ─── What each stage's shape shows ─────────────────────────────────────────
+  const firstName = (id: string | null) => !id ? null : id === meId ? 'You' : (memberById.get(id)?.full_name ?? 'Someone').split(' ')[0];
+  const metaOf = (idea: Idea) => {
+    const by = idea.created_by === meId ? 'you' : firstName(idea.created_by);
+    const forWhom = audienceSummary(idea);
+    return [by ? `By ${by}` : null, forWhom ? `For ${forWhom}` : null].filter(Boolean).join(' · ') || null;
+  };
+  const openIdea = (idea: Idea) => { setSwiped(null); setSelectedId(idea.id); };
+  const a11yOf = (idea: Idea) => [idea.title, freshLabel(idea), metaOf(idea)].filter(Boolean).join(', ');
+
+  const noteOf = (idea: Idea): NoteProps => ({
+    key: idea.id,
+    title: idea.title,
+    notes: idea.description,
+    season: idea.season ? SEASON_LABEL[idea.season] : null,
+    by: idea.created_by ? personOf(idea.created_by) : null,
+    byName: firstName(idea.created_by),
+    isPrivate: idea.status === 'draft',
+    fresh: freshLabel(idea),
+    selected: threeColumn && idea.id === selectedId,
+    votes: idea.votes,
+    voted: hasVoted(idea),
+    a11y: a11yOf(idea),
+    onPress: () => openIdea(idea),
+    onVote: () => respond(idea, 'in'),
+    onShare: idea.status === 'draft' ? () => setSharing(idea) : undefined,
+    more: swipeActions(idea).map(a => ({ key: a.key, label: a.label, icon: a.icon, destructive: a.destructive, onSelect: a.onPress })),
+  });
+
+  /** Who / When / Where, the way Finish planning's checklist reads them. */
+  const partsOf = (idea: Idea): PlanPart[] => {
+    const who = audienceSummary(idea);
+    const options = (idea.proposed_slots ?? []).filter(sl => new Date(sl.start).getTime() > Date.now());
+    const when = options.length === 1 ? shortDate(keyOf(options[0].start)) : idea.target_date ? shortDate(idea.target_date) : null;
+    return [
+      { label: 'Who', done: !!who, value: who },
+      options.length > 1
+        ? { label: 'When', done: false, partial: true, value: `${options.length} dates` }
+        : { label: 'When', done: !!when, value: when },
+      { label: 'Where', done: !!idea.location, value: idea.location },
+    ];
+  };
+
+  const renderPlan = (item: Idea, layout: Layout) => {
+    const selected = threeColumn && item.id === selectedId;
+    if (layout === 'waiting') {
+      const send = readyToSend(item, meId);
+      return (
+        <WaitingCard
+          title={item.title}
+          meta={metaOf(item)}
+          action={send ? 'Send the invite' : 'Pick the dates that work'}
+          icon={send ? 'paper-plane-outline' : 'calendar-outline'}
+          people={resolveAudience(item)}
+          fresh={freshLabel(item)}
+          selected={selected}
+          a11y={`${a11yOf(item)}. ${send ? 'Everyone has answered. Send the invite.' : 'Pick the dates that work for you.'}`}
+          onPress={() => openIdea(item)}
+        />
+      );
+    }
+    if (layout === 'progress') {
+      return (
+        <ProgressCard
+          title={item.title}
+          meta={metaOf(item)}
+          parts={partsOf(item)}
+          fresh={freshLabel(item)}
+          selected={selected}
+          votes={item.votes}
+          voted={hasVoted(item)}
+          onVote={() => respond(item, 'in')}
+          a11y={a11yOf(item)}
+          onPress={() => openIdea(item)}
+        />
+      );
+    }
+    if (layout === 'tickets' && item.proposed_slots?.[0]) {
+      const start = item.proposed_slots[0].start;
+      return (
+        <TicketCard
+          start={start}
+          title={item.title}
+          place={item.location}
+          people={resolveAudience(item)}
+          today={keyOf(start) === todayKey()}
+          fresh={freshLabel(item)}
+          selected={selected}
+          a11y={`${a11yOf(item)}, ${slotLabel(item.proposed_slots[0])}`}
+          onPress={() => openIdea(item)}
+        />
+      );
+    }
+    return null;
+  };
+
+  /** "Quiet for 3 weeks" / "Quiet for 4 months". */
+  const quietFor = (idea: Idea) => {
+    const days = Math.floor((Date.now() - quietSince(idea, kept[idea.id])) / 86400000);
+    if (days < 60) { const w = Math.max(2, Math.round(days / 7)); return `Quiet for ${w} weeks`; }
+    return `Quiet for ${Math.round(days / 30)} months`;
+  };
+
+  /** Still on? No: back on the Brainstorm board, as an idea. Kept, so it doesn't drop straight into Resting. */
+  async function backToBrainstorm(idea: Idea) {
+    if (!(await updateIdea(idea, { planning_started_at: null }))) return;
+    keep(idea.id);
+    notify('Back in Brainstorm', 'It’s an idea again. Make it a plan whenever you’re ready.');
+  }
+  const canSendBack = (idea: Idea) => idea.created_by === meId && !(idea.proposed_slots ?? []).some(sl => Date.parse(sl.start) > Date.now());
+
+  // Faces and groups in this stage, most plans first, for the filter strip.
+  const tabIdeas = TABS.find(t => t.key === tab)!.buckets.flatMap(b => by[b]);
+  const showFilters = !showHidden && !searching && (tabIdeas.length > FILTERS_FROM || audienceFilter.kind !== 'all' || (tab === 'ideas' && !!seasonFilter));
+  const filterChips = useMemo((): FilterChip[] => {
+    if (!showFilters) return [];
+    const groupN = new Map<string, number>(), userN = new Map<string, number>();
+    // Counted before the filter, so the strip doesn't shrink to the one face you tapped.
+    ideas.filter(i => { const b = bucketOf(i); return b && TABS.find(t => t.key === tab)!.buckets.includes(b); }).forEach(i => {
+      ideaGroupIds(i).forEach(id => groupN.set(id, (groupN.get(id) ?? 0) + 1));
+      (i.audience_user_ids ?? []).filter(id => id !== meId).forEach(id => userN.set(id, (userN.get(id) ?? 0) + 1));
+    });
+    const top = (m: Map<string, number>, n: number) => Array.from(m.entries()).sort((a, b) => b[1] - a[1]).slice(0, n).map(([id]) => id);
+    // Filtering keeps you on this stage, even if it empties what decided the default.
+    const toggle = (f: AudienceFilter) => { setChosenTab(tab); setAudienceFilter(isActive(f) ? { kind: 'all' } : f); };
+    return [
+      ...top(groupN, 4).map(id => groupById.get(id)).filter((g): g is Group => !!g).map(g => ({
+        key: `g-${g.id}`, label: g.name, group: { id: g.id, name: g.name }, active: isActive({ kind: 'group', id: g.id }), onPress: () => toggle({ kind: 'group', id: g.id }),
+      })),
+      ...top(userN, 10).map(id => memberById.get(id)).filter((p): p is Profile => !!p).map(p => ({
+        key: `u-${p.id}`, label: (p.full_name ?? p.email ?? 'Someone').split(' ')[0], person: p, active: isActive({ kind: 'user', id: p.id }), onPress: () => toggle({ kind: 'user', id: p.id }),
+      })),
+    ];
+  }, [showFilters, ideas, tab, audienceFilter, groupById, memberById, kept, meId]);
+  const nowSeason = seasonOf(new Date());
+  const seasonChips: FilterChip[] = tab === 'ideas' && showFilters
+    ? [...SEASONS.slice(SEASONS.indexOf(nowSeason)), ...SEASONS.slice(0, SEASONS.indexOf(nowSeason))].map(se => ({
+      key: se, label: se === nowSeason ? `${SEASON_LABEL[se]} · now` : SEASON_LABEL[se], active: seasonFilter === se,
+      onPress: () => setSeasonFilter(f => f === se ? null : se),
+    }))
+    : [];
+  const offerTidy = tab === 'ideas' && !showHidden && !searching && shouldOfferTidy(by.resting.length, tidyOfferedAt);
+  const tidyIdea = tidying ? ideas.find(i => i.id === tidying.ids[tidying.index]) ?? null : null;
+  const nextTidy = () => setTidying(t => t ? { ...t, index: t.index + 1 } : t);
+
+  // The week at a glance: only what's moving.
+  const goTo = (t: TabKey) => { setChosenTab(t); setSelectedId(null); setSwiped(null); };
+  const thisWeek = by.on.filter(i => new Date(i.proposed_slots?.[0]?.start ?? 0).getTime() < Date.now() + WEEK).length;
+  const freshIdeas = [...by.draft, ...by.idea].filter(i => freshLabel(i)).length;
+  const summary: SummaryPart[] = [
+    by.needsYou.length ? { key: 'needs', text: `${by.needsYou.length} need${by.needsYou.length === 1 ? 's' : ''} you`, strong: true, onPress: () => goTo('finish') } : null,
+    thisWeek ? { key: 'week', text: `${thisWeek} this week`, onPress: () => goTo('coming') } : null,
+    freshIdeas ? { key: 'fresh', text: `${freshIdeas} new idea${freshIdeas === 1 ? '' : 's'}`, onPress: () => goTo('ideas') } : null,
+  ].filter((x): x is SummaryPart => !!x);
+
   // ─── Layout ────────────────────────────────────────────────────────────────
+  const gutter = compact ? space.m : space.l;
   const list = (
     <SectionList
       sections={sections}
       keyExtractor={i => i.id}
       stickySectionHeadersEnabled={false}
       contentContainerStyle={{ paddingBottom: bottomClearance }}
-      ItemSeparatorComponent={() => <View style={{ height: space.s }} />}
+      ItemSeparatorComponent={() => <View style={{ height: space.s + 4 }} />}
       ListHeaderComponent={
         <View style={{ paddingBottom: space.s }}>
           <ScreenHeader
             title="Plans"
+            display
             eyebrow={audienceFilter.kind === 'all' ? 'All groups' : undefined}
             trailing={
               <>
@@ -691,7 +916,7 @@ export default function PlansScreen() {
               onCancel={() => { setQuery(''); setSearchOpen(false); }}
             />
           ) : null}
-          {audienceLabel ? (
+          {audienceLabel && !showFilters ? (
             <View style={{ marginHorizontal: compact ? space.m : space.l, marginTop: space.s, backgroundColor: c.fill, borderRadius: 12, overflow: 'hidden' }}>
               <ListRow
                 icon="filter"
@@ -702,57 +927,110 @@ export default function PlansScreen() {
           ) : null}
           {searching ? null : showHidden ? (
             <View style={{ marginHorizontal: compact ? space.m : space.l, marginTop: space.s, backgroundColor: c.fill, borderRadius: 12, overflow: 'hidden' }}>
-              <ListRow icon="chevron-back" title="Back to Ideas" tintTitle onPress={() => setShowHidden(false)} />
+              <ListRow icon="chevron-back" title="Back to Brainstorm" tintTitle onPress={() => setFolder(null)} />
             </View>
           ) : (
             <>
-              <PlanTabs tab={tab} count={tabCount} waiting={by.needsYou.length > 0} onChange={(t) => { setChosenTab(t); setSelectedId(null); setSwiped(null); }} />
+              <View style={{ paddingHorizontal: gutter }}>
+                <PlanPath
+                  steps={TABS.map(t => ({ key: t.key, label: t.label, count: tabCount(t.key), sheep: t.sheep, waiting: t.key === 'finish' && by.needsYou.length > 0 }))}
+                  current={tab}
+                  onChange={goTo}
+                />
+                {loading ? null : <SummaryLine parts={summary} />}
+              </View>
+              {offerTidy ? (
+                <TidyCard
+                  count={by.resting.length}
+                  onLook={() => { markTidyOffered(); setTidying({ ids: by.resting.map(i => i.id), index: 0 }); }}
+                  onLater={markTidyOffered}
+                />
+              ) : null}
+              <FilterStrip chips={filterChips} label="Show plans with a group or person" />
+              <FilterStrip chips={seasonChips} label="Show ideas for a season" />
             </>
           )}
         </View>
       }
       renderSectionHeader={({ section }) => (
-        sections.length > 1 || section.key === 'draft' || section.key === 'idea' || section.key === 'results' || section.key === 'hidden' ? (
-          <View style={{ paddingHorizontal: space.m, paddingTop: space.l, paddingBottom: space.s }}>
-            <Txt v="footnote" tone="secondary" accessibilityRole="header" style={eyebrow}>{`${section.title} · ${section.total}`}</Txt>
+        sections.length > 1 || section.more > 0 || section.key === 'draft' || section.key === 'idea' || section.key === 'results' || section.key === 'hidden' ? (
+          <View style={{ paddingHorizontal: gutter, paddingTop: space.l, paddingBottom: section.layout === 'board' ? space.m : space.s }}>
+            <Txt v="footnote" tone="secondary" accessibilityRole="header" style={eyebrow}>{section.more && section.shown && !opened.has(section.key as Bucket) ? `${section.title} · ${section.shown} of ${section.total}` : `${section.title} · ${section.total}`}</Txt>
           </View>
-        ) : <View style={{ height: space.s }} />
+        ) : <View style={{ height: space.m }} />
       )}
-      renderItem={({ item }) => (
-        <SwipeRow actions={swipeActions(item)} open={swiped === item.id} onOpenChange={(o) => setSwiped(o ? item.id : null)}>
+      renderItem={({ item, section }) => {
+        if (isBoard(item)) return <View style={{ paddingHorizontal: gutter }}><NoteBoard notes={item.board.map(noteOf)} /></View>;
+        const row = isRow(item);
+        const idea: Idea = row ? item.row : item;
+        if (section.layout === 'quiet') {
+          return (
+            <View style={{ paddingHorizontal: gutter }}>
+              <QuietCard
+                title={idea.title}
+                meta={metaOf(idea)}
+                quietFor={quietFor(idea)}
+                onPress={() => openIdea(idea)}
+                onKeep={() => keep(idea.id)}
+                onBack={canSendBack(idea) ? () => backToBrainstorm(idea) : undefined}
+              />
+            </View>
+          );
+        }
+        const card = row || section.layout === 'rows' ? null : renderPlan(idea, section.layout);
+        if (card) return <View style={{ paddingHorizontal: gutter }}>{card}</View>;
+        const month = row ? item.month : undefined;
+        return (
+        <>
+        {month ? <Txt v="footnote" semibold tone="secondary" style={{ paddingHorizontal: gutter, paddingTop: space.s, paddingBottom: space.hair }}>{month}</Txt> : null}
+        <SwipeRow actions={swipeActions(idea)} open={swiped === idea.id} onOpenChange={(o) => setSwiped(o ? idea.id : null)}>
           {(guard) => <IdeaRow
-            idea={item}
-            voted={hasVoted(item)}
+            idea={idea}
+            voted={hasVoted(idea)}
             meId={meId}
-            audienceSummary={audienceSummary(item)}
-            selected={threeColumn && item.id === selectedId}
-            fresh={freshLabel(item)}
-            share={item.status === 'draft' ? <SharePill onPress={guard(() => setSharing(item))} /> : null}
-            hit={hitById.get(item.id) ?? null}
-            onVote={guard(() => respond(item, 'in'))}
-            onPress={guard(() => { setSwiped(null); setSelectedId(item.id); })}
+            audienceSummary={audienceSummary(idea)}
+            selected={threeColumn && idea.id === selectedId}
+            fresh={freshLabel(idea)}
+            share={idea.status === 'draft' ? <SharePill onPress={guard(() => setSharing(idea))} /> : null}
+            hit={hitById.get(idea.id) ?? null}
+            onVote={guard(() => respond(idea, 'in'))}
+            onPress={guard(() => { setSwiped(null); setSelectedId(idea.id); })}
           />}
         </SwipeRow>
-      )}
-      renderSectionFooter={({ section }) => section.key === 'happened' && section.total > HAPPENED_SHOWN ? (
-        <ListRow title={showAllHappened ? 'Show fewer' : `Show all ${section.total}`} tintTitle onPress={() => setShowAllHappened(x => !x)} />
+        </>
+        );
+      }}
+      renderSectionFooter={({ section }) => section.more > 0 ? (
+        <SeeAll open={opened.has(section.key as Bucket)} total={section.total} more={section.more} title={section.title} onPress={() => toggleOpened(section.key as Bucket)} />
       ) : section.key === 'hidden' ? (
         <Txt v="footnote" tone="secondary" style={{ paddingHorizontal: space.m, paddingTop: space.m }}>
           Only hidden for you. Swipe left to unhide or delete.
         </Txt>
+      ) : section.key === 'resting' ? (
+        <Txt v="footnote" tone="secondary" style={{ paddingHorizontal: space.m, paddingTop: space.m }}>
+          Ideas nobody’s touched in about three months. A note, a vote, or its season brings one back. Swipe left to keep one out.
+        </Txt>
       ) : null}
       ListFooterComponent={
         // The Hidden folder, at the bottom of Ideas.
-        !searching && !showHidden && tab === 'ideas' && hiddenList.length ? (
+        !searching && !showHidden && tab === 'ideas' && (hiddenList.length || by.resting.length) ? (
           <View style={{ marginHorizontal: compact ? space.m : space.l, marginTop: space.l, backgroundColor: c.fill, borderRadius: 12, overflow: 'hidden' }}>
-            <ListRow icon="eye-off-outline" title="Hidden" value={String(hiddenList.length)} chevron onPress={() => { setShowHidden(true); setSwiped(null); }} />
+            {by.resting.length ? <ListRow icon="moon-outline" title="Resting" value={String(by.resting.length)} chevron onPress={() => { setFolder('resting'); setSwiped(null); }} /> : null}
+            {hiddenList.length ? <ListRow icon="eye-off-outline" title="Hidden" value={String(hiddenList.length)} chevron onPress={() => { setFolder('hidden'); setSwiped(null); }} /> : null}
           </View>
         ) : undefined
       }
       ListEmptyComponent={
         loading ? <ActivityIndicator style={{ marginTop: space.xl }} color={c.secondaryLabel} /> : searching ? (
           <EmptyState icon="search" title={`No results for “${query.trim()}”`} body="Try a name, a place, or a word from the notes." />
-        ) : showHidden ? undefined : tabCount(tab) > 0 ? undefined : (
+        ) : showHidden ? undefined : tab === 'ideas' && seasonFilter ? (
+          <EmptyState
+            icon="leaf-outline"
+            illustration={<Sheep size={72} pose="graze" style={{ marginBottom: space.s }} />}
+            title={`Nothing for ${SEASON_LABEL[seasonFilter].toLowerCase()} yet`}
+            body="Try another season, or tap it again to see everything."
+          />
+        ) : tabCount(tab) > 0 ? undefined : (
           <EmptyState
             icon="bulb-outline"
             illustration={<Sheep size={72} pose="graze" style={{ marginBottom: space.s }} />}
@@ -852,6 +1130,28 @@ export default function PlansScreen() {
   return (
     <>
       <SplitView list={list} detail={detail} />
+      <Sheet visible={!!tidying} onClose={() => setTidying(null)} title="Resting Ideas" cancelLabel="Done">
+        {tidying && tidyIdea ? (
+          <TidyStep
+            index={tidying.index}
+            total={tidying.ids.length}
+            title={tidyIdea.title}
+            notes={tidyIdea.description}
+            by={tidyIdea.created_by ? `By ${tidyIdea.created_by === meId ? 'you' : firstName(tidyIdea.created_by)}` : null}
+            quietFor={quietFor(tidyIdea)}
+            onKeep={() => { keep(tidyIdea.id); nextTidy(); }}
+            onLetGo={() => { if (!hiddenIds.has(tidyIdea.id)) toggleHidden(tidyIdea); nextTidy(); }}
+          />
+        ) : tidying ? (
+          <EmptyState
+            icon="checkmark-circle-outline"
+            illustration={<Sheep size={72} pose="graze" style={{ marginBottom: space.s }} />}
+            title="All tidied"
+            body="What you kept is back on the board. What you let go is in Hidden."
+          />
+        ) : null}
+      </Sheet>
+
       <NewIdeaSheet
         visible={writing}
         groups={myGroups}
@@ -859,7 +1159,7 @@ export default function PlansScreen() {
         onClose={() => setWriting(false)}
         onSave={async (text, target) => {
           const idea = await addIdea(text, target);
-          if (idea) setChosenTab('ideas');   // a new idea starts in Ideas, wherever you added it from
+          if (idea) setChosenTab('ideas');   // a new idea starts in Brainstorm, wherever you added it from
           return !!idea;
         }}
         onStartPlanning={startPlanningNew}
@@ -881,58 +1181,13 @@ export default function PlansScreen() {
 }
 
 const EMPTY: Record<TabKey, { title: string; body: string }> = {
-  ideas: { title: 'Nothing brewing yet', body: 'Jot down something you’d like to do someday. Share it when you’re ready.' },
-  finish: { title: 'Nothing to finish', body: 'Ideas move here once someone starts planning them, and stay until they’re booked.' },
+  ideas: { title: 'Nothing brewing yet', body: 'Jot down something that’d be fun to do sometime, and share it to see who’s in.' },
+  finish: { title: 'Nothing to finish', body: 'Plans you start, and ideas someone makes a plan, stay here until they’re booked.' },
   coming: { title: 'Nothing booked yet', body: 'Plans show up here once the invite goes out.' },
 };
 
 // ─── Tabs ────────────────────────────────────────────────────────────────────
 
-/** The four steps as pills along the top; the chosen one is solid olive. */
-function PlanTabs({ tab, count, waiting: anyWaiting, onChange }: { tab: TabKey; count: (t: TabKey) => number; waiting: boolean; onChange: (t: TabKey) => void }) {
-  const { c } = useTheme();
-  const { compact } = useLayout();
-  return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      accessibilityRole="tablist"
-      contentContainerStyle={{ gap: space.s, paddingHorizontal: compact ? space.m : space.l, paddingTop: space.s }}
-    >
-      {TABS.map(t => {
-        const on = t.key === tab;
-        const n = count(t.key);
-        // Finish planning calls for attention when something's waiting on you, even from another tab.
-        const waiting = t.key === 'finish' && anyWaiting;
-        return (
-          <Tappable
-            key={t.key}
-            feedback="opacity"
-            accessibilityRole="tab"
-            accessibilityState={{ selected: on }}
-            accessibilityLabel={`${t.label}, ${n}`}
-            onPress={() => onChange(t.key)}
-            style={{
-              flexDirection: 'row', alignItems: 'center', gap: space.s - 2,
-              height: 38, paddingLeft: space.m, paddingRight: n ? space.s - 2 : space.m,
-              borderRadius: radius.pill, backgroundColor: on ? c.tint : c.fill, ...continuous,
-            }}
-          >
-            <Txt v="callout" semibold style={{ color: on ? c.onTint : c.label }}>{t.label}</Txt>
-            {n ? (
-              <View style={{
-                minWidth: 24, height: 24, paddingHorizontal: 6, borderRadius: 12, alignItems: 'center', justifyContent: 'center',
-                backgroundColor: on ? c.onTint : waiting ? c.tint : c.background,
-              }}>
-                <Txt v="caption" style={[tabularNums, { color: on ? c.tint : waiting ? c.onTint : c.secondaryLabel }]}>{n}</Txt>
-              </View>
-            ) : null}
-          </Tappable>
-        );
-      })}
-    </ScrollView>
-  );
-}
 
 /**
  * Search, like Messages: opened from the magnifier in the header, a rounded

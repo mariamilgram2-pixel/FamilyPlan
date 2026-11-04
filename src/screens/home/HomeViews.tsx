@@ -41,10 +41,10 @@ export function useOpenTile(fallback: string | null) {
   return { open: chosen === undefined ? fallback : chosen, toggle };
 }
 
-type SheepArt = { source: number; w: number; h: number };   // one of the hillside drawings
+export type SheepArt = { source: number; w: number; h: number };   // one of the hillside drawings
 
 /** A sheep in its little meadow, the same sage in light and dark so the drawing always reads. */
-function Meadow({ sheep, size = 38 }: { sheep: SheepArt; size?: number }) {
+export function Meadow({ sheep, size = 38 }: { sheep: SheepArt; size?: number }) {
   const { isDark } = useTheme();
   const h = size * 0.6;
   return (

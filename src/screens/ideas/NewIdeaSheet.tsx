@@ -1,6 +1,7 @@
-// A new idea, like typing a message: write it out, then save it as a draft
-// (just yours, or with people you add, who can add notes too), or start
-// planning it. The first line is its title; anything after is notes.
+// A new Brainstorm idea, like typing a message: something that'd be fun to do
+// sometime. Save it (just yours, or with people you add, who can add notes
+// too), or make it a plan right away. The first line is its title; anything
+// after is notes. Plans with a when ("dinner next week") start in New Plan.
 
 import React, { useEffect, useState } from 'react';
 import { View } from 'react-native';
@@ -57,7 +58,7 @@ export default function NewIdeaSheet({ visible, groups, people, onClose, onSave,
         <Field
           value={text}
           onChangeText={setText}
-          placeholder="What would be fun to do?"
+          placeholder="What would be fun to do sometime?"
           accessibilityLabel="Your idea"
           maxLength={4000}
           multiline
@@ -66,19 +67,19 @@ export default function NewIdeaSheet({ visible, groups, people, onClose, onSave,
         />
 
         <View style={{ gap: space.s }}>
-          <Button label="Save Draft" icon="bookmark-outline" onPress={save} disabled={!ready} loading={saving} block />
+          <Button label="Save Idea" icon="bulb-outline" onPress={save} disabled={!ready} loading={saving} block />
           <Txt v="footnote" tone="secondary" style={{ paddingHorizontal: space.m, color: c.secondaryLabel }}>
-            {chosen.length ? `Saved with ${withWhom}. They can add notes and suggestions.` : 'Only you can see it until you add people or share it.'}
+            {chosen.length ? `Goes in Brainstorm with ${withWhom}. They can add notes and suggestions.` : 'Goes in Brainstorm. Only you can see it until you add people.'}
           </Txt>
         </View>
         <View style={{ flexDirection: 'row', gap: space.s }}>
           {!adding ? (
             <View style={{ flex: 1 }}>
-              <Button label="Add People" icon="person-add-outline" variant="gray" onPress={() => setAdding(true)} block />
+              <Button small label="Add People" icon="person-add-outline" variant="gray" onPress={() => setAdding(true)} block />
             </View>
           ) : null}
           <View style={{ flex: 1 }}>
-            <Button label="Start Planning" icon="calendar-outline" variant="gray" onPress={() => onStartPlanning(splitIdea(text), target())} disabled={!ready} block />
+            <Button small label="Make It a Plan" icon="calendar-outline" variant="gray" onPress={() => onStartPlanning(splitIdea(text), target())} disabled={!ready} block />
           </View>
         </View>
 

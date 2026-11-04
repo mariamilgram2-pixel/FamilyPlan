@@ -4,10 +4,11 @@
 //   compose  — one sentence ("dinner with Ana this week"), with who, when,
 //              and where filling in under it as you type, each a tap to
 //              change (or fill it all in yourself). One main button says
-//              exactly what will happen, from what's known: save the idea,
+//              exactly what will happen, from what's known: save the plan,
 //              ask people to pick from three times, or invite them to the
 //              one that's set. Everything else is under More options, and
-//              closing keeps what you typed as a private draft.
+//              closing keeps what you typed as a private draft. Whatever's
+//              saved here is a plan (Finish planning), never a Brainstorm idea.
 //   prefs    — Plan asks about scheduling preferences first (time of day,
 //              how soon, which days, how long).
 //   options  — a few suggested times, ranked by calendar fit first and
@@ -431,6 +432,9 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
       audience_contact_ids: Array.from(selectedContactIds),
       ...fields,
       planned_at,
+      // Anything saved from New Plan is a plan, however little is filled in:
+      // it sits in Finish planning, never on the Brainstorm whiteboard.
+      planning_started_at: existing?.planning_started_at ?? new Date().toISOString(),
     };
     if (isDemo) {
       const me = DEMO_MEMBERS[0];
@@ -483,7 +487,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
       : 'It’s in Plans so your group can say they’re in.');
   }
 
-  /** Into Plans without asking anyone, to pick up later. */
+  /** Into Finish planning without asking anyone, to fill in later. */
   async function handleSave() {
     if (!ready()) return;
     setSaving('save');
@@ -491,7 +495,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
     setSaving(null);
     if (!idea) return;
     finish(idea);
-    notify('Saved', 'It’s in Plans. No one’s been asked yet.');
+    notify('Plan saved', 'It’s in Finish planning. No one’s been asked yet.');
   }
 
   /**
@@ -508,7 +512,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
     if (!idea) return;
     onSaved(idea);
     if (existing) return;
-    const discard = await confirmAction('Kept as a draft', 'It’s in Plans, where only you can see it.', 'Discard', 'Keep');
+    const discard = await confirmAction('Kept in Finish planning', 'Only you can see it until you send it.', 'Discard', 'Keep');
     if (!discard) return;
     if (isDemo) removeDemoIdea(idea.id);
     else await supabase.from('ideas').delete().eq('id', idea.id);
@@ -717,7 +721,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
 
   const audienceCount = selectedGroupIds.size + selectedUserIds.size + selectedContactIds.size;
 
-  const sheetTitle = step === 'compose' ? (existing?.status === 'draft' ? 'Draft' : existing ? 'Start Planning' : 'New Plan') : step === 'prefs' ? 'Find a Time' : 'Pick a Time';
+  const sheetTitle = step === 'compose' ? (existing && !existing.planning_started_at ? 'Make It a Plan' : existing ? 'Finish Planning' : 'New Plan') : step === 'prefs' ? 'Find a Time' : 'Pick a Time';
   // The rows show once there's something to go on, or you chose to fill them in.
   const started = !!describe.trim() || filling || !!existing || titleSaved;
   // Saving the sentence keeps its title (read from it, or the sentence as typed).
@@ -764,14 +768,14 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
   const looseWhen = when.day.kind !== 'any' || when.time.kind !== 'any';
   const within = when.day.kind === 'range' ? ` ${RANGE_LABEL[when.day.range].toLowerCase()}`
     : date ? ` ${weekday(date) === 'Today' || weekday(date) === 'Tomorrow' ? weekday(date).toLowerCase() : `on ${weekday(date)}`}` : '';
-  // Each button is named for what it does. "Save for later" puts it in Plans
-  // without asking anyone; once the day and time are set, the big button
+  // Each button is named for what it does. "Save plan" puts it in Finish
+  // planning without asking anyone, to fill in later; once the day and time are set, the big button
   // sends the invite instead. The one beside it is the next step that fits:
   // send them the best times to pick from, or find one.
   type Action = { label: string; icon: IconName; note: string; run: () => void; busy: boolean };
   const create: Action = {
-    label: existing && existing.status !== 'draft' ? 'Save' : 'Save for later', icon: 'bookmark-outline', run: handleSave, busy: saving === 'save',
-    note: hasWho ? `Saves it to Plans without asking ${whoShort === 'everyone' ? 'anyone' : whoShort}. You can send it later.` : 'Saves it to Plans. You can add the rest later.',
+    label: existing && existing.status !== 'draft' ? 'Save' : 'Save plan', icon: 'bookmark-outline', run: handleSave, busy: saving === 'save',
+    note: 'See it in Finish planning.',
   };
   const primary: Action = locked ? {
     label: `${hasWho ? `Invite ${whoShort}` : 'Add to calendar'} · ${lockText}${repeat !== 'never' ? ` · ${REPEAT_OPTIONS.find(o => o.key === repeat)!.label.toLowerCase()}` : ''}`, icon: 'send',
@@ -790,7 +794,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
   const moreOptions = [
     ...(!locked ? [{ key: 'pick', label: 'See times first', icon: 'time-outline' as IconName, onSelect: findFromCompose }] : []),
     ...(hasWho ? [{ key: 'ask', label: `Send to ${whoShort} without times`, icon: 'chatbubbles-outline' as IconName, onSelect: handlePropose }] : []),
-    { key: 'draft', label: 'Keep as a private draft', icon: 'create-outline' as IconName, onSelect: handleClose },
+    { key: 'draft', label: 'Keep it to myself for now', icon: 'create-outline' as IconName, onSelect: handleClose },
   ];
 
   // When's calendar opens on the days in question: the range said, the week
@@ -1315,9 +1319,9 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
 
           <View style={{ gap: space.hair }}>
             <View style={{ flexDirection: 'row', gap: space.s }}>
-              <Button label={primary.label} icon={primary.icon} onPress={primary.run} loading={primary.busy} disabled={!!saving || searching} style={{ flex: 1 }} />
+              <Button small={!!secondary} label={primary.label} icon={primary.icon} onPress={primary.run} loading={primary.busy} disabled={!!saving || searching} style={{ flex: 1 }} />
               {secondary ? (
-                <Button label={secondary.label} icon={secondary.icon} variant="gray" onPress={secondary.run} loading={secondary.busy} disabled={!!saving || searching} style={{ flex: 1 }} />
+                <Button small label={secondary.label} icon={secondary.icon} variant="gray" onPress={secondary.run} loading={secondary.busy} disabled={!!saving || searching} style={{ flex: 1 }} />
               ) : null}
             </View>
             <Txt v="footnote" tone="secondary" align="center" style={{ paddingHorizontal: space.m, paddingTop: space.hair }}>{primary.note}</Txt>

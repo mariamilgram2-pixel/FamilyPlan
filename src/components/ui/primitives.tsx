@@ -89,10 +89,11 @@ interface ButtonProps {
   loading?: boolean;
   disabled?: boolean;
   block?: boolean;     // stretch to container width
+  small?: boolean;     // smaller type, up to two lines: for buttons side by side with long labels
   style?: StyleProp<ViewStyle>;
 }
 
-export function Button({ label, onPress, variant = 'filled', icon, loading, disabled, block, style }: ButtonProps) {
+export function Button({ label, onPress, variant = 'filled', icon, loading, disabled, block, small, style }: ButtonProps) {
   const { c } = useTheme();
   const { compact } = useLayout();
   const s = useStyles(buttonStyles);
@@ -107,7 +108,10 @@ export function Button({ label, onPress, variant = 'filled', icon, loading, disa
       accessibilityLabel={label}
       style={[
         s.base,
-        { height: compact ? HIT + 4 : 32, paddingHorizontal: compact ? space.l : space.m },
+        small
+          // Two-line labels grow the button instead of clipping (e.g. with larger text sizes).
+          ? { minHeight: compact ? HIT + 4 : 40, paddingVertical: space.hair, paddingHorizontal: space.m }
+          : { height: compact ? HIT + 4 : 32, paddingHorizontal: compact ? space.l : space.m },
         variant === 'filled' && { backgroundColor: c.tint },
         variant === 'gray' && { backgroundColor: c.fill },
         block && { alignSelf: 'stretch' },
@@ -118,8 +122,18 @@ export function Button({ label, onPress, variant = 'filled', icon, loading, disa
         <ActivityIndicator color={fg} />
       ) : (
         <>
-          {icon && <Ionicons name={icon} size={compact ? 20 : 16} color={fg} />}
-          <Text style={[compact ? type.headline : type.callout, weight('700'), { color: fg }]}>{label}</Text>
+          {icon && <Ionicons name={icon} size={small ? 16 : compact ? 20 : 16} color={fg} />}
+          <Text
+            numberOfLines={small ? 2 : undefined}
+            maxFontSizeMultiplier={small ? 1.4 : undefined}
+            style={[
+              small ? [type.footnote, { fontSize: 14, lineHeight: 17, textAlign: 'center' as const }] : compact ? type.headline : type.callout,
+              weight('700'),
+              { color: fg, flexShrink: 1 },
+            ]}
+          >
+            {label}
+          </Text>
         </>
       )}
     </Tappable>
