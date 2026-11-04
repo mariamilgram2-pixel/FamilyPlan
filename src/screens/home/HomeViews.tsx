@@ -202,6 +202,13 @@ export function PillCloud({ items }: { items: Bubble[] }) {
           <Txt v="footnote" semibold>{b.label}</Txt>
           {b.caption ? <Txt v="caption" tone="secondary">{b.caption}</Txt> : null}
           <Icon name={b.badge} size={13} color={c.tint} />
+          {/* Not for you right now: clear it. */}
+          {b.onDismiss ? (
+            <Tappable feedback="opacity" onPress={b.onDismiss} accessibilityLabel={`Clear: ${b.a11y}`} hitSlop={8}
+              style={{ marginLeft: 2, width: 20, height: 20, borderRadius: 10, alignItems: 'center', justifyContent: 'center' }}>
+              <Icon name="close" size={13} color={c.secondaryLabel} />
+            </Tappable>
+          ) : null}
         </Tappable>
       ))}
     </View>
@@ -292,6 +299,7 @@ export interface Bubble {
   onPress: () => void;
   extra?: { icon: IconName; label: string; a11y?: string; onPress: () => void }; // the main small action under it
   more?: { key: string; label: string; icon: IconName; onSelect: () => void }[];   // tucked behind "⋯"
+  onDismiss?: () => void;      // a suggestion you can clear (×)
 }
 
 const BUBBLE = 60;

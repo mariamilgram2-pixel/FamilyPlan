@@ -12,6 +12,8 @@ interface Props {
   selected: string;
   onSelect: (key: string) => void;
   marked: Set<string>;
+  /** How full each day is: up to three dots, solid for booked, outlined for maybe dates. */
+  dots?: Map<string, { solid: number; maybe: number; colors?: string[] }>;
   expanded: boolean;
   onToggleExpanded?: () => void;
   /** Leave out the month label and paging (the screen drives them). */
@@ -23,7 +25,7 @@ interface Props {
 const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-export default function CalendarGrid({ selected, onSelect, marked, expanded, onToggleExpanded, hideHeader, weekStartsOn = 0 }: Props) {
+export default function CalendarGrid({ selected, onSelect, marked, dots, expanded, onToggleExpanded, hideHeader, weekStartsOn = 0 }: Props) {
   const { c } = useTheme();
   const { compact } = useLayout();
   const [anchor, setAnchor] = useState(selected);
@@ -90,7 +92,12 @@ export default function CalendarGrid({ selected, onSelect, marked, expanded, onT
             if (!key) return <View key={ci} style={{ flex: 1 }} />;
             const isSel = key === selected;
             const isToday = key === today;
-            const hasEvents = marked.has(key);
+            const count = dots?.get(key);
+            const hasEvents = marked.has(key) || !!count?.maybe;
+            // Booked first, then maybes, three at most, like Apple's month.
+            const solid = Math.min(3, count?.solid ?? (marked.has(key) ? 1 : 0));
+            const maybe = Math.min(3 - solid, count?.maybe ?? 0);
+            const total = (count?.solid ?? 0) + (count?.maybe ?? 0);
             const d = parseKey(key);
             return (
               <Pressable
@@ -98,7 +105,7 @@ export default function CalendarGrid({ selected, onSelect, marked, expanded, onT
                 onPress={() => onSelect(key)}
                 accessibilityRole="button"
                 accessibilityState={{ selected: isSel }}
-                accessibilityLabel={`${WEEKDAY_NAMES[d.getDay()]}, ${d.toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}${isToday ? ', today' : ''}${hasEvents ? ', has events' : ''}`}
+                accessibilityLabel={`${WEEKDAY_NAMES[d.getDay()]}, ${d.toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}${isToday ? ', today' : ''}${total ? `, ${total} plan${total === 1 ? '' : 's'}` : hasEvents ? ', has events' : ''}`}
                 style={(state: any) => [
                   { flex: 1, alignItems: 'center', paddingVertical: space.hair, minHeight: 48 },
                   Platform.OS === 'web' && ({ cursor: 'pointer' } as any),
@@ -121,10 +128,14 @@ export default function CalendarGrid({ selected, onSelect, marked, expanded, onT
                     {d.getDate()}
                   </Txt>
                 </View>
-                <View style={{
-                  width: 6, height: 6, borderRadius: 3, marginTop: 2,
-                  backgroundColor: hasEvents ? c.secondaryLabel : 'transparent',
-                }} />
+                <View style={{ flexDirection: 'row', gap: 3, height: 6, marginTop: 2 }}>
+                  {Array.from({ length: solid }, (_, i) => (
+                    <View key={`s${i}`} style={{ width: 5, height: 5, borderRadius: 2.5, backgroundColor: count?.colors?.[i] ?? (isToday ? c.tint : c.secondaryLabel) }} />
+                  ))}
+                  {Array.from({ length: maybe }, (_, i) => (
+                    <View key={`m${i}`} style={{ width: 5, height: 5, borderRadius: 2.5, borderWidth: 1, borderColor: c.secondaryLabel }} />
+                  ))}
+                </View>
               </Pressable>
             );
           })}

@@ -1,19 +1,21 @@
 // The adaptive shell.
 //
-// One navigator, two presentations of the same four destinations — Home,
-// Plans, Calendar, People:
+// One navigator, two presentations of the same five destinations — Sheep,
+// Home, Plans, Calendar, Friends:
 //   compact  → a floating olive capsule just above the bottom edge (thumb
-//              zone); settings ("You") open from your avatar on Home
+//              zone); settings ("You") open from your avatar on Sheep
 //   sidebar  → a left source list with sections, your groups, and your
 //              account pinned bottom-left (macOS / iPadOS convention)
-// Desktop also gets ⌘1–⌘4 to jump between sections. The New Plan sheet
+// Sheep is where the app opens: the sheep and the box to plan in. Its tab
+// icon is a sheep drawn to match the others. Desktop also gets ⌘1–⌘5. The New Plan sheet
 // wraps everything so any screen can open it.
 
 import React, { useEffect } from 'react';
 import { Platform, ScrollView, StyleSheet, View } from 'react-native';
 import { BottomTabBarProps, createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import HomeScreen from '../screens/home/HomeScreen';
+import HomeScreen, { SheepScreen } from '../screens/home/HomeScreen';
+import { SheepGlyph } from '../components/SheepGlyph';
 import CalendarScreen from '../screens/calendar/CalendarScreen';
 import PlansScreen from '../screens/ideas/IdeasScreen';
 import { PlanComposerProvider } from '../components/PlanComposer';
@@ -30,11 +32,12 @@ import { continuous, radius, SIDEBAR_WIDTH, space, useLayout, useTheme } from '.
 
 const Tab = createBottomTabNavigator<TabParamList>();
 
-const DESTINATIONS: { name: keyof TabParamList; label: string; icon: IconName; iconActive: IconName }[] = [
+const DESTINATIONS: { name: keyof TabParamList; label: string; icon: IconName; iconActive: IconName; sheep?: boolean }[] = [
+  { name: 'Sheep',    label: 'Sheep',    icon: 'ellipse-outline',  iconActive: 'ellipse', sheep: true },
   { name: 'Home',     label: 'Home',     icon: 'home-outline',     iconActive: 'home' },
   { name: 'Plans',    label: 'Plans',    icon: 'sparkles-outline', iconActive: 'sparkles' },
   { name: 'Calendar', label: 'Calendar', icon: 'calendar-outline', iconActive: 'calendar' },
-  { name: 'People',   label: 'People',   icon: 'people-outline',   iconActive: 'people' },
+  { name: 'People',   label: 'Friends',  icon: 'people-outline',   iconActive: 'people' },   // the route keeps its name
 ];
 
 export default function TabNavigator() {
@@ -46,6 +49,7 @@ export default function TabNavigator() {
         screenOptions={{ headerShown: false, sceneStyle: { backgroundColor: c.background, marginLeft: hasSidebar ? SIDEBAR_WIDTH : 0 } }}
         tabBar={(props) => (hasSidebar ? <Sidebar {...props} /> : <TabBar {...props} />)}
       >
+        <Tab.Screen name="Sheep" component={SheepScreen} />
         <Tab.Screen name="Home" component={HomeScreen} />
         <Tab.Screen name="Plans" component={PlansScreen} />
         <Tab.Screen name="Calendar" component={CalendarScreen} />
@@ -72,7 +76,7 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
       >
         {state.routes.map((route, i) => {
           const d = DESTINATIONS.find(x => x.name === route.name);
-          if (!d) return null;   // "You" opens from your avatar on Home
+          if (!d) return null;   // "You" opens from your avatar on Sheep
           const focused = state.index === i;
           const color = focused ? (isDark ? c.onTint : c.tint) : idle;
           return (
@@ -88,7 +92,7 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
               }}
               style={[styles.tabItem, focused && { backgroundColor: isDark ? c.tint : c.background }]}
             >
-              <Icon name={focused ? d.iconActive : d.icon} size={20} color={color} />
+              <TabGlyph d={d} focused={focused} size={20} color={color} />
               <Txt v="caption" style={{ color }}>{d.label}</Txt>
             </Tappable>
           );
@@ -96,6 +100,12 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
       </View>
     </View>
   );
+}
+
+/** A tab's icon: the drawn sheep for Sheep, an Ionicon for the others. */
+function TabGlyph({ d, focused, size, color }: { d: (typeof DESTINATIONS)[number]; focused: boolean; size: number; color: string }) {
+  if (d.sheep) return <SheepGlyph size={size + 2} color={color} filled={focused} />;
+  return <Icon name={focused ? d.iconActive : d.icon} size={size} color={color} />;
 }
 
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
@@ -109,7 +119,7 @@ function Sidebar({ state, navigation }: BottomTabBarProps) {
   const { openCreate, openJoin, sheets } = useGroupSheets();
   const current = state.routes[state.index].name;
 
-  // ⌘1–⌘4 jump between destinations.
+  // ⌘1–⌘5 jump between destinations.
   useEffect(() => {
     if (Platform.OS !== 'web') return;
     const onKey = (e: KeyboardEvent) => {
@@ -141,6 +151,7 @@ function Sidebar({ state, navigation }: BottomTabBarProps) {
                 key={d.name}
                 label={d.label}
                 icon={selected ? d.iconActive : d.icon}
+                sheep={d.sheep}
                 selected={selected}
                 hint={`${modKey}${i + 1}`}
                 onPress={() => navigation.navigate(d.name)}
@@ -199,8 +210,8 @@ function Sidebar({ state, navigation }: BottomTabBarProps) {
   );
 }
 
-function SidebarItem({ label, icon, iconSize = 18, selected, checked, hint, onPress }: {
-  label: string; icon: IconName; iconSize?: number; selected: boolean; checked?: boolean; hint?: string; onPress: () => void;
+function SidebarItem({ label, icon, sheep, iconSize = 18, selected, checked, hint, onPress }: {
+  label: string; icon: IconName; sheep?: boolean; iconSize?: number; selected: boolean; checked?: boolean; hint?: string; onPress: () => void;
 }) {
   const { c } = useTheme();
   return (
@@ -213,7 +224,9 @@ function SidebarItem({ label, icon, iconSize = 18, selected, checked, hint, onPr
       style={styles.item}
     >
       <View style={{ width: 24, alignItems: 'center' }}>
-        <Icon name={icon} size={iconSize} color={selected || checked ? c.tint : c.secondaryLabel} />
+        {sheep
+          ? <SheepGlyph size={iconSize + 2} color={selected ? c.tint : c.secondaryLabel} filled={selected} />
+          : <Icon name={icon} size={iconSize} color={selected || checked ? c.tint : c.secondaryLabel} />}
       </View>
       <Txt v="callout" semibold={selected || checked} numberOfLines={1} style={{ flex: 1 }}>{label}</Txt>
       {hint ? <Txt v="footnote" tone="secondary">{hint}</Txt> : null}

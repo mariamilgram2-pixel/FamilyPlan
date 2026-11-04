@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { View } from 'react-native';
 import { AppNotification, Idea, IdeaResponse, Season, TimeSlot } from '../../types';
 import Avatar, { AvatarPerson } from '../../components/Avatar';
-import { Button, Field, Icon, IconName, ListRow, ListSection, Menu, Tag, Tappable, Txt } from '../../components/ui';
+import { Button, Field, Icon, IconButton, IconName, ListRow, ListSection, Menu, Tag, Tappable, Txt } from '../../components/ui';
 import { continuous, radius, space, tabularNums, useTheme } from '../../theme';
 import { slotDay, slotLabel, slotTime, slotTitle } from '../../lib/planner';
 import { awaitedVoters, bestSlot, tallySlots } from '../../lib/rsvp';
@@ -669,7 +669,7 @@ function ago(iso: string) {
   return `${Math.round(min / 1440)}d`;
 }
 
-export function NotificationList({ items, onOpen }: { items: AppNotification[]; onOpen: (n: AppNotification) => void }) {
+export function NotificationList({ items, onOpen, onClear }: { items: AppNotification[]; onOpen: (n: AppNotification) => void; onClear?: (n: AppNotification) => void }) {
   const { c } = useTheme();
   if (items.length === 0) {
     return <Txt v="callout" tone="secondary" align="center" style={{ marginTop: space.xl }}>Nothing new. Proposals and invites will show up here.</Txt>;
@@ -687,7 +687,13 @@ export function NotificationList({ items, onOpen }: { items: AppNotification[]; 
           }
           title={n.title}
           subtitle={n.body?.split('\n').join(' · ') || undefined}
-          value={ago(n.created_at)}
+          value={onClear ? undefined : ago(n.created_at)}
+          trailing={onClear ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.hair }}>
+              <Txt v="footnote" tone="secondary">{ago(n.created_at)}</Txt>
+              <IconButton icon="close" label={`Clear: ${n.title}`} onPress={() => onClear(n)} />
+            </View>
+          ) : undefined}
           onPress={() => onOpen(n)}
         />
       ))}

@@ -1,11 +1,11 @@
-// One person: what they've shared about themselves, what you've done
-// together, and what you keep about them.
+// One friend: what they love, what you've done together, and what you keep
+// about them.
 //
-// Like a contact card: photo, name, a line on what's most worth knowing, and
-// three round actions (Plan, Note, Pin). Then what's waiting on you, your
-// plans together as a timeline with their photos, what they've shared, and
-// your private notes. Sections show only when there's something in them, so
-// no two people's pages read quite the same.
+// Their face and name, a line on what's most worth knowing, and one clear
+// "Make plans with Ana" (Note and Pin small beside it). Then what's waiting
+// on you, what they love, your next plan, and the plans you've done together
+// as polaroids with their photos, then your private notes. Sections show only
+// when there's something in them, so no two friends' pages read quite the same.
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { Image, ScrollView, View } from 'react-native';
@@ -20,15 +20,14 @@ import { NoteSubject, usePersonNotes } from '../../lib/personNotes';
 import { usePlanComposer } from '../../components/PlanComposer';
 import Avatar, { AvatarPerson } from '../../components/Avatar';
 import { Event, PersonNote, Profile } from '../../types';
-import { Field, Icon, IconButton, ListRow, ListSection, Sheet, Tag, Tappable, Txt } from '../../components/ui';
-import { CircleAction } from './PeoplePieces';
+import { Button, Field, Icon, IconButton, ListRow, ListSection, Sheet, Tag, Tappable, Txt } from '../../components/ui';
+import { Sheep } from '../../components/Sheep';
 import { keyOf, relativeDay, shortDate } from '../calendar/dates';
-import { continuous, radius, space, useTheme } from '../../theme';
+import { brand, continuous, radius, space, useTheme } from '../../theme';
 
 const DAY = 86400000;
 const RECONNECT_AFTER_DAYS = 28;
 const BIRTHDAY_SOON_DAYS = 30;
-const RECENT = 3;
 const THUMB = 72;
 
 const firstName = (name?: string | null) => (name ?? 'them').split(' ')[0];
@@ -66,13 +65,11 @@ export function PersonDetail({ profile, groups, meId, isDemo, closeFirst, needs,
   const composer = usePlanComposer();
   const [events, setEvents] = useState<Event[]>([]);
   const [photos, setPhotos] = useState<Record<string, string[]>>({});   // series id → photo links
-  const [showAll, setShowAll] = useState(false);
   const [addingNote, setAddingNote] = useState(false);
   const first = firstName(profile.full_name ?? profile.email);
 
   // Everything you've both been on, the last two years through the next two months.
   useEffect(() => {
-    setShowAll(false);
     setEvents([]); setPhotos({});
     if (!meId) return;
     let cancelled = false;
@@ -129,7 +126,6 @@ export function PersonDetail({ profile, groups, meId, isDemo, closeFirst, needs,
 
   const favorites = profile.favorites ?? [];
   const sharedSomething = !!profile.about || favorites.length > 0 || !!profile.birthday;
-  const shownPast = showAll ? history?.past ?? [] : (history?.past ?? []).slice(0, RECENT);
 
   return (
     <View style={{ gap: space.l }}>
@@ -137,63 +133,66 @@ export function PersonDetail({ profile, groups, meId, isDemo, closeFirst, needs,
         <Avatar person={profile} size={96} />
         <Txt v="title" align="center">{profile.full_name ?? profile.email}</Txt>
         {glance ? <Txt v="callout" tone={birthdaySoon ? 'tint' : 'secondary'} align="center">{glance}</Txt> : null}
-        <View style={{ flexDirection: 'row', justifyContent: 'center', gap: space.m, paddingTop: space.s }}>
-          <CircleAction icon={birthdaySoon ? 'gift-outline' : 'sparkles-outline'} label="Plan"
-            a11y={birthdaySoon ? `Plan something for ${first}’s birthday` : `Make plans with ${first}`} onPress={plan} />
-          <CircleAction icon="create-outline" label="Note" a11y={`Add a note about ${first}`} onPress={() => setAddingNote(true)} />
-          <CircleAction icon={pinned ? 'pin' : 'pin-outline'} label={pinned ? 'Pinned' : 'Pin'} active={pinned}
-            a11y={pinned ? `Unpin ${first}` : `Pin ${first}`} onPress={onTogglePin} />
+        <View style={{ alignSelf: 'stretch', paddingHorizontal: space.m, paddingTop: space.s }}>
+          <Button
+            label={birthdaySoon ? `Plan ${first}’s birthday` : `Make plans with ${first}`}
+            icon={birthdaySoon ? 'gift-outline' : 'sparkles-outline'}
+            onPress={plan}
+            block
+          />
+        </View>
+        <View style={{ flexDirection: 'row', justifyContent: 'center', gap: space.l }}>
+          <SmallAction icon="create-outline" label="Note" a11y={`Add a note about ${first}`} onPress={() => setAddingNote(true)} />
+          <SmallAction icon={pinned ? 'heart' : 'heart-outline'} label={pinned ? 'Close friend' : 'Add to close friends'}
+            a11y={pinned ? `Remove ${first} from close friends` : `Add ${first} to close friends`} onPress={onTogglePin} active={pinned} />
         </View>
       </View>
 
       {needs}
 
-      {history && (history.next || history.past.length) ? (
-        <ListSection header="Together" separatorInset={space.m + 12 + space.m}>
-          {history.next ? (
-            <TimelineItem
-              title={history.next.title}
-              when={`Next · ${dayLabel(history.next.start_time)}`}
-              upcoming
-              first
-              last={!history.past.length}
-              onPress={() => openEvent(history.next!)}
-            />
-          ) : null}
-          {shownPast.map(({ event, times }, i) => (
-            <TimelineItem
-              key={event.series_id ?? event.id}
-              title={event.title}
-              when={times > 1 ? `${times} times · last ${dayLabel(event.start_time)}` : dayLabel(event.start_time)}
-              photos={photos[event.series_id ?? event.id]}
-              first={i === 0 && !history.next}
-              last={i === shownPast.length - 1 && history.past.length <= RECENT}
-              onPress={() => openEvent(event)}
-            />
-          ))}
-          {history.past.length > RECENT ? (
-            <ListRow title={showAll ? 'Show fewer' : `Show all ${history.past.length}`} tintTitle onPress={() => setShowAll(x => !x)} />
-          ) : null}
-        </ListSection>
-      ) : null}
-
+      {/* What they love, up top: the easiest way into a plan. */}
       {sharedSomething ? (
-        <ListSection header={`About ${first}`} footer={`Shared by ${first}.`}>
+        <ListSection header={favorites.length ? `What ${first} loves` : `About ${first}`} footer={`Shared by ${first}.`}>
           {profile.about || favorites.length ? (
             <View style={{ padding: space.m, gap: space.s }}>
-              {profile.about ? <Txt v="body">{profile.about}</Txt> : null}
               {favorites.length ? (
-                <View style={{ gap: space.s }}>
-                  <Txt v="footnote" tone="secondary">Loves</Txt>
-                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.s }}>
-                    {favorites.map(f => <Tag key={f} label={f} tone="tint" />)}
-                  </View>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.s }}>
+                  {favorites.map(f => <Tag key={f} label={f} tone="tint" />)}
                 </View>
               ) : null}
+              {profile.about ? <Txt v="body">{profile.about}</Txt> : null}
             </View>
           ) : null}
           {profile.birthday ? <ListRow icon="gift-outline" title="Birthday" value={birthdayLabel(profile.birthday)} /> : null}
         </ListSection>
+      ) : null}
+
+      {history?.next ? (
+        <ListSection header="Next up">
+          <ListRow icon="calendar-outline" title={history.next.title} subtitle={dayLabel(history.next.start_time)} chevron onPress={() => openEvent(history.next!)} />
+        </ListSection>
+      ) : null}
+
+      {/* The plans you've done together, as polaroids: a photo from it if there is one. */}
+      {history?.past.length ? (
+        <View style={{ gap: space.s }}>
+          <View style={{ flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', paddingHorizontal: space.m }}>
+            <Txt v="footnote" tone="secondary" accessibilityRole="header" style={{ letterSpacing: 1.2, fontWeight: '700', fontSize: 11 }}>{`TOGETHER · ${history.pastCount}`}</Txt>
+            {history.firstAt ? <Txt v="footnote" tone="secondary">{`Since ${monthYear(history.firstAt)}`}</Txt> : null}
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: space.m, paddingHorizontal: space.m, paddingVertical: space.s }}>
+            {history.past.slice(0, 12).map(({ event, times }, i) => (
+              <PlanPolaroid
+                key={event.series_id ?? event.id}
+                title={event.title}
+                when={times > 1 ? `${times} times` : dayLabel(event.start_time)}
+                photo={photos[event.series_id ?? event.id]?.[0] ?? null}
+                tilt={i % 2 ? 2 : -2}
+                onPress={() => openEvent(event)}
+              />
+            ))}
+          </ScrollView>
+        </View>
       ) : null}
 
       <NotesSection ownerId={meId} subject={{ kind: 'user', id: profile.id }} isDemo={isDemo} name={first} adding={addingNote} onAddingChange={setAddingNote} />
@@ -207,36 +206,35 @@ export function PersonDetail({ profile, groups, meId, isDemo, closeFirst, needs,
   );
 }
 
-/** One stop on the Together timeline: a dot on a rail, the plan, and its photos. */
-function TimelineItem({ title, when, photos, upcoming, first, last, onPress }: {
-  title: string; when: string; photos?: string[]; upcoming?: boolean; first?: boolean; last?: boolean; onPress: () => void;
-}) {
+/** A small round action under Make plans: Note, Close friend. */
+function SmallAction({ icon, label, onPress, active, a11y }: { icon: any; label: string; onPress: () => void; active?: boolean; a11y: string }) {
   const { c } = useTheme();
   return (
-    <Tappable onPress={onPress} accessibilityLabel={`${title}, ${when}`} style={{ flexDirection: 'row', gap: space.m, paddingHorizontal: space.m }}>
-      <View style={{ width: 12, alignItems: 'center' }}>
-        {/* The rail runs through every stop: in from above (unless first), out below (unless last). */}
-        <View style={{ width: 2, height: space.m, backgroundColor: first ? 'transparent' : c.separator }} />
-        <View style={{
-          width: 12, height: 12, borderRadius: 6,
-          backgroundColor: upcoming ? c.tint : c.background, borderWidth: 2, borderColor: upcoming ? c.tint : c.secondaryLabel,
-        }} />
-        {!last ? <View style={{ flex: 1, width: 2, backgroundColor: c.separator }} /> : null}
-      </View>
-      <View style={{ flex: 1, minWidth: 0, paddingVertical: space.s + space.hair, gap: space.hair }}>
-        <Txt v="callout" semibold numberOfLines={1}>{title}</Txt>
-        <Txt v="footnote" tone={upcoming ? 'tint' : 'secondary'}>{when}</Txt>
-        {photos?.length ? (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: space.s, paddingTop: space.s }}>
-            {photos.slice(0, 6).map((u, i) => (
-              <Image key={`${u}-${i}`} source={{ uri: u }} accessibilityLabel={`Photo ${i + 1} from ${title}`}
-                style={{ width: THUMB, height: THUMB, borderRadius: radius.control, backgroundColor: c.background }} />
-            ))}
-          </ScrollView>
-        ) : null}
-      </View>
-      <Icon name="chevron-forward" size={16} color={c.secondaryLabel} style={{ alignSelf: 'center' }} />
+    <Tappable onPress={onPress} feedback="opacity" accessibilityLabel={a11y} accessibilityState={{ selected: !!active }}
+      style={{ flexDirection: 'row', alignItems: 'center', gap: space.hair + 2, paddingVertical: space.s, paddingHorizontal: space.s, borderRadius: radius.pill }}>
+      <Icon name={icon} size={18} color={c.tint} />
+      <Txt v="footnote" tone="tint" semibold>{label}</Txt>
     </Tappable>
+  );
+}
+
+/** A plan you did together, as a polaroid: a photo from it, or a grazing sheep. */
+function PlanPolaroid({ title, when, photo, tilt, onPress }: { title: string; when: string; photo: string | null; tilt: number; onPress: () => void }) {
+  const { c } = useTheme();
+  return (
+    <View style={{ transform: [{ rotate: `${tilt}deg` }] }}>
+      <Tappable feedback="opacity" onPress={onPress} accessibilityLabel={`${title}, ${when}`}
+        style={{ width: 128, padding: space.s, paddingBottom: space.m, borderRadius: 4, backgroundColor: c.card, gap: space.s,
+          shadowColor: c.shadow, shadowOpacity: 0.12, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 2 }}>
+        <View style={{ width: 112, height: 112, borderRadius: 2, overflow: 'hidden', backgroundColor: brand.meadow, alignItems: 'center', justifyContent: 'flex-end' }}>
+          {photo ? <Image source={{ uri: photo }} style={{ width: 112, height: 112 }} /> : <Sheep size={64} pose="graze" style={{ marginBottom: space.s }} />}
+        </View>
+        <View style={{ gap: 1 }}>
+          <Txt v="footnote" semibold numberOfLines={1}>{title}</Txt>
+          <Txt v="caption" tone="secondary" numberOfLines={1}>{when}</Txt>
+        </View>
+      </Tappable>
+    </View>
   );
 }
 

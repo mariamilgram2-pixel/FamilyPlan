@@ -28,6 +28,8 @@ export interface PlanPrefill {
   sentence?: string;
   /** Saved on Home: the sentence is the title, done (still a tap to rename). */
   titleDone?: boolean;
+  /** "Plan with someone": open straight to picking who, then the plan with them filled in. */
+  pickWho?: boolean;
 }
 
 interface PlanComposerValue {

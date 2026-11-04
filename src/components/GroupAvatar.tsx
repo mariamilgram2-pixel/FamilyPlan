@@ -1,15 +1,11 @@
-// A shared calendar's avatar, like a group chat's: a photo, or an emoji on a
-// soft colored circle. People's avatars stay monochrome (see Avatar), so a
-// group's never reads as a person's.
-//
-// Groups can't set these yet. Until they can, the emoji comes from the name
-// and the color from the id, so each calendar looks different and stays the
-// same everywhere.
+// A group's round avatar: its little flock (components/GroupFlock), or the
+// photo the group uploaded. GROUP_COLORS and groupLook still color group
+// covers that use them.
 
 import React from 'react';
-import { Image, Text, View, ViewStyle } from 'react-native';
+import { ViewStyle } from 'react-native';
+import { GroupFlock } from './GroupFlock';
 import { Group } from '../types';
-import { initialsFor, useTheme, weight } from '../theme';
 
 /** Soft circles with readable text in both themes. */
 export const GROUP_COLORS: Record<string, { light: string; dark: string; ink: { light: string; dark: string } }> = {
@@ -52,33 +48,12 @@ export function groupLook(group: Pick<Group, 'id' | 'name'> & Partial<Group>) {
   return { emoji, color };
 }
 
-export default function GroupAvatar({ group, size = 32, style }: {
+/** A group's round picture: its flock (see GroupFlock). Kept under this name for existing callers. */
+export default function GroupAvatar({ group, size = 32, count, style }: {
   group: Pick<Group, 'id' | 'name'> & Partial<Group>;
   size?: number;
+  count?: number;          // members, when known: one to three sheep
   style?: ViewStyle;
 }) {
-  const { isDark } = useTheme();
-  const { emoji, color } = groupLook(group);
-  const palette = GROUP_COLORS[color];
-  return (
-    <View
-      accessible
-      accessibilityLabel={`${group.name}, shared calendar`}
-      style={[{
-        width: size, height: size, borderRadius: size / 2, overflow: 'hidden',
-        backgroundColor: isDark ? palette.dark : palette.light,
-        alignItems: 'center', justifyContent: 'center',
-      }, style]}
-    >
-      {group.avatar_url ? (
-        <Image source={{ uri: group.avatar_url }} style={{ width: size, height: size }} />
-      ) : emoji ? (
-        <Text style={{ fontSize: Math.round(size * 0.62), lineHeight: size }}>{emoji}</Text>
-      ) : (
-        <Text style={{ fontSize: Math.round(size * 0.4), ...weight('700'), color: isDark ? palette.ink.dark : palette.ink.light }}>
-          {initialsFor(group.name)}
-        </Text>
-      )}
-    </View>
-  );
+  return <GroupFlock group={group} size={size} count={count} style={style} />;
 }

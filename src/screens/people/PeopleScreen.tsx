@@ -1,17 +1,14 @@
-// People
+// Friends (the People route)
 //
-// Groups, then People, then people who aren't on sheep yet. People is sorted
-// by what's going on, not just A–Z: anyone waiting on you first, then anyone
-// with a birthday or plan coming up, then everyone else. Each row's subtitle
-// says where things stand ("Reply to Book club", "Hike · Sat", "Last together
-// 6 weeks ago"). People not on sheep sit last and quieter, with a small
-// invite button. Creating things (group, person, join by code) is one "+"
-// menu. Group management (invite code, members, leave) lives in the group's detail.
-//
-// Like pinned conversations, people and groups you pin sit on top as big
-// avatars (long-press a row, or Pin in its detail), and a green dot marks
-// anyone with something waiting on you: an invite from them, dates they
-// asked for, an unread note.
+// Close friends up top as big faces, like pinned chats (tap + to add one,
+// long-press a row to pin). Then your groups, friends you haven't seen in a
+// while (each with a + to make plans), and all your friends: anyone waiting
+// on you first, then anyone with a birthday or plan coming up. Each row's
+// line is about your time together ("Together 2 weeks ago · Brunch", "Hike ·
+// Sat"); what they're waiting on from you is a small Reply tag beside it.
+// People not on Sheep yet sit last, under Invite to Sheep. Search covers it
+// all. Creating things (group, person, join by code) is one "+" menu; group
+// management (invite code, members, leave) lives in the group's detail.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, ScrollView, Share, TextInput, View } from 'react-native';
@@ -23,7 +20,9 @@ import { DEMO_CONTACTS, DEMO_EVENTS, DEMO_EXTRA_GROUPS, DEMO_IDEAS, DEMO_MEMBERS
 import { expandEvents } from '../../lib/recurrence';
 import { useNotifications } from '../../lib/notifications';
 import { NeedsYouItem, whatNeedsYou } from '../../lib/needsYou';
-import { daysUntilBirthday, personStatus, sharedHistory } from '../../lib/personal';
+import { beenAWhile, daysUntilBirthday, friendLine, personStatus, sharedHistory } from '../../lib/personal';
+import { usePlanComposer } from '../../components/PlanComposer';
+import { useDismissed } from '../../lib/dismissed';
 import { PinKind, pinKey, usePins } from '../../lib/pins';
 import { useShortcut } from '../../lib/shortcuts';
 import { useAuth } from '../../contexts/AuthContext';
@@ -31,7 +30,7 @@ import { useGroup } from '../../contexts/GroupContext';
 import { Contact, Event, Group, Idea, Profile } from '../../types';
 import Avatar, { AvatarPerson } from '../../components/Avatar';
 import AvatarStack from '../../components/AvatarStack';
-import GroupCover, { GroupCoverCircle, useCoverInk } from '../../components/GroupCover';
+import { FlockCover, GroupFlock } from '../../components/GroupFlock';
 import { useGroupSheets, useVisibleGroups } from '../../components/GroupSwitcher';
 import { IdentityHeader, NotesSection, PersonDetail } from './PersonDetail';
 import { Dotted, GroupCards, NeedsYouSection, PinnedGrid, PinTile } from './PeoplePieces';
@@ -54,6 +53,7 @@ type Selection =
   | null;
 
 const CHUNK = 5;
+const DEMO_CLOSE_FRIENDS = ['person:demo-ana', 'person:demo-chloe', 'person:demo-ben'];
 const DAY = 86400000;
 
 export default function PeopleScreen() {
@@ -72,7 +72,8 @@ export default function PeopleScreen() {
   const { openCreate, openJoin, sheets: groupSheets } = useGroupSheets();
   const navigation = useNavigation<any>();
   const inbox = useNotifications(meId, isDemo);
-  const { pins, isPinned, toggle: togglePinRaw } = usePins();
+  // Close friends: pinned up top. The demo starts with a few.
+  const { pins, isPinned, toggle: togglePinRaw } = usePins(isDemo ? DEMO_CLOSE_FRIENDS : []);
 
   const [people, setPeople] = useState<PersonEntry[]>([]);
   const [membersByGroup, setMembersByGroup] = useState<Record<string, Profile[]>>({});
@@ -263,12 +264,22 @@ export default function PeopleScreen() {
   );
   const isSel = (kind: string, id: string) => threeColumn && selection?.kind === kind && selection.id === id;
 
-  // Where things stand with each person on sheep.
+  // What you have with each friend: your plans together.
+  const histories = useMemo(() => new Map(people.map(p => [p.profile.id, meId ? sharedHistory(planEvents, meId, p.profile.id) : null])), [people, planEvents, meId]);
+  // Where things stand, for the order: anyone waiting on you first, then something soon.
   const statuses = useMemo(() => new Map(people.map(p => [p.profile.id, personStatus({
     needs: (needs.byPerson.get(p.profile.id) ?? []).map(i => i.label),
-    history: meId ? sharedHistory(planEvents, meId, p.profile.id) : null,
+    history: histories.get(p.profile.id) ?? null,
     birthday: p.profile.birthday,
-  })])), [people, needs, planEvents, meId]);
+  })])), [people, needs, histories]);
+  // Been a while: you've done things together, nothing's planned, a month or more. Longest first.
+  // Clear someone (×) and they stay off it for a while; Home's nudge for them clears too.
+  const { hidden, dismiss } = useDismissed();
+  const quiet = useMemo(() => people
+    .map(p => ({ p, days: beenAWhile(histories.get(p.profile.id) ?? null) }))
+    .filter((x): x is { p: PersonEntry; days: number } => x.days !== null && !hidden(`quiet:${x.p.profile.id}`))
+    .sort((a, b) => b.days - a.days), [people, histories, hidden]);
+  const composer = usePlanComposer();
 
   // People on sheep by what's going on; people you added, A–Z.
   type Entry = { kind: 'person'; p: PersonEntry; name: string } | { kind: 'contact'; ct: Contact; name: string };
@@ -313,7 +324,7 @@ export default function PeopleScreen() {
     }];
     if (kind === 'group') {
       const g = groups.find(x => x.id === id);
-      return g ? tile(g.name, size => <GroupCoverCircle group={g} size={size} />) : [];
+      return g ? tile(g.name, size => <GroupFlock group={g} count={(membersByGroup[g.id] ?? []).length} size={size} />) : [];
     }
     if (kind === 'person') {
       const p = people.find(x => x.profile.id === id)?.profile;
@@ -344,7 +355,7 @@ export default function PeopleScreen() {
   };
   const groupRow = (g: Group) => pinMenu('group', g.id, g.name, open => (
     <ListRow
-      leading={<Dotted on={needsOf('group', g.id).length > 0} size={32} ringColor={c.fill}><GroupCover group={g} round blur={0} style={{ width: 32, height: 32 }} /></Dotted>}
+      leading={<Dotted on={needsOf('group', g.id).length > 0} size={32} ringColor={c.fill}><GroupFlock group={g} count={(membersByGroup[g.id] ?? []).length} size={32} /></Dotted>}
       title={g.name}
       subtitle={memberLine(g)}
       chevron={!threeColumn}
@@ -353,15 +364,18 @@ export default function PeopleScreen() {
       onLongPress={open}
     />
   ));
+  // Each friend: their name, and a friendly line about your time together.
+  // What they're waiting on from you is a small tag, not the line.
   const personRow = (e: Extract<Entry, { kind: 'person' }>) => {
-    const status = statuses.get(e.p.profile.id);
+    const waiting = needsOf('person', e.p.profile.id);
+    const line = friendLine({ history: histories.get(e.p.profile.id) ?? null, birthday: e.p.profile.birthday });
     return pinMenu('person', e.p.profile.id, e.name, open => (
       <ListRow
-        leading={<Dotted on={needsOf('person', e.p.profile.id).length > 0} size={32} ringColor={c.fill}><Avatar person={e.p.profile} size={32} /></Dotted>}
+        leading={<Avatar person={e.p.profile} size={36} />}
         title={e.name}
-        subtitle={status?.text ?? e.p.groups.map(g => g.name).join(', ')}
-        subtitleTint={status?.tint}
-        chevron={!threeColumn}
+        subtitle={line ?? e.p.groups.map(g => g.name).join(', ')}
+        trailing={waiting.length ? <Tag label={waiting.length === 1 && waiting[0].short === 'Reply?' ? 'Reply' : 'Your turn'} tone="tint" /> : undefined}
+        chevron={!threeColumn && !waiting.length}
         selected={isSel('person', e.p.profile.id)}
         onPress={() => setSelection({ kind: 'person', id: e.p.profile.id })}
         onLongPress={open}
@@ -382,7 +396,7 @@ export default function PeopleScreen() {
 
   const list = (
     <ScrollView contentContainerStyle={{ paddingBottom: bottomClearance }} keyboardShouldPersistTaps="handled">
-      <ScreenHeader title="People" trailing={addMenu} />
+      <ScreenHeader title="Friends" trailing={addMenu} />
       <View style={{ paddingHorizontal: compact ? space.m : space.s, gap: space.l }}>
         {groups.length + everyone.length > 0 ? <PeopleSearch value={query} onChange={setQuery} /> : null}
         {loading && <ActivityIndicator color={c.secondaryLabel} />}
@@ -397,7 +411,18 @@ export default function PeopleScreen() {
           </ListSection>
         ) : (
           <>
-            <PinnedGrid tiles={pinTiles} />
+            {people.length ? (
+              <View>
+                <SectionHeader title="Close friends" />
+                <PinnedGrid
+                  tiles={pinTiles}
+                  addItems={people.filter(p => !isPinned('person', p.profile.id)).slice(0, 12).map(p => ({
+                    key: p.profile.id, label: p.profile.full_name ?? p.profile.email ?? 'Someone',
+                    leading: <Avatar person={p.profile} size={24} />, onSelect: () => togglePin('person', p.profile.id),
+                  }))}
+                />
+              </View>
+            ) : <PinnedGrid tiles={pinTiles} />}
 
             {groups.length === 0 ? (
               <ListSection header="Groups">
@@ -421,8 +446,31 @@ export default function PeopleScreen() {
               </View>
             ) : null}
 
+            {quiet.length ? (
+              <ListSection header="Been a while" footer="Friends you haven’t seen in a month or more. × clears someone for now." separatorInset={64}>
+                {quiet.slice(0, 3).map(({ p, days }) => {
+                  const first = (p.profile.full_name ?? p.profile.email ?? 'them').split(' ')[0];
+                  return (
+                    <ListRow
+                      key={`quiet-${p.profile.id}`}
+                      leading={<Avatar person={p.profile} size={36} />}
+                      title={p.profile.full_name ?? p.profile.email}
+                      subtitle={`Last together ${days < 60 ? `${Math.floor(days / 7)} weeks` : `${Math.floor(days / 30)} months`} ago`}
+                      trailing={
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.hair }}>
+                          <IconButton icon="add" label={`Make plans with ${first}`} variant="filled" onPress={() => composer.newPlan({ people: [p.profile.id] })} />
+                          <IconButton icon="close" label={`Clear ${first} from Been a while`} onPress={() => dismiss(`quiet:${p.profile.id}`)} />
+                        </View>
+                      }
+                      onPress={() => setSelection({ kind: 'person', id: p.profile.id })}
+                    />
+                  );
+                })}
+              </ListSection>
+            ) : null}
+
             <ListSection
-              header="People"
+              header="All friends"
               separatorInset={64}
               footer={everyone.length === 0 ? 'People in your groups show up here. Add anyone else you make plans with.' : undefined}
             >
@@ -433,9 +481,9 @@ export default function PeopleScreen() {
             </ListSection>
 
             <ListSection
-              header="Not on sheep yet"
+              header="Invite to Sheep"
               separatorInset={64}
-              footer={notOnSheep.length ? 'Invite them to see shared calendars and get plan invites in the app.' : undefined}
+              footer={notOnSheep.length ? 'Plans are easier when they’re here too: they’ll see shared calendars and get invites in the app.' : undefined}
             >
               {notOnSheep.map(e => contactRow(e))}
               <ListRow key="add" icon="person-add-outline" title="Add Person" tintTitle onPress={() => openPersonSheet(null)} />
@@ -580,12 +628,12 @@ function PeopleSearch({ value, onChange }: { value: string; onChange: (v: string
       <TextInput
         value={value}
         onChangeText={onChange}
-        placeholder="Search people and groups"
+        placeholder="Search friends and groups"
         placeholderTextColor={c.secondaryLabel}
         autoCorrect={false}
         autoCapitalize="none"
         returnKeyType="search"
-        accessibilityLabel="Search people and groups"
+        accessibilityLabel="Search friends and groups"
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
         style={[
@@ -605,9 +653,11 @@ function PeopleSearch({ value, onChange }: { value: string; onChange: (v: string
 
 /** The group's cover with its name, line, and member count set over it. */
 function GroupHero({ group, isActive, memberCount }: { group: Group; isActive: boolean; memberCount: number }) {
-  const { ink, soft } = useCoverInk(group);
+  const { c } = useTheme();
+  const ink = c.label;
+  const soft = c.secondaryLabel;
   return (
-    <GroupCover group={group} blur={4} style={{ minHeight: 184, padding: space.l, justifyContent: 'flex-end', gap: space.hair }}>
+    <FlockCover group={group} count={memberCount} style={{ minHeight: 184, padding: space.l, justifyContent: 'flex-end', gap: space.hair }}>
       {isActive ? (
         <View style={{ position: 'absolute', top: space.m, left: space.m }}>
           <View style={{ paddingHorizontal: space.s + 2, height: 26, justifyContent: 'center', borderRadius: radius.pill, backgroundColor: brand.coverChip }}>
@@ -618,7 +668,7 @@ function GroupHero({ group, isActive, memberCount }: { group: Group; isActive: b
       <Txt v="display" accessibilityRole="header" numberOfLines={2} style={{ color: ink }}>{group.name}</Txt>
       {group.description ? <Txt v="callout" style={{ color: soft }}>{group.description}</Txt> : null}
       <Txt v="footnote" style={{ color: soft, ...eyebrow }}>{`${memberCount} member${memberCount === 1 ? '' : 's'}`}</Txt>
-    </GroupCover>
+    </FlockCover>
   );
 }
 

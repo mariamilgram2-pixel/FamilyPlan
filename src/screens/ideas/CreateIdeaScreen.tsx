@@ -1,14 +1,14 @@
 // New Plan sheet, and the flow that turns an idea into a time.
 //
 // Steps in one sheet:
-//   compose  — one sentence ("dinner with Ana this week"), with who, when,
-//              and where filling in under it as you type, each a tap to
-//              change (or fill it all in yourself). One main button says
-//              exactly what will happen, from what's known: save the plan,
-//              ask people to pick from three times, or invite them to the
-//              one that's set. Everything else is under More options, and
-//              closing keeps what you typed as a private draft. Whatever's
-//              saved here is a plan (Finish planning), never a Brainstorm idea.
+//   compose  — everything at a glance: one sentence on top ("dinner with Ana
+//              this week") and who, when and where right under it, filling
+//              in as you type, or picked one by one. Save is top right. Below,
+//              only the next step once there is one: ask people to pick from
+//              three times, or invite them to the one that's set. Everything
+//              else is under More options, and closing keeps what you typed
+//              as a private draft. Whatever's saved here is a plan (Finish
+//              planning), never a Brainstorm idea.
 //   prefs    — Plan asks about scheduling preferences first (time of day,
 //              how soon, which days, how long).
 //   options  — a few suggested times, ranked by calendar fit first and
@@ -92,14 +92,6 @@ const HOUR_OPTIONS: { value: number | null; label: string }[] = [
 ];
 // A trip over your work days still shows (you can take time off), after ones that don't.
 const WORK_PENALTY = 2;
-// Kinds of plan to start from. Each only nudges: a trip runs several days.
-type Kind = 'food' | 'activity' | 'together' | 'trip';
-const KINDS: { key: Kind; label: string; icon: IconName; example: string }[] = [
-  { key: 'food', label: 'Food and drinks', icon: 'restaurant-outline', example: 'Dinner with Ana this week' },
-  { key: 'activity', label: 'Activity', icon: 'bicycle-outline', example: 'Bowling Saturday afternoon' },
-  { key: 'together', label: 'Get-together', icon: 'people-outline', example: 'Game night at ours next week' },
-  { key: 'trip', label: 'Trip', icon: 'compass-outline', example: 'Camping at the lake, two nights' },
-];
 const uniq = (list: (string | null | undefined)[]) => Array.from(new Set(list.map(x => x?.trim()).filter(Boolean) as string[]));
 
 const LENGTH_KIND: { key: 'one' | 'several'; label: string }[] = [{ key: 'one', label: '1 day' }, { key: 'several', label: 'Several days' }];
@@ -141,8 +133,6 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
   const [when, setWhen] = useState<When>(ANY_WHEN);
   const date = when.day.kind === 'date' ? when.day.date : null;
   const setDate = (k: string | null) => setWhen(w => ({ ...w, day: k ? { kind: 'date', date: k } : { kind: 'any' } }));
-  const [kind, setKind] = useState<Kind | null>(null);
-  const [filling, setFilling] = useState(false);              // "Fill it in yourself": the rows, no sentence needed
   const [showDetails, setShowDetails] = useState(false);      // More details: repeat, notes
   const [repeat, setRepeat] = useState<RepeatKey>('never');
   // What you've set by hand; typing more in the sentence doesn't undo it.
@@ -201,9 +191,9 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
       setParsed(null);
       return;
     }
-    setDescribe(''); setParsed(null); setWhen(ANY_WHEN); setKind(null);
+    setDescribe(''); setParsed(null); setWhen(ANY_WHEN);
     setEditingTitle(false); setTitleSaved(!existing && !!prefill?.title); setEditingWhen(false); setEditingTime(false); setSuggested(false); setShowWho(false);
-    setFilling(false); setShowDetails(false); setRepeat('never'); touched.current.clear();
+    setShowDetails(false); setRepeat('never'); touched.current.clear();
     setTypingPlace(false); setTypingLength(false); setCalView(null); setShowRecent(false);
     setSlots([]); setChosen(null); setSaving(null);
     if (existing) {
@@ -251,8 +241,9 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
         time: prefill?.start ? { kind: 'exact', start: prefill.start, end: prefill.end } : { kind: 'any' },
       });
       // "Do it again", "Plan with Ana": what's known is already filled in.
-      setFilling(!!prefill?.title);
       setStep('compose');
+      // "Plan with someone": pick who first, a beat after the sheet opens.
+      if (prefill?.pickWho) setTimeout(() => openWho(), 350);
     }
     if (!isDemo) fetchGroups();
   }, [visible]);
@@ -348,15 +339,9 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
       setSelectedUserIds(new Set(p.personIds.filter(id => !id.startsWith('contact:'))));
       setSelectedContactIds(new Set(p.personIds.filter(id => id.startsWith('contact:')).map(id => id.slice(8))));
     }
-    // "Camping weekend", "two nights", or a trip picked below: several days.
-    const span = spanHint(text) ?? (kind === 'trip' ? { spanDays: 3 } : null);
+    // "Camping weekend", "two nights": several days.
+    const span = spanHint(text);
     setPrefs({ ...defaultPrefs({ start: p.start, end: p.end, date: p.date }), ...span });
-  }
-
-  function pickKind(k: Kind | null) {
-    setKind(k);
-    if (k === 'trip' && spanOf(prefs) === 1) setPrefs(p => ({ ...p, spanDays: 3 }));
-    if (k !== 'trip' && kind === 'trip' && !spanHint(describe)) setPrefs(p => ({ ...p, spanDays: 1 }));
   }
 
   // Home (and any other entry) can hand over a sentence already being typed.
@@ -406,8 +391,11 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
     for (const g of effectiveGroups) if (selectedGroupIds.has(g.id)) return g.id;
     return null;
   }, [existing, selectedGroupIds, effectiveGroups]);
-  // Events still live on a group's calendar: the idea's, else the one you're on.
-  const eventGroupId = storageGroupId ?? activeGroup?.id ?? effectiveGroups[0]?.id ?? null;
+  // The invite goes on a group's shared calendar only if you invited that group:
+  // the idea's own group if it's still picked, else the first group picked.
+  // Just people (say, only Fran), it's on no group's calendar: yours and theirs.
+  const invitedGroupIds = effectiveGroups.filter(g => selectedGroupIds.has(g.id)).map(g => g.id);
+  const eventGroupId = existing?.group_id && invitedGroupIds.includes(existing.group_id) ? existing.group_id : invitedGroupIds[0] ?? null;
 
   // ─── Saving ────────────────────────────────────────────────────────────────
 
@@ -681,9 +669,10 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
       created_by: meId,
       attendees,
       recurrence: ruleFor(repeat, null),
+      invited_group_ids: invitedGroupIds,
     };
     if (isDemo) {
-      eventId = addDemoEvent(eventRow).id;
+      eventId = addDemoEvent(eventRow, eventGroupId).id;
     } else {
       const { data, error } = await supabase.from('events').insert({ ...eventRow, group_id: eventGroupId } as any).select('id').single();
       if (error) { setSaving(null); return notify('Couldn’t create the invite', error.message); }
@@ -722,8 +711,6 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
   const audienceCount = selectedGroupIds.size + selectedUserIds.size + selectedContactIds.size;
 
   const sheetTitle = step === 'compose' ? (existing && !existing.planning_started_at ? 'Make It a Plan' : existing ? 'Finish Planning' : 'New Plan') : step === 'prefs' ? 'Find a Time' : 'Pick a Time';
-  // The rows show once there's something to go on, or you chose to fill them in.
-  const started = !!describe.trim() || filling || !!existing || titleSaved;
   // Saving the sentence keeps its title (read from it, or the sentence as typed).
   const saveTitle = () => {
     if (!describe.trim() && !title.trim()) return;
@@ -791,6 +778,8 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
       label: `Find a time${within}`, icon: 'search', note: 'Suggests times from your calendar. Nothing’s sent.',
       run: findFromCompose, busy: searching,
     } : null;
+  // The step after saving, if there is one: the invite once the time is set, else send times or find one.
+  const next: Action | null = locked ? primary : secondary;
   const moreOptions = [
     ...(!locked ? [{ key: 'pick', label: 'See times first', icon: 'time-outline' as IconName, onSelect: findFromCompose }] : []),
     ...(hasWho ? [{ key: 'ask', label: `Send to ${whoShort} without times`, icon: 'chatbubbles-outline' as IconName, onSelect: handlePropose }] : []),
@@ -1194,7 +1183,14 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
 
 
   return (
-    <Sheet visible={visible} onClose={handleClose} title={sheetTitle} cancelLabel={step === 'compose' && !existing && (describe.trim() || title.trim()) ? 'Close' : 'Cancel'}>
+    <Sheet
+      visible={visible}
+      onClose={handleClose}
+      title={sheetTitle}
+      cancelLabel={step === 'compose' && !existing && (describe.trim() || title.trim()) ? 'Close' : 'Cancel'}
+      // Save, top right, whenever you're filling it in.
+      action={step === 'compose' ? { label: 'Save', onPress: create.run, loading: create.busy, disabled: !!saving || searching } : undefined}
+    >
       {step === 'compose' && (
         <>
           {/* One title box. Describing it: the sentence, which fills in the rest
@@ -1207,7 +1203,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
                   ref={describeInput}
                   value={describe}
                   onChangeText={onDescribe}
-                  placeholder={KINDS.find(k => k.key === kind)?.example ?? 'Dinner with Ana this week'}
+                  placeholder="Dinner with Ana this week"
                   multiline
                   autoFocus={!prefill?.title && !prefill?.titleDone}
                   blurOnSubmit
@@ -1216,7 +1212,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
                   // a beat later, so the tap that moved on lands before the layout shifts.
                   onBlur={() => { if (describe.trim()) setTimeout(saveTitle, 250); }}
                   accessibilityLabel="What do you want to do?"
-                  style={{ minHeight: started ? 56 : 88 }}
+                  style={{ minHeight: 56 }}
                 />
               </View>
               {describe.trim() ? (
@@ -1245,36 +1241,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
             </Tappable>
           )}
 
-          {!started ? (
-            <>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.s, paddingHorizontal: space.m }}>
-                {KINDS.map(k => {
-                  const on = kind === k.key;
-                  return (
-                    <Tappable
-                      key={k.key}
-                      onPress={() => pickKind(on ? null : k.key)}
-                      feedback="opacity"
-                      accessibilityLabel={k.label}
-                      accessibilityState={{ selected: on }}
-                      style={{
-                        flexDirection: 'row', alignItems: 'center', gap: space.hair + 2,
-                        paddingHorizontal: space.m, paddingVertical: space.s, borderRadius: 999,
-                        backgroundColor: on ? c.tintSoft : c.fill,
-                      }}
-                    >
-                      <Icon name={k.icon} size={16} color={on ? c.tint : c.secondaryLabel} />
-                      <Txt v="footnote" tone={on ? 'tint' : 'primary'} semibold={on}>{k.label}</Txt>
-                    </Tappable>
-                  );
-                })}
-              </View>
-              <Button label="Fill it in yourself" variant="plain" onPress={() => { setFilling(true); describeInput.current?.focus(); }} />
-            </>
-          ) : null}
-
-          {started ? (
-          <>
+          {/* Everything at a glance: type it all in the sentence above, or pick each one here. */}
           {[summaryRows.filter(r => r.set), summaryRows.filter(r => !r.set)].map((list, i) => list.length ? (
             <React.Fragment key={i}>
               <ListSection header={i === 1 ? 'Still to decide' : undefined} separatorInset={52}>
@@ -1317,20 +1284,21 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
             </View>
           )}
 
+          {/* Save is top right. Down here, only the next step, once there is one:
+              invite them, send them times, or find a time. */}
           <View style={{ gap: space.hair }}>
-            <View style={{ flexDirection: 'row', gap: space.s }}>
-              <Button small={!!secondary} label={primary.label} icon={primary.icon} onPress={primary.run} loading={primary.busy} disabled={!!saving || searching} style={{ flex: 1 }} />
-              {secondary ? (
-                <Button small label={secondary.label} icon={secondary.icon} variant="gray" onPress={secondary.run} loading={secondary.busy} disabled={!!saving || searching} style={{ flex: 1 }} />
-              ) : null}
-            </View>
-            <Txt v="footnote" tone="secondary" align="center" style={{ paddingHorizontal: space.m, paddingTop: space.hair }}>{primary.note}</Txt>
+            {next ? (
+              <>
+                <Button label={next.label} icon={next.icon} onPress={next.run} loading={next.busy} disabled={!!saving || searching} block />
+                <Txt v="footnote" tone="secondary" align="center" style={{ paddingHorizontal: space.m, paddingTop: space.hair }}>{next.note}</Txt>
+              </>
+            ) : (
+              <Txt v="footnote" tone="secondary" align="center" style={{ paddingHorizontal: space.m }}>Save keeps it in Finish planning. Add who or when to send it.</Txt>
+            )}
             <Menu title="More options" sections={[{ items: moreOptions }]}>
               {open => <Button label="More options" variant="plain" onPress={open} disabled={!!saving || searching} />}
             </Menu>
           </View>
-          </>
-          ) : null}
         </>
       )}
 

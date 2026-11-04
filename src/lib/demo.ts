@@ -2,6 +2,7 @@
 // shell. Dates are generated relative to today. Nothing here touches Supabase.
 
 import { Contact, Event, Group, Idea, PersonNote, PlanComment, Profile } from '../types';
+import { sheepAvatarUrl } from './sheepAvatars';
 
 export const DEMO_GROUP_ID = 'demo';
 export const DEMO_ME = 'demo-me';
@@ -16,24 +17,25 @@ const person = (id: string, full_name: string, photo: string | null = null): Pro
   id, full_name, email: `${full_name.split(' ')[0].toLowerCase()}@example.com`, avatar_url: photo, created_at: now,
 });
 
-// Stock portraits. A couple of people never set one, like real life.
-const portrait = (kind: 'men' | 'women', n: number) => `https://randomuser.me/api/portraits/${kind}/${n}.jpg`;
+// Everyone picked a sheep (lib/sheepAvatars). A couple of people never
+// set a picture, like real life, and show their initials.
+const sheep = sheepAvatarUrl;
 
 /** The demo group (My Family). */
 export const DEMO_MEMBERS: Profile[] = [
-  person(DEMO_ME, 'Jordan Lee', portrait('women', 32)),
-  person('demo-ana', 'Ana Reyes', portrait('women', 44)),
-  person('demo-ben', 'Ben Okafor', portrait('men', 46)),
-  person('demo-chloe', 'Chloe Park', portrait('women', 65)),
-  person('demo-dev', 'Dev Shah', portrait('men', 75)),
+  person(DEMO_ME, 'Jordan Lee', sheep('butter')),
+  person('demo-ana', 'Ana Reyes', sheep('peach')),
+  person('demo-ben', 'Ben Okafor', sheep('clay')),
+  person('demo-chloe', 'Chloe Park', sheep('dusk')),
+  person('demo-dev', 'Dev Shah', sheep('sky')),
   person('demo-eli', 'Eli Brooks'),
-  person('demo-fran', 'Fran Ito', portrait('women', 68)),
+  person('demo-fran', 'Fran Ito', sheep('rose')),
 ];
 
 /** People you only share another group with (Climbing crew). */
 export const DEMO_FRIENDS: Profile[] = [
-  person('demo-gabe', 'Gabe Moreno', portrait('men', 52)),
-  person('demo-hana', 'Hana Kim', portrait('women', 79)),
+  person('demo-gabe', 'Gabe Moreno', sheep('moss')),
+  person('demo-hana', 'Hana Kim', sheep('sea')),
   person('demo-iris', 'Iris Novak'),
 ];
 
@@ -142,8 +144,9 @@ DEMO_EVENTS[1].assignments = [
 ];
 
 /** Events created during a demo session (e.g. from a planned idea). */
-export function addDemoEvent(e: Omit<Event, 'id' | 'created_at' | 'group_id'>): Event {
-  const event: Event = { ...e, id: `e-${Date.now()}`, group_id: DEMO_GROUP_ID, created_at: new Date().toISOString() };
+/** A new demo event: on a group's calendar, or (null) just a plan with people. */
+export function addDemoEvent(e: Omit<Event, 'id' | 'created_at' | 'group_id'>, groupId: string | null = DEMO_GROUP_ID): Event {
+  const event: Event = { ...e, id: `e-${Date.now()}`, group_id: groupId, created_at: new Date().toISOString() };
   DEMO_EVENTS.push(event);
   return event;
 }
@@ -285,8 +288,8 @@ export const DEMO_PERSON_NOTES: PersonNote[] = [
 export const DEMO_CONTACTS: Contact[] = [
   { id: 'c1', owner_id: DEMO_ME, name: 'Grandma Rose', email: null, note: 'Hosts Sunday dinners', created_at: now },
   { id: 'c2', owner_id: DEMO_ME, name: 'Coach Miller', email: 'miller@example.com', note: null, created_at: now },
-  { id: 'c3', owner_id: DEMO_ME, name: 'Aunt Linda', email: null, note: 'Thanksgiving host', avatar_url: portrait('women', 57), created_at: now },
-  { id: 'c4', owner_id: DEMO_ME, name: 'Sam Patel', email: 'sam@example.com', note: 'Neighbor, dog named Biscuit', avatar_url: portrait('men', 11), created_at: now },
+  { id: 'c3', owner_id: DEMO_ME, name: 'Aunt Linda', email: null, note: 'Thanksgiving host', avatar_url: sheep('sand'), created_at: now },
+  { id: 'c4', owner_id: DEMO_ME, name: 'Sam Patel', email: 'sam@example.com', note: 'Neighbor, dog named Biscuit', avatar_url: sheep('oat'), created_at: now },
   { id: 'c5', owner_id: DEMO_ME, name: 'Priya Nair', email: 'priya@example.com', note: 'Work trivia team', created_at: now },
-  { id: 'c6', owner_id: DEMO_ME, name: 'Marcus Hill', email: null, note: null, avatar_url: portrait('men', 36), created_at: now },
+  { id: 'c6', owner_id: DEMO_ME, name: 'Marcus Hill', email: null, note: null, avatar_url: sheep('plum'), created_at: now },
 ];

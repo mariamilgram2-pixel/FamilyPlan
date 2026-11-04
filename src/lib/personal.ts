@@ -121,3 +121,35 @@ export function personStatus(opts: { needs: string[]; history: History | null; b
   }
   return { text: null, tint: false, rank: 2, soon: 0 };
 }
+
+// ─── Friends: the social line ────────────────────────────────────────────────
+
+/**
+ * The friendly line under someone's name: your time together, never a to-do
+ * (what they're waiting on from you shows as a small tag beside it). A
+ * birthday or plan coming up first, then when you last saw each other, then
+ * your next plan further out.
+ */
+export function friendLine(opts: { history: History | null; birthday?: string | null; now?: number }): string | null {
+  const now = opts.now ?? Date.now();
+  const soon = personStatus({ needs: [], history: opts.history, birthday: opts.birthday, now });
+  if (soon.rank === 1 && soon.text) return soon.text;
+  const last = opts.history?.past[0]?.event;
+  if (last) {
+    const days = Math.max(0, Math.floor((now - new Date(last.end_time).getTime()) / DAY));
+    const ago = days === 0 ? 'today' : days === 1 ? 'yesterday' : days < 14 ? `${days} days ago`
+      : days < 60 ? `${Math.floor(days / 7)} weeks ago` : `${Math.floor(days / 30)} months ago`;
+    return `Together ${ago} · ${last.title}`;
+  }
+  const next = opts.history?.next;
+  if (next) return `${next.title} · ${whenLabel(next.start_time, now)}`;
+  return null;
+}
+
+/** Quiet for a while: you've done things together, nothing's planned, and it's been a month. */
+export function beenAWhile(history: History | null, now = Date.now()): number | null {
+  const last = history?.past[0]?.event;
+  if (!last || history?.next) return null;
+  const days = Math.floor((now - new Date(last.end_time).getTime()) / DAY);
+  return days > QUIET_AFTER_DAYS ? days : null;
+}

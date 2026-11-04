@@ -39,7 +39,7 @@ CREATE TABLE public.group_members (
 
 CREATE TABLE public.events (
   id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  group_id    UUID        NOT NULL REFERENCES public.groups(id) ON DELETE CASCADE,
+  group_id    UUID        REFERENCES public.groups(id) ON DELETE CASCADE,   -- null: a plan with people, not a group's
   title       TEXT        NOT NULL,
   description TEXT,
   start_time  TIMESTAMPTZ NOT NULL,
@@ -236,9 +236,13 @@ CREATE POLICY "Group members can view events"
   USING (group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid()));
 CREATE POLICY "Invitees can view events they're invited to"
   ON public.events FOR SELECT USING (auth.uid() = ANY(attendees));
-CREATE POLICY "Group members can create events"
+CREATE POLICY "Creators can view their events"
+  ON public.events FOR SELECT USING (auth.uid() = created_by);
+-- A plan with just people belongs to no group (20261103_events_without_a_group.sql).
+CREATE POLICY "Anyone can create their own events"
   ON public.events FOR INSERT
-  WITH CHECK (group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid()) AND auth.uid() = created_by);
+  WITH CHECK (auth.uid() = created_by
+              AND (group_id IS NULL OR group_id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid())));
 CREATE POLICY "Event creator can update their event"
   ON public.events FOR UPDATE USING (auth.uid() = created_by);
 CREATE POLICY "Event creator can delete their event"
@@ -326,6 +330,8 @@ CREATE POLICY "Users can send notifications as themselves"
   ON public.notifications FOR INSERT WITH CHECK (auth.uid() = actor_id);
 CREATE POLICY "Users can mark their own notifications read"
   ON public.notifications FOR UPDATE USING (auth.uid() = user_id);
+CREATE POLICY "Users can clear their own notifications"
+  ON public.notifications FOR DELETE USING (auth.uid() = user_id);
 
 -- Claim or release an assignment ("I'll bring dessert") without edit rights
 -- to the rest of the event. Only fills an open slot, and only releases your own.

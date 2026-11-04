@@ -95,7 +95,7 @@ export function ListRow({
     <>
       {icon ? <Icon name={icon} size={compact ? 22 : 18} color={destructive ? c.danger : c.tint} style={{ width: 28, textAlign: 'center' }} /> : null}
       {leading}
-      <View style={{ flex: 1, minWidth: 0, paddingVertical: space.s }}>
+      <View style={{ flex: 1, minWidth: value ? '28%' : 0, paddingVertical: space.s }}>
         <Txt
           v={compact ? 'body' : 'callout'}
           tone={destructive ? 'danger' : tintTitle ? 'tint' : 'primary'}
@@ -111,7 +111,8 @@ export function ListRow({
           <Txt v="footnote" tone="secondary" numberOfLines={1}>{detail}</Txt>
         ) : null}
       </View>
-      {value ? <Txt v={compact ? 'body' : 'callout'} tone="secondary" numberOfLines={1}>{value}</Txt> : null}
+      {/* A long value ("You and Ana and Chloe") truncates instead of squeezing the title to nothing. */}
+      {value ? <Txt v={compact ? 'body' : 'callout'} tone="secondary" numberOfLines={1} style={{ flexShrink: 1, maxWidth: '58%', textAlign: 'right' }}>{value}</Txt> : null}
       {trailing}
       {checked ? <Icon name="checkmark" size={20} color={c.tint} /> : null}
       {chevron ? <Icon name="chevron-forward" size={16} color={c.secondaryLabel} /> : null}

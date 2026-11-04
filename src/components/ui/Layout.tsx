@@ -45,6 +45,9 @@ export function ScreenHeader({ title, eyebrow, display, trailing, toolbar, onTit
       <Txt
         v={asToolbar ? 'title' : display ? 'display' : 'largeTitle'}
         numberOfLines={1}
+        // A long name shrinks a little before it truncates (native), like iOS large titles.
+        adjustsFontSizeToFit
+        minimumFontScale={0.75}
         accessibilityRole="header"
         style={{ flexShrink: 1 }}
       >

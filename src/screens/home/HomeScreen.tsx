@@ -1,12 +1,13 @@
-// Home — make plans happen.
+// Two tabs from one screen:
 //
-// Made for the moment someone at dinner says "we should…": a sheep, the
-// mission, and one box to plan in. Everything else is behind the sheep's
-// speech bubble ("See home ›"), on its own screen, Your plans: what needs
-// you, what's coming up, how recent plans went, and nudges toward the next
-// one (birthdays, someone free when you are, people you haven't seen).
-// Tapping the Home tab again goes back to the sheep.
-// Activity (the inbox) sits behind the bell; settings behind your avatar.
+// Sheep — make plans happen. Made for the moment someone at dinner says "we
+// should…": a sheep, the mission, and one box to plan in. The sheep's speech
+// bubble ("See home ›") goes to the Home tab. Activity (the inbox) sits behind
+// the bell; settings behind your avatar.
+//
+// Home — what needs you, what's coming up, how recent plans went, and nudges
+// toward the next one (birthdays, someone free when you are, people you
+// haven't seen).
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, TextInput, View } from 'react-native';
@@ -22,6 +23,7 @@ import { useWorkSchedules } from '../../lib/workSchedule';
 import { useNotifications } from '../../lib/notifications';
 import { useCircle } from '../../lib/people';
 import { useShortcut } from '../../lib/shortcuts';
+import { useDismissed } from '../../lib/dismissed';
 import { AppNotification, Event, Idea, Profile } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
 import { useGroup } from '../../contexts/GroupContext';
@@ -65,7 +67,17 @@ function nextBirthday(mmdd: string): string {
   return dateKey(next);
 }
 
+/** The Home tab: your plans at a glance. */
 export default function HomeScreen() {
+  return <HomeView view="plans" />;
+}
+
+/** The Sheep tab: the sheep, the mission, and the box to plan in. */
+export function SheepScreen() {
+  return <HomeView view="start" />;
+}
+
+function HomeView({ view }: { view: 'start' | 'plans' }) {
   const { user, profile } = useAuth();
   const { activeGroup, groups } = useGroup();
   const { c, isDark, toggleColorScheme } = useTheme();
@@ -308,7 +320,11 @@ export default function HomeScreen() {
     ],
   }));
 
-  const nudges: Bubble[] = [
+  // Suggestions you can clear. "It's been a while" with someone shares its key
+  // with Friends' Been a while, so clearing one clears both.
+  const { hidden, dismiss } = useDismissed();
+  const clearKey = (key: string) => key.startsWith('r-') ? `quiet:${key.slice(2)}` : `home:${key}`;
+  const allNudges: Bubble[] = [
     ...birthdays.map(({ p, key }) => {
       const days = Math.round((parseKey(key).getTime() - parseKey(todayKey()).getTime()) / DAY);
       return {
@@ -334,6 +350,9 @@ export default function HomeScreen() {
       onPress: () => composer.newPlan({ people: [id] }),
     })),
   ];
+  const nudges: Bubble[] = allNudges
+    .filter(b => !hidden(clearKey(b.key)))
+    .map(b => ({ ...b, onDismiss: () => dismiss(clearKey(b.key)) }));
 
   // This week's flock: everyone you'll see in the next seven days.
   const flock = useMemo(() => {
@@ -353,25 +372,18 @@ export default function HomeScreen() {
     'No sheepish excuses this week.',
   ];
 
-  // ─── Your plans ────────────────────────────────────────────────────────────
-  // The home view, its own screen. One section opens all the way at a time.
-  const [view, setView] = useState<'start' | 'plans'>('start');
-  useEffect(() => navigation.addListener('tabPress' as any, () => setView('start')), [navigation]);
+  // ─── Home ──────────────────────────────────────────────────────────────────
+  // The Home tab. One section opens all the way at a time.
   const { open: openTile, toggle: toggleTile } = useOpenTile(null);
   const section = (key: string) => ({ open: openTile === key, onToggle: () => toggleTile(key) });
 
   const plansView = (
     <View style={{ gap: space.xl, paddingTop: space.s }}>
       <View style={{ gap: space.s }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Tappable onPress={() => setView('start')} accessibilityLabel="Back" hitSlop={8}
-            style={{ flexDirection: 'row', alignItems: 'center', gap: 2, paddingVertical: space.hair, borderRadius: 6 }}>
-            <Icon name="chevron-back" size={20} color={c.tint} />
-            <Txt v="body" tone="tint">Back</Txt>
-          </Tappable>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: space.s }}>
+          <Txt v="display" accessibilityRole="header">Home</Txt>
           <NewPlanButton onPress={() => composer.newPlan()} />
         </View>
-        <Txt v="largeTitle" accessibilityRole="header">Your plans</Txt>
       </View>
       {loading ? <ActivityIndicator color={c.secondaryLabel} /> : null}
 
@@ -453,17 +465,30 @@ export default function HomeScreen() {
             button, so nothing covers the flock on the hill. */}
         <Hero
           lines={lines}
-          onBubble={() => setView('plans')}
-          bubbleHint="Opens your home view: what needs you, what’s coming up, how plans went, and ideas for more."
+          onBubble={() => navigation.navigate('Home')}
+          bubbleHint="Opens Home: what needs you, what’s coming up, how plans went, and ideas for more."
           below={(
-            <PlanBar
-              inputRef={describeInput}
-              onSave={(text) => {
-                describeInput.current?.blur();
-                composer.newPlan({ sentence: text, titleDone: true });
-              }}
-              onOpen={() => composer.newPlan()}
-            />
+            <View style={{ gap: space.s }}>
+              <PlanBar
+                inputRef={describeInput}
+                onSave={(text) => {
+                  describeInput.current?.blur();
+                  composer.newPlan({ sentence: text, titleDone: true });
+                }}
+                onOpen={() => composer.newPlan()}
+              />
+              {/* Or start from who: pick people, then the plan opens with them in it. */}
+              <Tappable
+                feedback="opacity"
+                onPress={() => composer.newPlan({ pickWho: true })}
+                accessibilityLabel="Plan with someone"
+                accessibilityHint="Pick people, then plan with them"
+                style={{ alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: space.hair + 2, paddingVertical: space.hair, paddingHorizontal: space.s, borderRadius: 999 }}
+              >
+                <Icon name="person-add-outline" size={15} color={c.tint} />
+                <Txt v="footnote" tone="tint" semibold>Plan with someone</Txt>
+              </Tappable>
+            </View>
           )}
         />
 
@@ -473,8 +498,14 @@ export default function HomeScreen() {
       </ReadingColumn>
 
 
-      <Sheet visible={inboxOpen} onClose={closeInbox} title="Activity" cancelLabel="Done">
-        <NotificationList items={inbox.items} onOpen={openNotification} />
+      <Sheet
+        visible={inboxOpen}
+        onClose={closeInbox}
+        title="Activity"
+        cancelLabel="Done"
+        action={inbox.items.length ? { label: 'Clear All', onPress: () => inbox.remove(inbox.items.map(n => n.id)) } : undefined}
+      >
+        <NotificationList items={inbox.items} onOpen={openNotification} onClear={(n) => inbox.remove([n.id])} />
       </Sheet>
     </Screen>
   );

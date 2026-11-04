@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { daysUntilBirthday, personStatus, sharedHistory } from '../personal';
+import { beenAWhile, daysUntilBirthday, friendLine, personStatus, sharedHistory } from '../personal';
 import { Event } from '../../types';
 
 const DAY = 86400000;
@@ -79,5 +79,29 @@ describe('personStatus', () => {
   it('then how long it’s been, only once it’s been a while', () => {
     expect(personStatus({ needs: [], history: history(null, 47), now: noon }).text).toBe('Last together 6 weeks ago');
     expect(personStatus({ needs: [], history: history(null, 10), now: noon }).text).toBeNull();
+  });
+});
+
+describe('friendLine', () => {
+  it('leads with time together, never a to-do', () => {
+    const h = sharedHistory([ev('Brunch', -10, ['me', 'ana'])], 'me', 'ana', NOW);
+    expect(friendLine({ history: h, now: NOW })).toBe('Together 9 days ago · Brunch');
+  });
+
+  it('a plan coming up soon comes first', () => {
+    const h = sharedHistory([ev('Brunch', -10, ['me', 'ana']), ev('Hike', 2, ['me', 'ana'])], 'me', 'ana', NOW);
+    expect(friendLine({ history: h, now: NOW })).toMatch(/^Hike · /);
+  });
+
+  it('nothing together yet: nothing to say', () => {
+    expect(friendLine({ history: sharedHistory([], 'me', 'ana', NOW), now: NOW })).toBeNull();
+  });
+});
+
+describe('beenAWhile', () => {
+  it('a month since you were together, with nothing planned', () => {
+    expect(beenAWhile(sharedHistory([ev('Brunch', -40, ['me', 'ana'])], 'me', 'ana', NOW), NOW)).toBeGreaterThan(28);
+    expect(beenAWhile(sharedHistory([ev('Brunch', -10, ['me', 'ana'])], 'me', 'ana', NOW), NOW)).toBeNull();
+    expect(beenAWhile(sharedHistory([ev('Brunch', -40, ['me', 'ana']), ev('Hike', 20, ['me', 'ana'])], 'me', 'ana', NOW), NOW)).toBeNull();
   });
 });

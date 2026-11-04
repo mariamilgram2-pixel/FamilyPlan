@@ -104,7 +104,7 @@ export type GroupMemberInsert = Omit<GroupMember, 'id' | 'joined_at'>;
 
 export interface Event {
   id: string;
-  group_id: string;
+  group_id: string | null;           // null: a plan with people, not a group's (on no shared calendar)
   title: string;
   description: string | null;
   start_time: string;
@@ -335,7 +335,7 @@ export interface AppNotification {
   read_at: string | null;
   created_at: string;
   // joined relations
-  profiles?: Pick<Profile, 'id' | 'full_name' | 'email'>;
+  profiles?: Pick<Profile, 'id' | 'full_name' | 'email'> & Partial<Pick<Profile, 'avatar_url'>>;
 }
 
 export type AppNotificationInsert = Omit<AppNotification, 'id' | 'read_at' | 'created_at' | 'profiles'>;
@@ -353,9 +353,10 @@ export type MainStackParamList = {
 };
 
 export type TabParamList = {
-  Home: undefined;
+  Sheep: undefined;   // the sheep and the box to plan in, where the app opens
+  Home: undefined;    // your plans at a glance
   Calendar: { eventId?: string; date?: string } | undefined;
   Plans: { ideaId?: string } | undefined;
   People: undefined;
-  You: undefined;
+  You: { open?: 'colors' } | undefined;   // open straight to a settings sheet
 };

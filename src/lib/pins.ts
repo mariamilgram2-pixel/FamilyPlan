@@ -10,12 +10,13 @@ export const pinKey = (kind: PinKind, id: string) => `${kind}:${id}`;
 export const MAX_PINS = 9;
 const STORAGE_KEY = 'pinned_people';
 
-export function usePins() {
+/** `defaults` stand in until you've pinned anyone yourself (the demo starts with a few close friends). */
+export function usePins(defaults: string[] = []) {
   const [pins, setPins] = useState<string[]>([]);
 
   useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEY).then(d => { if (d) setPins(JSON.parse(d)); }).catch(() => {});
-  }, []);
+    AsyncStorage.getItem(STORAGE_KEY).then(d => { setPins(d ? JSON.parse(d) : defaults); }).catch(() => {});
+  }, [defaults.join(',')]);
 
   const save = (next: string[]) => {
     setPins(next);

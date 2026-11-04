@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, Image, ViewStyle } from 'react-native';
 import { initialsFor, useTheme, weight } from '../theme';
+import { SheepAvatar, sheepLookOf } from './SheepAvatar';
 
 export interface AvatarPerson {
   id: string;
@@ -19,13 +20,14 @@ interface Props {
 }
 
 /**
- * Monochrome monogram (à la Contacts). Identity comes from initials and
- * photos, not from a rainbow of avatar colors — the tint stays meaningful.
+ * A photo, a drawn sheep ("sheep:<id>", see SheepAvatar), or a monochrome
+ * monogram (à la Contacts) for anyone who hasn't picked one.
  */
 export default function Avatar({ person, size = 32, ring = false, ringColor, highlight, style }: Props) {
   const { c } = useTheme();
   const label = initialsFor(person?.full_name ?? person?.email ?? null);
   const borderWidth = ring ? Math.max(2, Math.round(size * 0.08)) : 0;
+  const sheep = sheepLookOf(person?.avatar_url);
 
   return (
     <View
@@ -38,7 +40,9 @@ export default function Avatar({ person, size = 32, ring = false, ringColor, hig
         borderWidth, borderColor: ringColor ?? c.background,
       }, style]}
     >
-      {person?.avatar_url ? (
+      {sheep ? (
+        <SheepAvatar look={sheep} size={size} />
+      ) : person?.avatar_url ? (
         <Image source={{ uri: person.avatar_url }} style={{ width: size, height: size }} />
       ) : (
         <Text style={{ color: highlight ? c.onTint : c.background, fontSize: Math.round(size * 0.4), ...weight('700') }}>

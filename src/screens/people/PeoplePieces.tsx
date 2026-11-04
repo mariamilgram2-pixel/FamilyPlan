@@ -6,8 +6,7 @@ import { ScrollView, View } from 'react-native';
 import { NeedsYouItem } from '../../lib/needsYou';
 import { Group, Profile } from '../../types';
 import AvatarStack from '../../components/AvatarStack';
-import GroupCover, { useCoverInk } from '../../components/GroupCover';
-import { AvatarPerson } from '../../components/Avatar';
+import { FlockCover } from '../../components/GroupFlock';
 import { Icon, IconName, ListRow, ListSection, Menu, MenuItem, Tappable, Txt } from '../../components/ui';
 import { continuous, radius, space, useLayout, useTheme } from '../../theme';
 
@@ -43,18 +42,20 @@ export interface PinTile {
 }
 
 const PIN_AVATAR = 64;
+const COLUMNS = 4;   // four across fits a phone, so Add sits beside your close friends
 
-/** Pinned people and groups as a grid of big avatars, three across; centered when fewer. */
-export function PinnedGrid({ tiles }: { tiles: PinTile[] }) {
+/** Close friends (and pinned groups) as a grid of big avatars, four across; centered when fewer. */
+export function PinnedGrid({ tiles, addItems }: { tiles: PinTile[]; addItems?: MenuItem[] }) {
   const { compact } = useLayout();
-  if (!tiles.length) return null;
+  const { c } = useTheme();
+  if (!tiles.length && !addItems?.length) return null;
   return (
     <View style={{
       flexDirection: 'row', flexWrap: 'wrap', rowGap: space.m, paddingHorizontal: compact ? 0 : space.s,
-      justifyContent: tiles.length < 3 ? 'center' : 'flex-start', paddingTop: tiles.some(t => t.bubble) ? space.m : 0,
+      justifyContent: tiles.length + (addItems?.length ? 1 : 0) < COLUMNS ? 'center' : 'flex-start', paddingTop: tiles.some(t => t.bubble) ? space.m : 0,
     }}>
       {tiles.map(t => (
-        <View key={t.key} style={{ width: `${100 / 3}%` as any }}>
+        <View key={t.key} style={{ width: `${100 / COLUMNS}%` as any }}>
           <Menu title={t.label} sections={[{ items: [{ key: 'unpin', label: 'Unpin', icon: 'pin-outline', onSelect: t.onUnpin }] }]}>
             {(open) => (
               <Tappable
@@ -74,6 +75,21 @@ export function PinnedGrid({ tiles }: { tiles: PinTile[] }) {
           </Menu>
         </View>
       ))}
+      {/* Add a close friend: the last tile, a dashed circle with a +. */}
+      {addItems?.length ? (
+        <View style={{ width: `${100 / COLUMNS}%` as any }}>
+          <Menu title="Add a close friend" sections={[{ items: addItems }]}>
+            {(open) => (
+              <Tappable onPress={open} feedback="opacity" accessibilityLabel="Add a close friend" style={{ alignItems: 'center', gap: space.s, paddingVertical: space.hair }}>
+                <View style={{ width: PIN_AVATAR, height: PIN_AVATAR, borderRadius: PIN_AVATAR / 2, borderWidth: 2, borderStyle: 'dashed', borderColor: c.separator, alignItems: 'center', justifyContent: 'center' }}>
+                  <Icon name="add" size={26} color={c.tint} />
+                </View>
+                <Txt v="footnote" tone="tint" align="center">Add</Txt>
+              </Tappable>
+            )}
+          </Menu>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -175,9 +191,11 @@ export function GroupCards({ cards, onNew }: { cards: GroupCardData[]; onNew: ()
 
 function GroupCard({ data: d }: { data: GroupCardData }) {
   const { c } = useTheme();
-  const { ink, soft } = useCoverInk(d.group);
+  const ink = c.label;
+  const soft = c.secondaryLabel;
+  // The group's flock: one sheep per member, on its hill.
   return (
-    <GroupCover group={d.group} style={{ flex: 1, padding: space.m, justifyContent: 'space-between' }}>
+    <FlockCover group={d.group} count={d.members.length} style={{ flex: 1, padding: space.m, justifyContent: 'space-between' }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 22 }}>
         {d.needs ? (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.hair + 2, paddingHorizontal: space.s, height: 22, borderRadius: radius.pill, backgroundColor: c.tint }}>
@@ -185,7 +203,6 @@ function GroupCard({ data: d }: { data: GroupCardData }) {
             <Txt v="caption" tone="onTint">Your turn</Txt>
           </View>
         ) : <View />}
-        {d.members.length ? <AvatarStack people={d.members as AvatarPerson[]} max={3} size={22} ringColor={soft} /> : null}
       </View>
       <View>
         <Txt v="title" numberOfLines={2} style={{ color: ink, fontSize: 22, lineHeight: 26 }}>{d.group.name}</Txt>
@@ -193,7 +210,7 @@ function GroupCard({ data: d }: { data: GroupCardData }) {
           {`${d.members.length} member${d.members.length === 1 ? '' : 's'}${d.active ? ' · Active' : ''}`}
         </Txt>
       </View>
-    </GroupCover>
+    </FlockCover>
   );
 }
 
