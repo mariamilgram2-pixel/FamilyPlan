@@ -30,6 +30,11 @@ import { useMyPrefs } from '../lib/availabilityPrefs';
 import { SoftPrefs } from '../lib/availability';
 import { WeekendMode } from '../types';
 import { splitPlace, useSavedPlaces } from '../lib/places';
+import { parseBirthday } from '../lib/birthday';
+import { useConnectedCalendars } from '../lib/phoneCalendars';
+import ConnectedCalendarsSheet from './calendar/ConnectedCalendarsSheet';
+import SetupSheet from './onboarding/SetupSheet';
+import ImportContactsSheet from './people/ImportContactsSheet';
 import { space, useLayout, useTheme } from '../theme';
 
 
@@ -76,7 +81,7 @@ export default function ProfileScreen() {
   const [defaultReminder, setDefaultReminder] = useState(15);
   const [exporting, setExporting] = useState(false);
 
-  const [sheet, setSheet] = useState<null | 'profile' | 'colors' | 'hidden' | 'availability'>(null);
+  const [sheet, setSheet] = useState<null | 'profile' | 'colors' | 'hidden' | 'availability' | 'calendars' | 'setup' | 'contacts'>(null);
   const colors = useCalendarColors();
   // "Edit Categories and Colors…" from an event opens straight to the sheet.
   const route = useRoute<any>();
@@ -91,6 +96,7 @@ export default function ProfileScreen() {
   const calendars = allCalendars.filter(g => !isDemo || visibleGroups.some(v => v.id === g.id) || DEMO_EXTRA_GROUPS.some(x => x.group.id === g.id && x.memberIds.includes(DEMO_ME)));
   const { prefs: suggestPrefs, save: saveSuggestPrefs } = useMyPrefs(user?.id ?? null);
   const workSchedules = useWorkSchedules();
+  const connected = useConnectedCalendars(isDemo);
   const hasOngoing = workSchedules.some(w => w.scope.kind === 'ongoing');
   const [workSheet, setWorkSheet] = useState<{ editing: WorkSchedule | null } | null>(null);
   // Regular schedule first, then week/month-specific ones in date order.
@@ -135,13 +141,17 @@ export default function ProfileScreen() {
 
   // ─── Export (.ics) ─────────────────────────────────────────────────────────
   async function handleExportCalendar() {
-    if (!activeGroup) return notify('No group', 'Join a group first to export events.');
+    if (!activeGroup && !user) return;
     setExporting(true);
     let events: Event[] = DEMO_EVENTS;
+    const calName = activeGroup?.name ?? 'My plans';
     if (!isDemoGroup(activeGroup)) {
       // This group's calendar, plus your own plans with people (no group).
+      // Not in a group yet: just your own plans.
       const q = supabase.from('events').select('*');
-      const { data, error } = await (user ? q.or(`group_id.eq.${activeGroup.id},attendees.cs.{${user.id}}`) : q.eq('group_id', activeGroup.id)).order('start_time', { ascending: true });
+      const { data, error } = await (activeGroup
+        ? (user ? q.or(`group_id.eq.${activeGroup.id},attendees.cs.{${user.id}}`) : q.eq('group_id', activeGroup.id))
+        : q.contains('attendees', [user!.id])).order('start_time', { ascending: true });
       if (error) { setExporting(false); return notify('Couldn’t export', error.message); }
       events = (data ?? []) as Event[];
     }
@@ -150,10 +160,10 @@ export default function ProfileScreen() {
     const stamp = (iso: string) => new Date(iso).toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
     const esc = (s: string) => s.replace(/\\/g, '\\\\').replace(/[,;]/g, m => `\\${m}`).replace(/\n/g, '\\n');
     const ics = [
-      'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//FamilyPlan//sheep//EN', `X-WR-CALNAME:${esc(activeGroup.name)}`,
+      'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//sheep//sheep//EN', `X-WR-CALNAME:${esc(calName)}`,
       ...events.map(e => [
         'BEGIN:VEVENT',
-        `UID:${e.id}@familyplan`,
+        `UID:${e.id}@sheep`,
         `DTSTAMP:${stamp(new Date().toISOString())}`,
         `DTSTART:${stamp(e.start_time)}`,
         `DTEND:${stamp(e.end_time)}`,
@@ -172,15 +182,15 @@ export default function ProfileScreen() {
       const url = URL.createObjectURL(new Blob([ics], { type: 'text/calendar' }));
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${activeGroup.name.replace(/[^\w\s-]/g, '').trim() || 'sheep'}.ics`;
+      a.download = `${calName.replace(/[^\w\s-]/g, '').trim() || 'sheep'}.ics`;
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
       return;
     }
     try {
       await Share.share(Platform.OS === 'ios'
-        ? { title: `${activeGroup.name} Calendar`, url: `data:text/calendar;charset=utf-8,${encodeURIComponent(ics)}` }
-        : { title: `${activeGroup.name} Calendar`, message: ics });
+        ? { title: `${calName} Calendar`, url: `data:text/calendar;charset=utf-8,${encodeURIComponent(ics)}` }
+        : { title: `${calName} Calendar`, message: ics });
     } catch {
       // User dismissed the share sheet.
     }
@@ -189,6 +199,26 @@ export default function ProfileScreen() {
   async function handleSignOut() {
     if (!user) return exitDemo();  // demo mode has no session to end
     if (await confirmAction('Sign out', 'You’ll need to sign in again to see your groups.', 'Sign Out')) signOut();
+  }
+
+  // Delete Account: asked twice, since it can't be undone. Your sign-in and
+  // everything that's yours go; plans you made stay for the others in them.
+  const [deleting, setDeleting] = useState(false);
+  async function handleDeleteAccount() {
+    if (!user || deleting) return;
+    const sure = await confirmAction(
+      'Delete your account?',
+      'This permanently deletes your account, your people, notes, saved places and connected calendars. Plans you made stay for the people in them. This can’t be undone.',
+      'Continue',
+    );
+    if (!sure) return;
+    const really = await confirmAction('Delete account', `Delete ${user.email ?? 'your account'} for good?`, 'Delete Account');
+    if (!really) return;
+    setDeleting(true);
+    const { error } = await supabase.rpc('delete_my_account' as any);
+    if (error) { setDeleting(false); return notify('Couldn’t delete your account', error.message); }
+    await AsyncStorage.multiRemove([`calendar_setup_seen:${user.id}`]).catch(() => {});
+    await signOut();
   }
 
   // Demo: you're Jordan, as Home and everyone else see you.
@@ -217,6 +247,11 @@ export default function ProfileScreen() {
             onPress={() => setSheet('profile')}
             style={{ minHeight: 80 }}
           />
+        </ListSection>
+
+        <ListSection>
+          <ListRow icon="sparkles-outline" title="Set up sheep" subtitle="Calendars, contacts, birthday, groups" chevron onPress={() => setSheet('setup')} />
+          <ListRow icon="book-outline" title="Add people from contacts" chevron onPress={() => setSheet('contacts')} />
         </ListSection>
 
         <ListSection
@@ -267,6 +302,12 @@ export default function ProfileScreen() {
 
         <ListSection header="Calendar & availability">
           <ListRow
+            title="Connected calendars"
+            value={connected.connections.length ? `${connected.connections.length} ${connected.connections.length === 1 ? 'calendar' : 'calendars'}` : 'None'}
+            chevron
+            onPress={() => setSheet('calendars')}
+          />
+          <ListRow
             title="When Sheep suggests plans"
             value={suggestPrefs.weekend_mode === 'any' && !suggestPrefs.spacing_enabled ? 'Any free time' : 'Custom'}
             chevron
@@ -305,6 +346,11 @@ export default function ProfileScreen() {
         <ListSection>
           <ListRow title={user ? 'Sign Out' : 'Exit Demo'} destructive onPress={handleSignOut} />
         </ListSection>
+        {user ? (
+          <ListSection footer="Permanently deletes your account and everything that’s only yours.">
+            <ListRow title={deleting ? 'Deleting…' : 'Delete Account'} destructive onPress={deleting ? undefined : handleDeleteAccount} />
+          </ListSection>
+        ) : null}
       </ReadingColumn>
 
       <EditProfileSheet
@@ -330,23 +376,15 @@ export default function ProfileScreen() {
         prefs={suggestPrefs}
         onChange={async next => { const error = await saveSuggestPrefs(next); if (error) notify('Couldn’t save', error); }}
       />
+      <ConnectedCalendarsSheet visible={sheet === 'calendars'} onClose={() => setSheet(null)} demo={isDemo} />
+      <SetupSheet visible={sheet === 'setup'} onClose={() => setSheet(null)} demo={isDemo} />
+      <ImportContactsSheet visible={sheet === 'contacts'} onClose={() => setSheet(null)} demo={isDemo} />
       <HiddenSheet visible={sheet === 'hidden'} onClose={() => setSheet(null)} members={groupMembers} hidden={hiddenFriends} onChange={setHidden} />
     </Screen>
   );
 }
 
 // ─── Edit profile ────────────────────────────────────────────────────────────
-
-/** "10/23" or "10-23" → "10-23"; null when blank; undefined when invalid. */
-function parseBirthday(text: string): string | null | undefined {
-  const t = text.trim();
-  if (!t) return null;
-  const m = t.match(/^(\d{1,2})[/-](\d{1,2})$/);
-  if (!m) return undefined;
-  const mm = Number(m[1]), dd = Number(m[2]);
-  if (mm < 1 || mm > 12 || dd < 1 || dd > new Date(2024, mm, 0).getDate()) return undefined;
-  return `${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
-}
 
 /** "hiking, board games,  " → ["hiking", "board games"]; at most six, each short. */
 function parseFavorites(text: string): string[] {

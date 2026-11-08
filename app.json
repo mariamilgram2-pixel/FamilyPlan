@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "sheep",
-    "slug": "familyplan",
+    "slug": "sheep",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -11,20 +11,31 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.familyplan.app"
+      "bundleIdentifier": "com.mariamilgram.sheep",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "appleTeamId": "ML64668CA5"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#C4B5A0"
       },
-      "package": "com.familyplan.app"
+      "package": "com.mariamilgram.sheep",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_CALENDAR",
+        "android.permission.WRITE_CALENDAR",
+        "android.permission.READ_CONTACTS",
+        "android.permission.WRITE_CONTACTS"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png",
       "bundler": "metro"
     },
-    "scheme": "familyplan",
+    "scheme": "sheep",
     "plugins": [
       [
         "expo-splash-screen",
@@ -38,7 +49,7 @@
       [
         "expo-secure-store",
         {
-          "faceIDPermission": "Allow FamilyPlan to use Face ID to authenticate."
+          "faceIDPermission": "Allow sheep to use Face ID to keep you signed in."
         }
       ],
       [
@@ -48,8 +59,35 @@
           "cameraPermission": false
         }
       ],
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "Allow sheep to see when you're busy on your calendars, so it can suggest times that work. Sheep never changes your calendars.",
+          "remindersPermission": false
+        }
+      ],
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "Allow sheep to search your contacts so you can add people to a plan."
+        }
+      ],
       "expo-font",
-      "expo-status-bar"
-    ]
+      "expo-status-bar",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "17.0"
+          }
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "b9af497a-bf4e-4e83-af99-88711e7b9ab9"
+      }
+    },
+    "owner": "mariamilgram"
   }
 }

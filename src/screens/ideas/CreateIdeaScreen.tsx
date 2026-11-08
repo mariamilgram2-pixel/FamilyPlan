@@ -24,6 +24,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { confirmAction, notify } from '../../lib/alert';
+import { firstNameOf } from '../../lib/phone';
 import { Keyboard, Platform, Share, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { supabase } from '../../lib/supabase';
@@ -143,6 +144,9 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
   // the title it became, tap to rename.
   const [titleSaved, setTitleSaved] = useState(false);
   const [showWho, setShowWho] = useState(false);
+  // "Plan with someone": the picker opens on its own, and the plan only once
+  // you're done picking, so the plan never shows first and then gets covered.
+  const [pickedFirst, setPickedFirst] = useState(false);
   const [editingWhen, setEditingWhen] = useState(false);
   const [editingTime, setEditingTime] = useState(false);   // When is two rows: the day, then the time
   // Each opens as a short list ("This weekend", "Evening"), or as the calendar or exact times.
@@ -187,6 +191,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
   // against a stale/empty list from an earlier failed fetch.
   useEffect(() => {
     if (!visible) {
+      setPickedFirst(false);
       setDescribe('');
       setParsed(null);
       return;
@@ -242,13 +247,11 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
       });
       // "Do it again", "Plan with Ana": what's known is already filled in.
       setStep('compose');
-      // "Plan with someone": pick who first, a beat after the sheet opens.
-      if (prefill?.pickWho) setTimeout(() => openWho(), 350);
     }
     if (!isDemo) fetchGroups();
   }, [visible]);
 
-  const { people, contacts, loading: loadingPeople } = useAudience(visible, effectiveGroups);
+  const { people, contacts, loading: loadingPeople, addContact } = useAudience(visible, effectiveGroups);
 
   const savedPlaces = useSavedPlaces(meId, isDemo);
 
@@ -731,7 +734,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
   const audienceNames = [
     ...effectiveGroups.filter(g => selectedGroupIds.has(g.id)).map(g => g.name),
     ...people.filter(p => selectedUserIds.has(p.profile.id)).map(p => (p.profile.full_name ?? p.profile.email ?? 'Someone').split(' ')[0]),
-    ...contacts.filter(ct => selectedContactIds.has(ct.id)).map(ct => ct.name.split(' ')[0]),
+    ...contacts.filter(ct => selectedContactIds.has(ct.id)).map(ct => firstNameOf(ct.name)),
   ];
   const whoValue = audienceNames.length ? `You and ${who(audienceNames)}` : 'Add people';
   const whoSet = audienceNames.length > 0 && !showWho;
@@ -851,7 +854,17 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
   // Who's picked when the picker opens, for Cancel to put back.
   const whoBefore = useRef<[Set<string>, Set<string>, Set<string>] | null>(null);
   const openWho = () => { Keyboard.dismiss(); whoBefore.current = [selectedGroupIds, selectedUserIds, selectedContactIds]; setShowWho(true); };
+  const pickingFirst = visible && !existing && !!prefill?.pickWho && !pickedFirst;
+  // Done on the first picker: let it slide away before the plan slides up, since
+  // iPhone can't show one sheet while another is still closing.
+  const [closingPick, setClosingPick] = useState(false);
+  const finishPickingFirst = () => {
+    if (Platform.OS !== 'ios') { setPickedFirst(true); return; }
+    setClosingPick(true);
+    setTimeout(() => { setClosingPick(false); setPickedFirst(true); }, 450);
+  };
   const cancelWho = () => {
+    if (pickingFirst) return onClose();   // nothing to go back to: the plan never opened
     if (whoBefore.current) { const [g, u, ct] = whoBefore.current; setSelectedGroupIds(g); setSelectedUserIds(u); setSelectedContactIds(ct); }
     setShowWho(false);
   };
@@ -1182,9 +1195,33 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
 
 
 
+  // The picker, in two places: on its own for "Plan with someone" (before the
+  // plan opens), and inside the plan sheet otherwise. On iPhone a picker has
+  // to be inside the open sheet to show on top of it.
+  const whoPicker = (visibleNow: boolean, onDone: () => void) => (
+    <WhoPicker
+      visible={visibleNow}
+      onDone={onDone}
+
+      onCancel={cancelWho}
+      loading={loadingPeople}
+      groups={effectiveGroups}
+      people={people}
+      contacts={contacts}
+      groupIds={selectedGroupIds}
+      userIds={selectedUserIds}
+      contactIds={selectedContactIds}
+      onToggle={(k, id) => k === 'group' ? toggle(selectedGroupIds, id, setSelectedGroupIds)
+        : k === 'user' ? toggle(selectedUserIds, id, setSelectedUserIds)
+        : toggle(selectedContactIds, id, setSelectedContactIds)}
+      onAddPhone={async (name, phone) => { touch('who'); return addContact(name, phone); }}
+        />
+  );
+
   return (
+    <>
     <Sheet
-      visible={visible}
+      visible={visible && !pickingFirst && !closingPick}
       onClose={handleClose}
       title={sheetTitle}
       cancelLabel={step === 'compose' && !existing && (describe.trim() || title.trim()) ? 'Close' : 'Cancel'}
@@ -1250,21 +1287,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
             </React.Fragment>
           ) : null)}
 
-          <WhoPicker
-            visible={showWho}
-            onDone={() => setShowWho(false)}
-            onCancel={cancelWho}
-            loading={loadingPeople}
-            groups={effectiveGroups}
-            people={people}
-            contacts={contacts}
-            groupIds={selectedGroupIds}
-            userIds={selectedUserIds}
-            contactIds={selectedContactIds}
-            onToggle={(k, id) => k === 'group' ? toggle(selectedGroupIds, id, setSelectedGroupIds)
-              : k === 'user' ? toggle(selectedUserIds, id, setSelectedUserIds)
-              : toggle(selectedContactIds, id, setSelectedContactIds)}
-          />
+          {whoPicker(showWho && !pickingFirst, () => setShowWho(false))}
 
           {showDetails ? (
             <>
@@ -1502,5 +1525,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
         </>
       )}
     </Sheet>
+    {whoPicker(pickingFirst && !closingPick, finishPickingFirst)}
+    </>
   );
 }

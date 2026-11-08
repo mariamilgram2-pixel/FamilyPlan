@@ -261,9 +261,14 @@ export function Menu({ sections, title, children }: MenuProps) {
               ))}
             </ScrollView>
           </Material>
-          <Tappable onPress={() => setOpen(false)} style={[styles.actionGroup, styles.cancel, { backgroundColor: c.background }]}>
-            <Txt v="headline" tone="tint">Cancel</Txt>
-          </Tappable>
+          {/* Solid base under the button: its hover/press tint is translucent and
+              replaces the button's own background, so without this the tab bar
+              behind the menu would show through. */}
+          <View style={[styles.actionGroup, { backgroundColor: c.background }]}>
+            <Tappable onPress={() => setOpen(false)} style={styles.cancel}>
+              <Txt v="headline" tone="tint">Cancel</Txt>
+            </Tappable>
+          </View>
         </View>
       </Modal>
     );

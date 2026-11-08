@@ -15,8 +15,9 @@ import { ActivityIndicator, Platform, Pressable, ScrollView, Share, TextInput, V
 import * as Clipboard from 'expo-clipboard';
 import { supabase } from '../../lib/supabase';
 import { notify, confirmAction } from '../../lib/alert';
+import { firstNameOf, formatPhone, looksLikePhone, phoneMatches, samePhone } from '../../lib/phone';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
-import { DEMO_CONTACTS, DEMO_EVENTS, DEMO_EXTRA_GROUPS, DEMO_IDEAS, DEMO_MEMBERS, DEMO_ME, DEMO_PEOPLE, isDemoGroup } from '../../lib/demo';
+import { demoContacts, DEMO_EVENTS, DEMO_EXTRA_GROUPS, DEMO_IDEAS, DEMO_MEMBERS, DEMO_ME, DEMO_PEOPLE, isDemoGroup } from '../../lib/demo';
 import { expandEvents } from '../../lib/recurrence';
 import { useNotifications } from '../../lib/notifications';
 import { NeedsYouItem, whatNeedsYou } from '../../lib/needsYou';
@@ -35,6 +36,7 @@ import { useGroupSheets, useVisibleGroups } from '../../components/GroupSwitcher
 import { IdentityHeader, NotesSection, PersonDetail } from './PersonDetail';
 import { Dotted, GroupCards, NeedsYouSection, PinnedGrid, PinTile } from './PeoplePieces';
 import { keyOf } from '../calendar/dates';
+import ImportContactsSheet from './ImportContactsSheet';
 import {
   Button, EmptyState, Field, Icon, IconButton, ListRow, ListSection, Menu, ReadingColumn,
   ScreenHeader, SectionHeader, Sheet, SplitView, Tag, Txt, useBottomClearance,
@@ -86,7 +88,9 @@ export default function PeopleScreen() {
 
   // Person sheet (add / edit contact)
   const [personSheet, setPersonSheet] = useState<null | { editing: Contact | null }>(null);
+  const [importing, setImporting] = useState(false);
   const [personName, setPersonName] = useState('');
+  const [personPhone, setPersonPhone] = useState('');
   const [personEmail, setPersonEmail] = useState('');
   const [personNote, setPersonNote] = useState('');
   const [busy, setBusy] = useState(false);
@@ -101,7 +105,7 @@ export default function PeopleScreen() {
         members: g.id === activeGroup!.id ? DEMO_MEMBERS
           : DEMO_PEOPLE.filter(m => DEMO_EXTRA_GROUPS.find(x => x.group.id === g.id)?.memberIds.includes(m.id)),
       }));
-      contactRows = DEMO_CONTACTS;
+      contactRows = demoContacts();
     } else {
     setLoading(true);
 
@@ -187,18 +191,28 @@ export default function PeopleScreen() {
   // ─── Person (contact) actions ─────────────────────────────────────────────
   function openPersonSheet(editing: Contact | null) {
     setPersonName(editing?.name ?? '');
+    setPersonPhone(editing?.phone ? formatPhone(editing.phone) : '');
     setPersonEmail(editing?.email ?? '');
     setPersonNote(editing?.note ?? '');
     setPersonSheet({ editing });
   }
 
+  // Name and phone number are needed; email is optional but has to look like one.
+  const phoneOk = looksLikePhone(personPhone);
+  const emailOk = !personEmail.trim() || /^\S+@\S+\.\S+$/.test(personEmail.trim());
+  const personReady = !!personName.trim() && phoneOk && emailOk;
+
   async function savePerson() {
-    if (!personName.trim()) return;
+    if (!personReady) return;
+    // One person per number: say who already has it rather than adding them twice.
+    const twin = contacts.find(ct => ct.id !== personSheet?.editing?.id && samePhone(ct.phone, personPhone));
+    if (twin) return notify('Already in your people', `${formatPhone(personPhone)} is ${twin.name}’s number.`);
     if (isDemo || !user) return notify('Demo mode', 'Sign in to save people.');
     setBusy(true);
     const payload = {
       owner_id: user.id,
       name: personName.trim(),
+      phone: formatPhone(personPhone),
       email: personEmail.trim() || null,
       note: personNote.trim() || null,
     };
@@ -234,7 +248,7 @@ export default function PeopleScreen() {
 
   // People not on sheep get the app and a code to join your active group.
   async function inviteToSheep(ct: Contact) {
-    const first = ct.name.split(' ')[0];
+    const first = firstNameOf(ct.name);
     const code = activeGroup?.invite_code;
     const message = `Hi ${first}! I’m using sheep to make plans with friends and family. Join me${code ? ` — our group code is ${code}` : ''}.`;
     try {
@@ -300,7 +314,7 @@ export default function PeopleScreen() {
   const hit = (...hay: (string | null | undefined)[]) => hay.some(h => h?.toLowerCase().includes(q));
   const matches = q ? everyone.filter(e => e.kind === 'person'
     ? hit(e.name, handle(e.p.profile.email), ...e.p.groups.map(g => g.name))
-    : hit(e.name, handle(e.ct.email), e.ct.note)) : everyone;
+    : hit(e.name, handle(e.ct.email), e.ct.note) || phoneMatches(e.ct.phone, q)) : everyone;
   const groupMatches = q ? groups.filter(g => hit(g.name, g.description)) : [];
 
   // Pinned ones move up top, out of the lists.
@@ -332,7 +346,7 @@ export default function PeopleScreen() {
       return p ? tile((p.full_name ?? p.email).split(' ')[0], size => <Avatar person={p} size={size} />, bday) : [];
     }
     const ct = contacts.find(x => x.id === id);
-    return ct ? tile(ct.name.split(' ')[0], size => <Avatar person={{ id: ct.id, full_name: ct.name, avatar_url: ct.avatar_url }} size={size} />) : [];
+    return ct ? tile(firstNameOf(ct.name), size => <Avatar person={{ id: ct.id, full_name: ct.name, avatar_url: ct.avatar_url }} size={size} />) : [];
   });
 
   const addMenu = (
@@ -340,6 +354,7 @@ export default function PeopleScreen() {
       title="Add"
       sections={[{ items: [
         { key: 'person', label: 'Add Person…', icon: 'person-add-outline', onSelect: () => openPersonSheet(null) },
+        { key: 'contacts', label: 'Add from Contacts…', icon: 'book-outline', onSelect: () => setImporting(true) },
         { key: 'group', label: 'New Group…', icon: 'add-circle-outline', onSelect: openCreate },
         { key: 'join', label: 'Join with Code…', icon: 'enter-outline', onSelect: openJoin },
       ] }]}
@@ -387,7 +402,7 @@ export default function PeopleScreen() {
       leading={<Avatar person={{ id: e.ct.id, full_name: e.ct.name, avatar_url: e.ct.avatar_url }} size={32} />}
       title={e.name}
       subtitle={searching ? ['Not on sheep yet', e.ct.note].filter(Boolean).join(' · ') : e.ct.note}
-      trailing={<IconButton icon="paper-plane-outline" label={`Invite ${e.name.split(' ')[0]} to sheep`} onPress={() => inviteToSheep(e.ct)} />}
+      trailing={<IconButton icon="paper-plane-outline" label={`Invite ${firstNameOf(e.name)} to sheep`} onPress={() => inviteToSheep(e.ct)} />}
       selected={isSel('contact', e.ct.id)}
       onPress={() => setSelection({ kind: 'contact', id: e.ct.id })}
       onLongPress={open}
@@ -543,15 +558,15 @@ export default function PeopleScreen() {
     detailTitle = 'Person';
     detailBody = (
       <View style={{ gap: space.l }}>
-        <IdentityHeader person={{ id: selContact.id, full_name: selContact.name, avatar_url: selContact.avatar_url }} title={selContact.name} subtitle={selContact.email} />
+        <IdentityHeader person={{ id: selContact.id, full_name: selContact.name, avatar_url: selContact.avatar_url }} title={selContact.name} subtitle={[selContact.phone ? formatPhone(selContact.phone) : null, selContact.email].filter(Boolean).join(' · ') || null} />
         {selContact.note ? (
           <ListSection header="Note"><View style={{ padding: space.m }}><Txt v="body">{selContact.note}</Txt></View></ListSection>
         ) : null}
-        <ListSection footer={`${selContact.name.split(' ')[0]} isn’t on sheep yet, so you can’t check their calendar or send them invites in the app.`}>
+        <ListSection footer={`${firstNameOf(selContact.name)} isn’t on sheep yet, so you can’t check their calendar or send them invites in the app.`}>
           <ListRow icon="paper-plane-outline" title="Invite to sheep" tintTitle onPress={() => inviteToSheep(selContact)} />
-          {pinRow('contact', selContact.id, selContact.name.split(' ')[0])}
+          {pinRow('contact', selContact.id, firstNameOf(selContact.name))}
         </ListSection>
-        <NotesSection ownerId={meId} subject={{ kind: 'contact', id: selContact.id }} isDemo={isDemo} name={selContact.name.split(' ')[0]} />
+        <NotesSection ownerId={meId} subject={{ kind: 'contact', id: selContact.id }} isDemo={isDemo} name={firstNameOf(selContact.name)} />
         <ListSection>
           <ListRow icon="create-outline" title="Edit" tintTitle onPress={() => { if (!threeColumn) setSelection(null); openPersonSheet(selContact); }} />
           <ListRow icon="trash-outline" title="Remove Person" destructive onPress={() => removeContact(selContact)} />
@@ -583,6 +598,7 @@ export default function PeopleScreen() {
   return (
     <>
       <SplitView list={list} detail={detail} />
+      <ImportContactsSheet visible={importing} onClose={() => setImporting(false)} demo={isDemo} onAdded={() => load()} />
       {!threeColumn && (
         <Sheet visible={!!detailBody} onClose={() => setSelection(null)} title={detailTitle} cancelLabel="Done">
           {detailBody}
@@ -593,10 +609,32 @@ export default function PeopleScreen() {
         onClose={() => setPersonSheet(null)}
         title={personSheet?.editing ? 'Edit Person' : 'Add Person'}
         width={480}
-        action={{ label: personSheet?.editing ? 'Save' : 'Add', onPress: savePerson, disabled: !personName.trim(), loading: busy }}
+        action={{ label: personSheet?.editing ? 'Save' : 'Add', onPress: savePerson, disabled: !personReady, loading: busy }}
       >
         <Field label="Name" value={personName} onChangeText={setPersonName} placeholder="Alex Kim" autoFocus />
-        <Field label="Email" value={personEmail} onChangeText={setPersonEmail} placeholder="Optional" keyboardType="email-address" autoCapitalize="none" autoCorrect={false} />
+        <Field
+          label="Phone"
+          value={personPhone}
+          onChangeText={setPersonPhone}
+          onBlur={() => { if (phoneOk) setPersonPhone(formatPhone(personPhone)); }}
+          placeholder="(555) 123-4567"
+          keyboardType="phone-pad"
+          textContentType="telephoneNumber"
+          autoComplete="tel"
+          hint={personPhone.trim() && !phoneOk ? 'That doesn’t look like a phone number yet.' : undefined}
+        />
+        <Field
+          label="Email"
+          value={personEmail}
+          onChangeText={setPersonEmail}
+          placeholder="Optional"
+          keyboardType="email-address"
+          textContentType="emailAddress"
+          autoComplete="email"
+          autoCapitalize="none"
+          autoCorrect={false}
+          hint={emailOk ? undefined : 'That doesn’t look like an email address.'}
+        />
         <Field
           label="Note"
           value={personNote}

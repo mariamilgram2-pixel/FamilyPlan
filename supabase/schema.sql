@@ -1,5 +1,5 @@
 -- ============================================================
--- FamilyPlan – Supabase Schema
+-- sheep – Supabase Schema
 -- Run this in the Supabase SQL Editor (Project → SQL Editor)
 -- ============================================================
 
@@ -67,6 +67,7 @@ CREATE TABLE public.contacts (
   email       TEXT,
   note        TEXT,
   avatar_url  TEXT,                                   -- a photo you set for them
+  phone       TEXT,                                   -- their number, typed or from your phone's contacts
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -550,13 +551,14 @@ CREATE POLICY "Users delete their own or their group's categories"
 
 -- ─── Connected calendars ─────────────────────────────────────
 -- One row per external calendar a person lets Sheep consult. Rows are
--- created by the server after the provider's sign-in (never by the app), and
--- only read: Sheep never writes to an external calendar.
+-- created by the server after the provider's sign-in, or by
+-- sync_device_calendars() for calendars read on your phone (never inserted
+-- by the app directly), and only read: Sheep never writes to an external calendar.
 
 CREATE TABLE IF NOT EXISTS public.calendar_connections (
   id                      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id                 UUID        NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-  provider                TEXT        NOT NULL CHECK (provider IN ('google', 'apple', 'outlook', 'ics')),
+  provider                TEXT        NOT NULL CHECK (provider IN ('google', 'apple', 'outlook', 'ics', 'device')),   -- device: read on the phone
   remote_calendar_id      TEXT        NOT NULL,
   calendar_name           TEXT,
   account_label           TEXT,       -- e.g. the account's email; owner-only like the rest
@@ -625,6 +627,69 @@ CREATE POLICY "Users disconnect their own calendars"
 DROP POLICY IF EXISTS "Users see their own synced events" ON public.calendar_occurrences;
 CREATE POLICY "Users see their own synced events"
   ON public.calendar_occurrences FOR SELECT USING (owner_user_id = auth.uid());
+
+-- Phone calendars: the app reads them on the phone and saves them here (20261107_phone_calendars.sql).
+-- p_calendars: [{ id, name, account, events: [{ id, start, end, all_day, tz, busy, title }] }]
+-- p_from / p_to: the window the phone read; at most 120 days.
+-- Returns how many calendars were saved.
+CREATE OR REPLACE FUNCTION public.sync_device_calendars(p_calendars JSONB, p_from TIMESTAMPTZ, p_to TIMESTAMPTZ)
+RETURNS INT LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  me   UUID := auth.uid();
+  cal  JSONB;
+  conn UUID;
+  n    INT := 0;
+BEGIN
+  IF me IS NULL THEN
+    RAISE EXCEPTION 'Sign in first';
+  END IF;
+  IF p_to <= p_from OR p_to - p_from > INTERVAL '120 days' THEN
+    RAISE EXCEPTION 'Sync window must be under 120 days';
+  END IF;
+  IF jsonb_typeof(p_calendars) <> 'array' OR jsonb_array_length(p_calendars) > 50 THEN
+    RAISE EXCEPTION 'Send up to 50 calendars';
+  END IF;
+
+  FOR cal IN SELECT * FROM jsonb_array_elements(p_calendars) LOOP
+    IF coalesce(cal->>'id', '') = '' THEN CONTINUE; END IF;
+
+    INSERT INTO public.calendar_connections
+      (user_id, provider, remote_calendar_id, calendar_name, account_label, permissions,
+       sync_status, synced_from, synced_to, last_synced_at, last_error)
+    VALUES
+      (me, 'device', left(cal->>'id', 300), left(cal->>'name', 200), left(cal->>'account', 200), 'read',
+       'ok', p_from, p_to, NOW(), NULL)
+    ON CONFLICT (user_id, provider, remote_calendar_id) DO UPDATE SET
+      calendar_name  = EXCLUDED.calendar_name,
+      account_label  = EXCLUDED.account_label,
+      sync_status    = 'ok',
+      synced_from    = EXCLUDED.synced_from,
+      synced_to      = EXCLUDED.synced_to,
+      last_synced_at = NOW(),
+      last_error     = NULL
+    RETURNING id INTO conn;
+
+    DELETE FROM public.calendar_occurrences WHERE connection_id = conn;
+
+    INSERT INTO public.calendar_occurrences
+      (connection_id, owner_user_id, source, external_id, start_at, end_at, all_day, timezone, busy_status, title)
+    SELECT conn, me, 'device', left(e->>'id', 300),
+           (e->>'start')::timestamptz, (e->>'end')::timestamptz,
+           coalesce((e->>'all_day')::boolean, false),
+           left(e->>'tz', 64),
+           CASE WHEN e->>'busy' IN ('busy', 'tentative', 'free', 'out_of_office') THEN e->>'busy' ELSE 'busy' END,
+           left(e->>'title', 300)
+    FROM jsonb_array_elements(coalesce(cal->'events', '[]'::jsonb)) AS e
+    WHERE coalesce(e->>'id', '') <> ''
+      AND (e->>'end')::timestamptz > (e->>'start')::timestamptz
+    LIMIT 3000
+    ON CONFLICT (connection_id, external_id, start_at) DO NOTHING;
+
+    n := n + 1;
+  END LOOP;
+  RETURN n;
+END;
+$$;
 
 -- Include or leave out a calendar without disconnecting it. The only change
 -- the app makes to a connection; sync state is the server's to set.
@@ -915,3 +980,32 @@ BEGIN
   WHERE id = p_idea;
 END;
 $$;
+
+-- ─── Deleting your account (20261107_delete_account.sql) ─────
+CREATE OR REPLACE FUNCTION public.delete_my_account()
+RETURNS VOID LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  me UUID := auth.uid();
+  my_groups UUID[];
+BEGIN
+  IF me IS NULL THEN
+    RAISE EXCEPTION 'Sign in first';
+  END IF;
+
+  SELECT coalesce(array_agg(group_id), '{}') INTO my_groups FROM public.group_members WHERE user_id = me;
+
+  UPDATE public.events SET attendees = array_remove(attendees, me) WHERE me = ANY(attendees);
+  UPDATE public.ideas SET audience_user_ids = array_remove(audience_user_ids, me) WHERE me = ANY(audience_user_ids);
+
+  -- Your sign-in; your profile and everything that hangs off it follow.
+  DELETE FROM auth.users WHERE id = me;
+
+  -- Groups nobody is in any more.
+  DELETE FROM public.groups g
+  WHERE g.id = ANY(my_groups)
+    AND NOT EXISTS (SELECT 1 FROM public.group_members m WHERE m.group_id = g.id);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.delete_my_account() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.delete_my_account() TO authenticated;

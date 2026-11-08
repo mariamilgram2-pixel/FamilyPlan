@@ -293,3 +293,12 @@ export const DEMO_CONTACTS: Contact[] = [
   { id: 'c5', owner_id: DEMO_ME, name: 'Priya Nair', email: 'priya@example.com', note: 'Work trivia team', created_at: now },
   { id: 'c6', owner_id: DEMO_ME, name: 'Marcus Hill', email: null, note: null, avatar_url: sheep('plum'), created_at: now },
 ];
+
+// People added by phone number in the demo. Nothing's saved to an account
+// there, so they're kept for the session: every screen lists them with the
+// rest, and reopening a plan still finds them.
+const demoAddedContacts: Contact[] = [];
+export function addDemoContact(ct: Contact) { demoAddedContacts.push(ct); }
+export function demoContacts(): Contact[] {
+  return [...DEMO_CONTACTS, ...demoAddedContacts].sort((a, b) => a.name.localeCompare(b.name));
+}

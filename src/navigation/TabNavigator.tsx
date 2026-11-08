@@ -27,6 +27,9 @@ import { Icon, IconButton, IconName, Menu, SectionHeader, TAB_BAR_GAP, TAB_BAR_H
 import { useAuth } from '../contexts/AuthContext';
 import { useGroup } from '../contexts/GroupContext';
 import { modKey } from '../lib/shortcuts';
+import { usePhoneCalendarSync } from '../lib/phoneCalendars';
+import FirstRunSetup from '../screens/onboarding/FirstRunSetup';
+import { isDemoGroup } from '../lib/demo';
 import { TabParamList } from '../types';
 import { continuous, radius, SIDEBAR_WIDTH, space, useLayout, useTheme } from '../theme';
 
@@ -43,6 +46,9 @@ const DESTINATIONS: { name: keyof TabParamList; label: string; icon: IconName; i
 export default function TabNavigator() {
   const { c } = useTheme();
   const { hasSidebar } = useLayout();
+  // Connected phone calendars sync when the app opens and comes back.
+  const demo = isDemoGroup(useGroup().activeGroup);
+  usePhoneCalendarSync(demo);
   return (
     <PlanComposerProvider>
       <Tab.Navigator
@@ -56,6 +62,8 @@ export default function TabNavigator() {
         <Tab.Screen name="People" component={PeopleScreen} />
         <Tab.Screen name="You" component={ProfileScreen} />
       </Tab.Navigator>
+      {/* A new account's first stop: set up calendars, contacts, birthday… */}
+      <FirstRunSetup demo={demo} />
     </PlanComposerProvider>
   );
 }

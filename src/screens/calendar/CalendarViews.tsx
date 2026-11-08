@@ -265,13 +265,15 @@ export function DayTimeline({ day, rows, header, onOpen, onAdd, infoOf }: {
 // ─── Week ────────────────────────────────────────────────────────────────────
 
 /** Seven rows, Sunday first: the day on the left, its plans as chips on the right. */
-export function WeekRows({ start, byDay, selected, onPickDay, onOpen, infoOf }: {
+export function WeekRows({ start, byDay, selected, onPickDay, onOpen, infoOf, extra }: {
   start: string;
   byDay: Map<string, Row[]>;
   selected: string;
   onPickDay: (key: string) => void;
   onOpen: (r: Row) => void;
   infoOf?: (r: Row) => ChipInfo;
+  /** More for a day under its plans (your events from connected calendars); a day with some isn't empty. */
+  extra?: (key: string) => React.ReactNode;
 }) {
   const { c } = useTheme();
   const today = todayKey();
@@ -282,10 +284,11 @@ export function WeekRows({ start, byDay, selected, onPickDay, onOpen, infoOf }: 
         const isToday = key === today;
         const isSel = key === selected;
         const rows = byDay.get(key) ?? [];
+        const more = extra?.(key) ?? null;
         const dayName = d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
         const divider = { borderTopWidth: i ? StyleSheet.hairlineWidth : 0, borderTopColor: c.separator };
         // Empty days are a thin line, so the days with plans stand out.
-        if (rows.length === 0) {
+        if (rows.length === 0 && !more) {
           return (
             <Tappable
               key={key}
@@ -326,6 +329,7 @@ export function WeekRows({ start, byDay, selected, onPickDay, onOpen, infoOf }: 
             </Tappable>
             <View style={{ flex: 1, minWidth: 0, gap: space.hair, justifyContent: 'center' }}>
               {rows.map(r => <EventChip key={r.id} row={r} day={key} info={infoOf?.(r)} onPress={() => onOpen(r)} />)}
+              {more}
             </View>
           </View>
         );

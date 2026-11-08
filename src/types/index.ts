@@ -198,6 +198,7 @@ export interface Contact {
   email: string | null;
   note: string | null;
   avatar_url?: string | null;        // a photo you set for them
+  phone?: string | null;             // their number, typed or from your phone's contacts
   created_at: string;
 }
 
@@ -254,7 +255,8 @@ export type CategoryInsert = Omit<Category, 'id' | 'created_at' | 'is_default'>;
 
 // ─── Connected calendars (private to their owner) ────────────────────────────
 
-export type CalendarProvider = 'google' | 'apple' | 'outlook' | 'ics';
+/** device: a calendar on your phone (iCloud, or any account added to the phone), read there. */
+export type CalendarProvider = 'google' | 'apple' | 'outlook' | 'ics' | 'device';
 
 export interface CalendarConnection {
   id: string;

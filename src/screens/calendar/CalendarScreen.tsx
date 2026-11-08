@@ -39,7 +39,8 @@ import { daysCovered, fillsDay, isMultiDay, spanLabel, whenOnDay } from '../../l
 import { calendarEvents } from './calendarFilter';
 import { calendarColor, categoryFor, colorFor, tintOf } from '../../lib/calendarColors';
 import { useCalendarColors } from '../../lib/calendarColorsStore';
-import { EventComposer, EventDetail, WorkLine } from './EventViews';
+import { EventComposer, EventDetail, SyncedLines, WorkLine } from './EventViews';
+import { itemsOnDay, useConnectedCalendars } from '../../lib/phoneCalendars';
 import { usePlanComposer } from '../../components/PlanComposer';
 import CommentThread from '../../components/CommentThread';
 import { dateVoters, tallySlots } from '../../lib/rsvp';
@@ -160,7 +161,6 @@ export default function CalendarScreen() {
   };
 
   const fetchAll = useCallback(async () => {
-    if (!activeGroup) return;
     if (isDemo) {
       setRawEvents([...DEMO_EVENTS]);
       setEvents(withOccurrences(DEMO_EVENTS));   // new array: planned ideas add to the demo list
@@ -170,16 +170,23 @@ export default function CalendarScreen() {
     }
     setLoading(true);
     // Every group you're in, plus anything you were invited to from elsewhere.
-    const groupIds = (groups.length ? groups : [activeGroup]).map(g => g.id);
+    // No group yet: just what you're invited to.
+    const groupIds = (groups.length ? groups : activeGroup ? [activeGroup] : []).map(g => g.id);
     const eventQuery = supabase.from('events').select('*, profiles(id, full_name, email)');
+    const none = Promise.resolve({ data: [] as any[] });
     const [{ data: eventData }, { data: ideaRows }, { data: memberRows }] = await Promise.all([
-      (meId ? eventQuery.or(`group_id.in.(${groupIds.join(',')}),attendees.cs.{${meId}}`) : eventQuery.in('group_id', groupIds))
+      (groupIds.length
+        ? (meId ? eventQuery.or(`group_id.in.(${groupIds.join(',')}),attendees.cs.{${meId}}`) : eventQuery.in('group_id', groupIds))
+        : meId ? eventQuery.contains('attendees', [meId]) : eventQuery.limit(0))
         .order('start_time', { ascending: true }),
-      supabase.from('ideas')
-        .select('id, title, group_id, audience_group_ids, audience_user_ids, created_by, created_at, status, proposed_slots, slot_votes, idea_votes(id, user_id)')
-        .in('group_id', groupIds).eq('status', 'proposed'),
-      supabase.from('group_members').select('profiles(id, full_name, email, avatar_url)')
-        .eq('group_id', activeGroup.id),
+      groupIds.length
+        ? supabase.from('ideas')
+            .select('id, title, group_id, audience_group_ids, audience_user_ids, created_by, created_at, status, proposed_slots, slot_votes, idea_votes(id, user_id)')
+            .in('group_id', groupIds).eq('status', 'proposed')
+        : none,
+      activeGroup
+        ? supabase.from('group_members').select('profiles(id, full_name, email, avatar_url)').eq('group_id', activeGroup.id)
+        : none,
     ]);
     setRawEvents((eventData as Event[]) ?? []);
     setEvents(withOccurrences((eventData as Event[]) ?? []));
@@ -468,10 +475,15 @@ export default function CalendarScreen() {
     return days;
   }, [view, selectedDate, week, monthStart, nextMonthStart]);
 
+  // Your events from connected calendars, on your own calendar only. A day
+  // with only those still counts as a day with something on.
+  const synced = useConnectedCalendars(isDemo);
+  const hasSynced = useCallback((k: string) => scope === 'mine' && itemsOnDay(synced.items, k).length > 0, [scope, synced.items]);
+
   // As a list: each day in view that has plans (the day view always shows its day).
   const sections: DaySection[] = useMemo(() => periodDays
-    .filter(k => view === 'day' || (byDay.get(k)?.length ?? 0) > 0)
-    .map(k => daySection(k, byDay.get(k) ?? [])), [periodDays, byDay, view]);
+    .filter(k => view === 'day' || (byDay.get(k)?.length ?? 0) > 0 || hasSynced(k))
+    .map(k => daySection(k, byDay.get(k) ?? [])), [periodDays, byDay, view, hasSynced]);
 
   // Plans visible in the view (the month grid itself lists none).
   const periodRows: Row[] = useMemo(
@@ -491,8 +503,12 @@ export default function CalendarScreen() {
   const upcomingTo = addDays(upcomingFrom, Math.max(upcomingDays, 1) - 1);
   const upcoming: DaySection[] = useMemo(() => {
     if (!upcomingDays) return [];
-    return Array.from(byDay.keys()).filter(k => k >= upcomingFrom && k <= upcomingTo).sort().map(k => daySection(k, byDay.get(k)!));
-  }, [byDay, upcomingDays, upcomingFrom, upcomingTo]);
+    const keys: string[] = [];
+    for (let k = upcomingFrom; k <= upcomingTo; k = addDays(k, 1)) {
+      if ((byDay.get(k)?.length ?? 0) > 0 || hasSynced(k)) keys.push(k);
+    }
+    return keys.map(k => daySection(k, byDay.get(k) ?? []));
+  }, [byDay, upcomingDays, upcomingFrom, upcomingTo, hasSynced]);
 
   // Keep a sensible event selected for the detail column.
   useEffect(() => {
@@ -515,6 +531,7 @@ export default function CalendarScreen() {
   useShortcut('n', () => newPlan());
   useShortcut('t', () => setSelectedDate(todayKey()));
   const workSchedules = useWorkSchedules();
+  const syncedLine = (key: string) => scope === 'mine' ? <SyncedLines day={key} items={itemsOnDay(synced.items, key)} /> : null;
 
   // ─── Pieces ────────────────────────────────────────────────────────────────
   // Which calendar: yours (everything you're in, across groups) or one
@@ -642,7 +659,7 @@ export default function CalendarScreen() {
         <Txt v="headline" accessibilityRole="header">{section.title}</Txt>
         {section.subtitle ? <Txt v="callout" tone="secondary">{section.subtitle}</Txt> : null}
       </View>
-      <WorkLine day={workOn(workSchedules, section.key)} />
+      <WorkLine day={workOn(workSchedules, section.key)} />{syncedLine(section.key)}
     </View>
   );
 
@@ -686,7 +703,7 @@ export default function CalendarScreen() {
       {sections.map(s => (
         <View key={s.key}>
           {sectionHeader(s)}
-          {s.data.length ? s.data.map(r => rowView(r, s.key)) : (
+          {s.data.length ? s.data.map(r => rowView(r, s.key)) : hasSynced(s.key) ? null : (
             <ListRow title="Nothing planned" subtitle={scope === 'mine' ? 'Make plans for this day' : 'Add something for this day'} tintTitle={false} onPress={() => newPlan(s.key)} icon="add-circle-outline" />
           )}
         </View>
@@ -702,13 +719,13 @@ export default function CalendarScreen() {
       <DayTimeline
         day={selectedDate}
         rows={byDay.get(selectedDate) ?? []}
-        header={<View style={{ paddingHorizontal: space.m }}><WorkLine day={workOn(workSchedules, selectedDate)} /></View>}
+        header={<View style={{ paddingHorizontal: space.m }}><WorkLine day={workOn(workSchedules, selectedDate)} />{syncedLine(selectedDate)}</View>}
         onOpen={openRow}
         onAdd={() => newPlan(selectedDate)}
         infoOf={chipInfo}
       />
     ) : view === 'week' ? (
-      <WeekRows start={week} byDay={byDay} selected={selectedDate} onPickDay={openDay} onOpen={openRow} infoOf={chipInfo} />
+      <WeekRows start={week} byDay={byDay} selected={selectedDate} onPickDay={openDay} onOpen={openRow} infoOf={chipInfo} extra={k => (hasSynced(k) ? syncedLine(k) : null)} />
     ) : (
       <CalendarGrid selected={selectedDate} onSelect={openDay} marked={marked} dots={dots} expanded hideHeader weekStartsOn={weekStartsOn} />
     );
@@ -726,7 +743,7 @@ export default function CalendarScreen() {
             <Txt v="callout" semibold accessibilityRole="header">{s.title}</Txt>
             {s.subtitle ? <Txt v="footnote" tone="secondary">{s.subtitle}</Txt> : null}
           </View>
-          <WorkLine day={workOn(workSchedules, s.key)} />
+          <WorkLine day={workOn(workSchedules, s.key)} />{syncedLine(s.key)}
           {s.data.map(r => <EventChip key={r.id} row={r} day={s.key} info={chipInfo(r)} onPress={() => openRow(r)} />)}
         </View>
       )) : (

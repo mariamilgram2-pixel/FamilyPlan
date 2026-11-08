@@ -24,7 +24,7 @@ import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/nativ
 import { confirmAction, notify } from '../../lib/alert';
 import { supabase } from '../../lib/supabase';
 import {
-  DEMO_COMMENTS, DEMO_CONTACTS, DEMO_EVENTS, DEMO_EXTRA_GROUPS, DEMO_HIDDEN, DEMO_IDEAS, DEMO_MEMBERS, DEMO_ME, DEMO_PEOPLE, isDemoGroup, removeDemoIdea, updateDemoIdea, upsertDemoIdea,
+  DEMO_COMMENTS, demoContacts, DEMO_EVENTS, DEMO_EXTRA_GROUPS, DEMO_HIDDEN, DEMO_IDEAS, DEMO_MEMBERS, DEMO_ME, DEMO_PEOPLE, isDemoGroup, removeDemoIdea, updateDemoIdea, upsertDemoIdea,
 } from '../../lib/demo';
 import { useShortcut } from '../../lib/shortcuts';
 import { sendNotifications } from '../../lib/notifications';
@@ -159,11 +159,10 @@ export default function PlansScreen() {
   const { kept, tidyOfferedAt, keep, markTidyOffered } = useQuietStore(isDemo);
 
   const fetchAll = useCallback(async () => {
-    if (!activeGroup) return;
     if (isDemo) {
       setIdeas(DEMO_IDEAS.map(reconcileDemo));
       setMembers(DEMO_PEOPLE);
-      setContacts(DEMO_CONTACTS);
+      setContacts(demoContacts());
       setHiddenIds(new Set(DEMO_HIDDEN));
       setComments(DEMO_COMMENTS.filter(m => m.idea_id));
       setEvents(DEMO_EVENTS.map(e => ({ ...e })));
@@ -176,7 +175,7 @@ export default function PlansScreen() {
     // shared with you by name.
     const [{ data: ideasData, error }, memberResults, contactsRes, hiddenRes, commentsRes] = await Promise.all([
       supabase.from('ideas')
-        .select('*, profiles(id, full_name, email), idea_votes(id, user_id)')
+        .select('*, profiles!created_by(id, full_name, email), idea_votes(id, user_id)')   // the creator (ideas also link to whoever last edited)
         .order('votes', { ascending: false }),
       groups.length === 0
         ? Promise.resolve([] as { members: Profile[] }[])
@@ -1088,7 +1087,7 @@ export default function PlansScreen() {
         onPickSlot={(slot) => openPlanner(idea, 'options', slot)}
         onSlotVotes={(starts) => handleSlotVotes(idea, starts)}
         personOf={personOf}
-        onOpenEvent={idea.event_id ? () => openEvent(idea) : undefined}
+        onOpenEvent={idea.event_id ? () => afterDetail(() => openEvent(idea)) : undefined}
         onDoAgain={() => doAgain(idea)}
         onSamePeople={() => samePeople(idea)}
         onAddMemories={idea.event_id ? () => addMemories(idea) : undefined}

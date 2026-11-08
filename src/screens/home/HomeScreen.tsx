@@ -109,7 +109,6 @@ function HomeView({ view }: { view: 'start' | 'plans' }) {
   // Your events from the last four months (for "haven't seen") through the
   // next two (for "coming up"), with repeating ones expanded.
   const fetchAll = useCallback(async () => {
-    if (!activeGroup) return;
     const from = new Date(Date.now() - 120 * DAY), to = new Date(Date.now() + 60 * DAY);
     if (isDemo) {
       setEvents(expandEvents(DEMO_EVENTS, from, to));
@@ -118,10 +117,11 @@ function HomeView({ view }: { view: 'start' | 'plans' }) {
       return;
     }
     if (!meId) return;
-    const groupIds = (groups.length ? groups : [activeGroup]).map(g => g.id);
+    const groupIds = (groups.length ? groups : activeGroup ? [activeGroup] : []).map(g => g.id);
+    const events = supabase.from('events').select('*');
     const [{ data: ev }, { data: id }] = await Promise.all([
-      supabase.from('events').select('*')
-        .or(`group_id.in.(${groupIds.join(',')}),attendees.cs.{${meId}}`)
+      // Your groups' plans and anything you're invited to (just the invites before you're in a group).
+      (groupIds.length ? events.or(`group_id.in.(${groupIds.join(',')}),attendees.cs.{${meId}}`) : events.contains('attendees', [meId]))
         .lt('start_time', to.toISOString()),
       // Every idea you can see: your groups', and any shared with you by name.
       supabase.from('ideas').select('*, idea_votes(id, user_id)').eq('status', 'proposed'),
