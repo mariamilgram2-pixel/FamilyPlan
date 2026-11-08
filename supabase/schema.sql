@@ -145,7 +145,8 @@ CREATE TABLE public.notifications (
   actor_id    UUID        REFERENCES public.profiles(id) ON DELETE SET NULL,
   kind        TEXT        NOT NULL CHECK (kind IN (
                 'idea_proposed', 'dates_proposed', 'invite', 'assignment',
-                'rsvp', 'event_changed', 'event_cancelled', 'date_votes', 'comment')),
+                'rsvp', 'event_changed', 'event_cancelled', 'date_votes', 'comment',
+                'friend_request', 'friend_accepted', 'group_added')),
   idea_id     UUID        REFERENCES public.ideas(id) ON DELETE CASCADE,
   event_id    UUID        REFERENCES public.events(id) ON DELETE CASCADE,
   title       TEXT        NOT NULL,
@@ -1009,3 +1010,126 @@ $$;
 
 REVOKE ALL ON FUNCTION public.delete_my_account() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.delete_my_account() TO authenticated;
+
+-- ─── Profile photos ───
+-- Public bucket; only you can change files in "<user id>/". Link saved in profiles.avatar_url.
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES ('avatars', 'avatars', true, 5242880, ARRAY['image/jpeg', 'image/png', 'image/webp', 'image/heic'])
+ON CONFLICT (id) DO NOTHING;
+
+DROP POLICY IF EXISTS "You add your own profile photo" ON storage.objects;
+CREATE POLICY "You add your own profile photo"
+  ON storage.objects FOR INSERT
+  WITH CHECK (bucket_id = 'avatars' AND (storage.foldername(name))[1] = auth.uid()::text);
+
+DROP POLICY IF EXISTS "You replace your own profile photo" ON storage.objects;
+CREATE POLICY "You replace your own profile photo"
+  ON storage.objects FOR UPDATE
+  USING (bucket_id = 'avatars' AND (storage.foldername(name))[1] = auth.uid()::text);
+
+DROP POLICY IF EXISTS "You remove your own profile photo" ON storage.objects;
+CREATE POLICY "You remove your own profile photo"
+  ON storage.objects FOR DELETE
+  USING (bucket_id = 'avatars' AND (storage.foldername(name))[1] = auth.uid()::text);
+
+-- ─── Groups without a shared calendar (like group chats) ───
+ALTER TABLE public.groups ADD COLUMN IF NOT EXISTS shared_calendar BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE public.groups ALTER COLUMN name DROP NOT NULL;
+-- A group's look, editable from its page (Edit): a photo, and a background
+-- color for its cover and flock (one of the calendar palette's colors).
+ALTER TABLE public.groups ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+ALTER TABLE public.groups ADD COLUMN IF NOT EXISTS avatar_color TEXT CHECK (avatar_color IS NULL OR avatar_color ~ '^#[0-9A-Fa-f]{6}$');
+
+-- The groups without a shared calendar that you're in. SECURITY DEFINER, like
+-- my_group_ids(): reading group_members inside its own policy would recurse.
+CREATE OR REPLACE FUNCTION public.my_plain_group_ids()
+RETURNS SETOF UUID LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT gm.group_id FROM public.group_members gm
+  JOIN public.groups g ON g.id = gm.group_id
+  WHERE gm.user_id = auth.uid() AND NOT g.shared_calendar;
+$$;
+
+DROP POLICY IF EXISTS "Members add people to their groups" ON public.group_members;
+CREATE POLICY "Members add people to their groups"
+  ON public.group_members FOR INSERT
+  WITH CHECK (group_id IN (SELECT public.my_plain_group_ids()) AND role = 'member');
+
+DROP POLICY IF EXISTS "Members remove people from their groups" ON public.group_members;
+CREATE POLICY "Members remove people from their groups"
+  ON public.group_members FOR DELETE
+  USING (group_id IN (SELECT public.my_plain_group_ids()));
+
+DROP POLICY IF EXISTS "Members rename their groups" ON public.groups;
+CREATE POLICY "Members rename their groups"
+  ON public.groups FOR UPDATE
+  USING (id IN (SELECT public.my_plain_group_ids()))
+  WITH CHECK (NOT shared_calendar);
+
+-- ═══ Friends on sheep (requests; finding people by exact number or email) ═══
+-- ─── Your number, for being found ───────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS public.profile_phones (
+  user_id     UUID        PRIMARY KEY REFERENCES public.profiles(id) ON DELETE CASCADE,
+  phone_key   TEXT        NOT NULL CHECK (phone_key ~ '^[0-9]{7,15}$'),   -- digits; the last 10 for longer numbers
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS profile_phones_key ON public.profile_phones (phone_key);
+ALTER TABLE public.profile_phones ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "You see your own number" ON public.profile_phones;
+CREATE POLICY "You see your own number" ON public.profile_phones FOR SELECT USING (user_id = auth.uid());
+DROP POLICY IF EXISTS "You add your own number" ON public.profile_phones;
+CREATE POLICY "You add your own number" ON public.profile_phones FOR INSERT WITH CHECK (user_id = auth.uid());
+DROP POLICY IF EXISTS "You change your own number" ON public.profile_phones;
+CREATE POLICY "You change your own number" ON public.profile_phones FOR UPDATE USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+DROP POLICY IF EXISTS "You remove your own number" ON public.profile_phones;
+CREATE POLICY "You remove your own number" ON public.profile_phones FOR DELETE USING (user_id = auth.uid());
+
+-- ─── Friendships ────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS public.friendships (
+  id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  requester_id  UUID        NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  addressee_id  UUID        NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  status        TEXT        NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted')),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  accepted_at   TIMESTAMPTZ,
+  CHECK (requester_id <> addressee_id)
+);
+-- One friendship per pair, whoever asked.
+CREATE UNIQUE INDEX IF NOT EXISTS friendships_pair
+  ON public.friendships (LEAST(requester_id, addressee_id), GREATEST(requester_id, addressee_id));
+ALTER TABLE public.friendships ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "You see your friendships" ON public.friendships;
+CREATE POLICY "You see your friendships"
+  ON public.friendships FOR SELECT USING (auth.uid() IN (requester_id, addressee_id));
+DROP POLICY IF EXISTS "You send friend requests" ON public.friendships;
+CREATE POLICY "You send friend requests"
+  ON public.friendships FOR INSERT WITH CHECK (requester_id = auth.uid() AND status = 'pending');
+DROP POLICY IF EXISTS "You accept requests sent to you" ON public.friendships;
+CREATE POLICY "You accept requests sent to you"
+  ON public.friendships FOR UPDATE
+  USING (addressee_id = auth.uid())
+  WITH CHECK (addressee_id = auth.uid() AND status = 'accepted');
+-- Decline, cancel, or unfriend.
+DROP POLICY IF EXISTS "Either of you can end it" ON public.friendships;
+CREATE POLICY "Either of you can end it"
+  ON public.friendships FOR DELETE USING (auth.uid() IN (requester_id, addressee_id));
+
+-- ─── Finding people on sheep ────────────────────────────────────────────────
+-- Exact matches only: numbers (as phone keys) and/or one email. A number
+-- comes back only if you asked with it, so looking someone up by email never
+-- reveals their number.
+CREATE OR REPLACE FUNCTION public.find_people(p_phones TEXT[] DEFAULT '{}', p_email TEXT DEFAULT NULL)
+RETURNS TABLE (id UUID, full_name TEXT, avatar_url TEXT, phone_key TEXT)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT p.id, p.full_name, p.avatar_url,
+         CASE WHEN pp.phone_key = ANY (p_phones[1:500]) THEN pp.phone_key END
+  FROM public.profiles p
+  LEFT JOIN public.profile_phones pp ON pp.user_id = p.id
+  WHERE auth.uid() IS NOT NULL
+    AND p.id <> auth.uid()
+    AND (pp.phone_key = ANY (p_phones[1:500])
+         OR (NULLIF(trim(p_email), '') IS NOT NULL AND lower(p.email) = lower(trim(p_email))));
+$$;
+REVOKE ALL ON FUNCTION public.find_people(TEXT[], TEXT) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.find_people(TEXT[], TEXT) TO authenticated;

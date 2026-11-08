@@ -5,7 +5,7 @@
 // photo) is one row that discloses its options on demand.
 
 import React, { useEffect, useState } from 'react';
-import { Platform, Share, View } from 'react-native';
+import { Platform, Share, StyleSheet, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
@@ -13,12 +13,16 @@ import { useGroup } from '../contexts/GroupContext';
 import { supabase } from '../lib/supabase';
 import { notify, confirmAction } from '../lib/alert';
 import { DEMO_EXTRA_GROUPS, DEMO_MEMBERS, DEMO_ME, DEMO_EVENTS, isDemoGroup } from '../lib/demo';
-import { useVisibleGroups } from '../components/GroupSwitcher';
+import { useCalendarGroups } from '../components/GroupSwitcher';
 import { ColorMode, PALETTE, PERSONAL, calendarColor, colorName } from '../lib/calendarColors';
 import { useCalendarColors } from '../lib/calendarColorsStore';
 import { exitDemo } from '../navigation/AppNavigator';
 import { Profile, Event, Group } from '../types';
 import Avatar from '../components/Avatar';
+import { SHEEP_AVATARS, SKIN_TONES, SheepLook, parseSheepUrl, sheepAvatarUrl } from '../lib/sheepAvatars';
+import { PickedPhoto, pickProfilePhoto, saveAvatarUrl, uploadProfilePhoto } from '../lib/profilePhoto';
+import { loadMyPhone, saveMyPhone } from '../lib/friends';
+import { formatPhone, looksLikePhone } from '../lib/phone';
 import WorkScheduleSheet from './work/WorkScheduleSheet';
 import { WorkSchedule, summarizePattern, summarizeScope, useWorkSchedules } from '../lib/workSchedule';
 import {
@@ -31,6 +35,7 @@ import { SoftPrefs } from '../lib/availability';
 import { WeekendMode } from '../types';
 import { splitPlace, useSavedPlaces } from '../lib/places';
 import { parseBirthday } from '../lib/birthday';
+import { isCalendar } from '../lib/groups';
 import { useConnectedCalendars } from '../lib/phoneCalendars';
 import ConnectedCalendarsSheet from './calendar/ConnectedCalendarsSheet';
 import SetupSheet from './onboarding/SetupSheet';
@@ -72,7 +77,7 @@ export default function ProfileScreen() {
   const navigation = useNavigation<any>();
   const savedPlaces = useSavedPlaces(user?.id ?? null, isDemo);
 
-  const [avatarUri, setAvatarUri] = useState<string | null>(null);
+  const [demoAvatar, setDemoAvatar] = useState<string | null>(null);   // demo only; signed in, it's on your profile
   const [showEmail, setShowEmail] = useState(false);
   const [sharedWithFriends, setSharedWithFriends] = useState(true);
   const [hiddenFriends, setHiddenFriends] = useState<string[]>([]);
@@ -91,8 +96,8 @@ export default function ProfileScreen() {
     navigation.setParams({ open: undefined });
   }, [route.params?.open]);
   // Same order as the calendar, so a calendar's starting color matches there.
-  const visibleGroups = useVisibleGroups();
-  const allCalendars: Group[] = [...visibleGroups, ...(isDemo ? DEMO_EXTRA_GROUPS.map(g => g.group).filter(g => !visibleGroups.some(v => v.id === g.id)) : [])];
+  const visibleGroups = useCalendarGroups();
+  const allCalendars: Group[] = [...visibleGroups, ...(isDemo ? DEMO_EXTRA_GROUPS.map(g => g.group).filter(g => isCalendar(g) && !visibleGroups.some(v => v.id === g.id)) : [])];
   const calendars = allCalendars.filter(g => !isDemo || visibleGroups.some(v => v.id === g.id) || DEMO_EXTRA_GROUPS.some(x => x.group.id === g.id && x.memberIds.includes(DEMO_ME)));
   const { prefs: suggestPrefs, save: saveSuggestPrefs } = useMyPrefs(user?.id ?? null);
   const workSchedules = useWorkSchedules();
@@ -105,12 +110,11 @@ export default function ProfileScreen() {
 
   useEffect(() => {
     const read = (k: string, fn: (v: any) => void) =>
-      AsyncStorage.getItem(k).then(d => { if (d !== null) fn(k === 'profile_avatar' ? d : JSON.parse(d)); });
+      AsyncStorage.getItem(k).then(d => { if (d !== null) fn(JSON.parse(d)); });
     read('shared_with_friends', setSharedWithFriends);
     read('hidden_friends', setHiddenFriends);
     read('notification_prefs', setNotifPrefs);
     read('default_reminder', setDefaultReminder);
-    read('profile_avatar', setAvatarUri);
     read('show_email', setShowEmail);
   }, []);
 
@@ -133,10 +137,17 @@ export default function ProfileScreen() {
   const setNotif = (key: keyof NotificationPrefs, val: boolean) =>
     persist('notification_prefs', setNotifPrefs)({ ...notifPrefs, [key]: val });
 
-  function setAvatar(uri: string | null) {
-    setAvatarUri(uri);
-    if (uri) AsyncStorage.setItem('profile_avatar', uri);
-    else AsyncStorage.removeItem('profile_avatar');
+  /** Your picture, saved on your profile so everyone you plan with sees it. */
+  async function setAvatar(choice: AvatarChoice) {
+    const local = choice.kind === 'photo' ? choice.photo.uri : choice.kind === 'sheep' ? choice.url : null;
+    if (isDemo || !user) return setDemoAvatar(local);
+    try {
+      const url = choice.kind === 'photo' ? await uploadProfilePhoto(user.id, choice.photo) : local;
+      await saveAvatarUrl(user.id, url);
+      await refreshProfile();
+    } catch (e: any) {
+      notify('Couldn’t update your photo', e?.message ?? String(e));
+    }
   }
 
   // ─── Export (.ics) ─────────────────────────────────────────────────────────
@@ -225,7 +236,7 @@ export default function ProfileScreen() {
   const demoMe = isDemo ? DEMO_MEMBERS[0] : null;
   const displayName = profile?.full_name || user?.email || demoMe?.full_name || 'Guest';
   // Demo: Jordan's portrait until you pick your own.
-  const myPhoto = avatarUri ?? (isDemo ? DEMO_MEMBERS[0].avatar_url : null);
+  const myPhoto = isDemo ? (demoAvatar ?? DEMO_MEMBERS[0].avatar_url ?? null) : (profile?.avatar_url ?? null);
   const me = { id: user?.id ?? 'me', full_name: displayName, avatar_url: myPhoto };
   const reminderLabel = REMINDER_OPTIONS.find(o => o.value === defaultReminder)?.label ?? 'None';
   const hiddenCount = hiddenFriends.filter(id => groupMembers.some(m => m.id === id)).length;
@@ -391,10 +402,86 @@ function parseFavorites(text: string): string[] {
   return text.split(',').map(t => t.trim().slice(0, 30)).filter(Boolean).slice(0, 6);
 }
 
+type AvatarChoice = { kind: 'photo'; photo: PickedPhoto } | { kind: 'sheep'; url: string } | { kind: 'remove' };
+
+/**
+ * The drawn sheep to pick from, four across. Tap one and a bar pops up under
+ * its row with its skin tones, like a hand emoji in iMessage: its own face,
+ * then light to deep. Picking one previews it; Save keeps it.
+ */
+function SheepGrid({ value, onChange }: { value: string | null; onChange: (url: string) => void }) {
+  const { c } = useTheme();
+  const chosen = parseSheepUrl(value);
+  const [open, setOpen] = useState<string | null>(null);   // the sheep whose tones are showing
+  const rows: SheepLook[][] = [];
+  SHEEP_AVATARS.forEach((s, i) => { if (i % 4 === 0) rows.push([]); rows[rows.length - 1].push(s); });
+
+  const face = (id: string, tone: string | null, size: number) => (
+    <Avatar person={{ id: `${id}-${tone ?? ''}`, full_name: id, avatar_url: sheepAvatarUrl(id, tone) }} size={size} />
+  );
+  const pick = (id: string, tone: string | null) => { onChange(sheepAvatarUrl(id, tone)); setOpen(null); };
+
+  return (
+    <View style={{ gap: space.m }}>
+      {rows.map((row, r) => {
+        const col = row.findIndex(s => s.id === open);
+        return (
+          <View key={r} style={{ gap: space.s }}>
+            <View style={{ flexDirection: 'row' }}>
+              {row.map(s => {
+                const on = s.id === chosen?.id;
+                return (
+                  <Tappable
+                    key={s.id}
+                    feedback="opacity"
+                    onPress={() => setOpen(open === s.id ? null : s.id)}
+                    accessibilityLabel={`${s.label} sheep${on ? ', selected' : ''}. Shows skin tones.`}
+                    accessibilityState={{ expanded: open === s.id }}
+                    style={{ width: '25%', alignItems: 'center', gap: space.hair }}
+                  >
+                    <View style={{ padding: 3, borderRadius: 40, borderWidth: 2, borderColor: on ? c.tint : 'transparent' }}>
+                      {face(s.id, on ? chosen!.tone : null, 60)}
+                    </View>
+                    <Txt v="caption" tone={on ? undefined : 'secondary'} semibold={on} numberOfLines={1}>{s.label}</Txt>
+                  </Tappable>
+                );
+              })}
+            </View>
+            {col >= 0 ? (
+              <View>
+                {/* The little point up at the sheep it belongs to. */}
+                <View style={{
+                  position: 'absolute', top: -6, left: `${col * 25 + 12.5}%`, marginLeft: -7,
+                  width: 14, height: 14, backgroundColor: c.card, transform: [{ rotate: '45deg' }],
+                }} />
+                <View style={{
+                  flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+                  paddingVertical: space.s, paddingHorizontal: space.s, borderRadius: 20, backgroundColor: c.card,
+                  shadowColor: c.shadow, shadowOpacity: 0.14, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 4,
+                }}>
+                  <Tappable feedback="opacity" onPress={() => pick(open!, null)} accessibilityLabel={`${row[col].label} sheep, its own face`}>
+                    {face(open!, null, 40)}
+                  </Tappable>
+                  <View style={{ width: StyleSheet.hairlineWidth * 2, height: 32, backgroundColor: c.separator }} />
+                  {SKIN_TONES.map(t => (
+                    <Tappable key={t.id} feedback="opacity" onPress={() => pick(open!, t.id)} accessibilityLabel={`${row[col].label} sheep, ${t.label.toLowerCase()} skin tone`}>
+                      {face(open!, t.id, 40)}
+                    </Tappable>
+                  ))}
+                </View>
+              </View>
+            ) : null}
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
 function EditProfileSheet({ visible, onClose, isDemo, initialName, initialEmail, initialBirthday, initialAbout, initialFavorites, avatarUri, onAvatar, userId, currentEmail, onSaved }: {
   visible: boolean; onClose: () => void; isDemo: boolean; initialName: string; initialEmail: string; initialBirthday: string | null;
   initialAbout: string; initialFavorites: string[];
-  avatarUri: string | null; onAvatar: (u: string | null) => void; userId: string | null; currentEmail: string | null;
+  avatarUri: string | null; onAvatar: (choice: AvatarChoice) => Promise<void>; userId: string | null; currentEmail: string | null;
   onSaved: () => Promise<void>;
 }) {
   const [name, setName] = useState(initialName);
@@ -402,45 +489,45 @@ function EditProfileSheet({ visible, onClose, isDemo, initialName, initialEmail,
   const [birthday, setBirthday] = useState('');
   const [about, setAbout] = useState('');
   const [favorites, setFavorites] = useState('');
-  const [urlMode, setUrlMode] = useState(false);
-  const [photoUrl, setPhotoUrl] = useState('');
+  const [phone, setPhone] = useState('');
+  const [savedPhone, setSavedPhone] = useState('');   // what's saved, to save only a change
+  const [sheepMode, setSheepMode] = useState(false);
+  const [pending, setPending] = useState<AvatarChoice | null>(null);   // a new picture, kept when you Save
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!visible) return;
-    setName(initialName); setEmail(initialEmail); setUrlMode(false); setPhotoUrl('');
+    setName(initialName); setEmail(initialEmail); setSheepMode(false); setPending(null);
     setBirthday(initialBirthday ? initialBirthday.replace('-', '/') : '');
     setAbout(initialAbout); setFavorites(initialFavorites.join(', '));
+    setPhone(''); setSavedPhone('');
+    if (userId && !isDemo) loadMyPhone(userId).then(k => { const f = k ? formatPhone(k) : ''; setPhone(f); setSavedPhone(f); });
   }, [visible]);
 
-  function pickFile() {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'image/*';
-    input.onchange = (e: any) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      if (file.size > 5 * 1024 * 1024) return notify('Too large', 'Choose an image under 5 MB.');
-      const reader = new FileReader();
-      reader.onload = () => onAvatar(reader.result as string);
-      reader.readAsDataURL(file);
-    };
-    input.click();
+  async function fromLibrary() {
+    setSheepMode(false);
+    const photo = await pickProfilePhoto();
+    if (photo) setPending({ kind: 'photo', photo });
   }
 
-  function applyUrl() {
-    const url = photoUrl.trim();
-    if (!/^https?:\/\//.test(url)) return notify('Invalid URL', 'Use a link starting with http:// or https://');
-    onAvatar(url);
-    setUrlMode(false);
-  }
+  // What the picture will be once you Save.
+  const shownAvatar = !pending ? avatarUri : pending.kind === 'photo' ? pending.photo.uri : pending.kind === 'sheep' ? pending.url : null;
 
   async function save() {
     if (!name.trim()) return;
     const bday = parseBirthday(birthday);
     if (bday === undefined) return notify('Check your birthday', 'Use month and day, like 10/23.');
-    if (isDemo || !userId) return notify('Demo mode', 'Sign in to save profile changes.');
+    if (isDemo || !userId) {
+      if (pending) { await onAvatar(pending); onClose(); return; }   // the demo keeps a picture until you leave
+      return notify('Demo mode', 'Sign in to save profile changes.');
+    }
+    if (phone.trim() && !looksLikePhone(phone)) return notify('Check your number', 'That doesn’t look like a phone number.');
     setSaving(true);
+    if (pending) await onAvatar(pending);
+    if (phone.trim() !== savedPhone.trim()) {
+      const phoneError = await saveMyPhone(userId, phone);
+      if (phoneError) { setSaving(false); return notify('Couldn’t save your number', phoneError); }
+    }
     const { error } = await supabase.from('profiles').update({
       full_name: name.trim(), birthday: bday, about: about.trim() || null, favorites: parseFavorites(favorites),
     } as any).eq('id', userId);
@@ -459,25 +546,24 @@ function EditProfileSheet({ visible, onClose, isDemo, initialName, initialEmail,
   }
 
   const photoItems = [
-    ...(Platform.OS === 'web' ? [{ key: 'file', label: 'Choose File…', icon: 'image-outline' as const, onSelect: pickFile }] : []),
-    { key: 'url', label: 'Use Image URL…', icon: 'link-outline' as const, onSelect: () => setUrlMode(true) },
-    ...(avatarUri ? [{ key: 'remove', label: 'Remove Photo', icon: 'trash-outline' as const, destructive: true, onSelect: () => onAvatar(null) }] : []),
+    { key: 'library', label: 'Choose from Library…', icon: 'images-outline' as const, onSelect: fromLibrary },
+    { key: 'sheep', label: 'Pick a Sheep…', icon: 'happy-outline' as const, onSelect: () => setSheepMode(true) },
+    ...(shownAvatar ? [{ key: 'remove', label: 'Remove Photo', icon: 'trash-outline' as const, destructive: true, onSelect: () => { setSheepMode(false); setPending({ kind: 'remove' }); } }] : []),
   ];
 
   return (
     <Sheet visible={visible} onClose={onClose} title="Profile" width={480} action={{ label: 'Save', onPress: save, disabled: !name.trim(), loading: saving }}>
       <View style={{ alignItems: 'center', gap: space.s }}>
-        <Avatar person={{ id: userId ?? 'me', full_name: name || initialName, avatar_url: avatarUri }} size={96} highlight />
-        <Menu title="Profile photo" sections={[{ items: photoItems }]}>
-          {(open) => <Button label="Edit Photo" variant="plain" onPress={open} />}
-        </Menu>
+        <Avatar person={{ id: userId ?? 'me', full_name: name || initialName, avatar_url: shownAvatar }} size={96} highlight />
+        {sheepMode ? (
+          <Button label="Done" variant="plain" onPress={() => setSheepMode(false)} />
+        ) : (
+          <Menu title="Profile photo" sections={[{ items: photoItems }]}>
+            {(open) => <Button label="Edit Photo" variant="plain" onPress={open} />}
+          </Menu>
+        )}
       </View>
-      {urlMode ? (
-        <View style={{ gap: space.s }}>
-          <Field label="Image URL" value={photoUrl} onChangeText={setPhotoUrl} placeholder="https://…" autoCapitalize="none" autoCorrect={false} keyboardType="url" autoFocus onSubmitEditing={applyUrl} />
-          <Button label="Use This Photo" variant="gray" onPress={applyUrl} />
-        </View>
-      ) : null}
+      {sheepMode ? <SheepGrid value={shownAvatar} onChange={(url) => setPending({ kind: 'sheep', url })} /> : null}
       <Field label="Name" value={name} onChangeText={setName} placeholder="Your name" />
       <Field
         label="Birthday"
@@ -500,6 +586,17 @@ function EditProfileSheet({ visible, onClose, isDemo, initialName, initialEmail,
         onChangeText={setFavorites}
         placeholder="Hiking, board games, trying new tacos"
         hint="Separate with commas. Shown on your profile to people you plan with."
+      />
+      <Field
+        label="Phone"
+        value={phone}
+        onChangeText={setPhone}
+        onBlur={() => { if (looksLikePhone(phone)) setPhone(formatPhone(phone)); }}
+        placeholder="Optional"
+        keyboardType="phone-pad"
+        textContentType="telephoneNumber"
+        autoComplete="tel"
+        hint="So friends who have your number can find you and add you. Nobody sees it."
       />
       <Field label="Email" value={email} onChangeText={setEmail} placeholder="you@example.com" keyboardType="email-address" autoCapitalize="none" hint="Changing your email sends a confirmation link." />
     </Sheet>
@@ -612,7 +709,7 @@ function ColorsSheet({ visible, onClose, calendars, order }: { visible: boolean;
           );
         })()}
         {calendars.map(g => {
-          const col = calendarColor(g.id, prefs, order);
+          const col = calendarColor(g.id, prefs, order, g.avatar_color);
           return (
             <ListRow key={g.id} leading={<View style={{ width: 24, alignItems: 'center' }}><Swatch color={col} /></View>} title={g.name}
               trailing={<ColorPick color={col} label={g.name} onPick={cl => setCalendarColor(g.id, cl)} />} />

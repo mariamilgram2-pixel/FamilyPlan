@@ -289,7 +289,7 @@ export function IdeaDetail({ idea, answers, audience, audienceGroupNames, meId, 
       ) : null}
 
       {!draft && (audienceGroupNames.length > 0 || audience.length > 0 || (whiteboard && onShare)) && (
-        <ListSection header="For" separatorInset={64}>
+        <ListSection header="Invited" separatorInset={64}>
           {audienceGroupNames.map(n => (
             <ListRow key={`g-${n}`} leading={<GroupGlyph />} title={n} />
           ))}

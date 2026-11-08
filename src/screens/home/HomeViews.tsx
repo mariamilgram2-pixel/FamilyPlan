@@ -123,6 +123,7 @@ export function TicketRow({ stops }: { stops: Stop[] }) {
             <Txt v="largeTitle" style={[tabularNums, { fontSize: 36, lineHeight: 40 }]}>{st.day}</Txt>
             <Txt v="footnote" semibold numberOfLines={2} style={{ minHeight: 36 }}>{st.title}</Txt>
             <Txt v="caption" tone="secondary" numberOfLines={1}>{st.host ? `${st.time} · ${st.host}` : st.time}</Txt>
+            {st.group ? <Txt v="caption" tone="tint" semibold numberOfLines={1}>{st.group}</Txt> : null}
             {st.people.length ? (
               <View style={{ flexDirection: 'row', marginTop: space.hair }}>
                 {st.people.slice(0, 4).map((p, i) => (
@@ -157,6 +158,7 @@ export function Polaroids({ items, wrap }: { items: Bubble[]; wrap?: boolean }) 
         <View style={{ gap: 1 }}>
           <Txt v="footnote" semibold numberOfLines={1}>{b.label}</Txt>
           {b.caption ? <Txt v="caption" tone="secondary">{b.caption}</Txt> : null}
+          {b.group ? <Txt v="caption" tone="tint" semibold numberOfLines={1}>{b.group}</Txt> : null}
         </View>
         {b.extra ? (
           <Tappable onPress={b.extra.onPress} accessibilityLabel={b.extra.a11y ?? b.extra.label} hitSlop={6}
@@ -294,6 +296,7 @@ export interface Bubble {
   badge: IconName;             // what to do: reply, vote, send, celebrate…
   label: string;               // one or two words
   caption?: string;            // a verb or a tiny when ("Reply", "9d")
+  group?: string | null;       // the group it's for (How was it?)
   strong?: boolean;            // caption in the tint
   a11y: string;                // the full sentence
   onPress: () => void;
@@ -407,6 +410,7 @@ export interface Stop {
   title: string;
   time: string;                // "7 PM"
   host?: string | null;        // "Chloe" / "You" — traditions
+  group?: string | null;       // the group it's for
   people: AvatarPerson[];
   a11y: string;
   onPress: () => void;

@@ -53,9 +53,11 @@ export const PERSONAL = 'personal';
 const PERSONAL_DEFAULT = '#C2566E';   // Rose, apart from the groups' greens and blues
 
 /** A calendar's color: the one you chose, else one from the palette by its place in your list. */
-export function calendarColor(groupId: string | null | undefined, prefs: CalendarColorPrefs, order: string[]): string {
+export function calendarColor(groupId: string | null | undefined, prefs: CalendarColorPrefs, order: string[], own?: string | null): string {
   if (!groupId) return prefs.calendars[PERSONAL] ?? PERSONAL_DEFAULT;
   if (prefs.calendars[groupId]) return prefs.calendars[groupId];
+  // The group's own background (Edit Group), unless you picked a color for it.
+  if (own) return own;
   // Olive is the app's own color, so calendars start from the next one.
   const i = order.indexOf(groupId);
   return PALETTE[((i < 0 ? 0 : i) + 1) % PALETTE.length].color;
@@ -69,7 +71,7 @@ export function categoryFor(key: string | null | undefined, prefs: CalendarColor
 
 /** An event's color, or null for the one-color look. */
 export function colorFor(
-  item: { groupId: string | null | undefined; key: string | null | undefined },
+  item: { groupId: string | null | undefined; key: string | null | undefined; own?: string | null },
   prefs: CalendarColorPrefs,
   order: string[],
 ): string | null {
@@ -78,7 +80,7 @@ export function colorFor(
     const cat = categoryFor(item.key, prefs);
     if (cat) return cat.color;
   }
-  return calendarColor(item.groupId, prefs, order);
+  return calendarColor(item.groupId, prefs, order, item.own);
 }
 
 /** A color at some opacity, for fills behind text. */

@@ -23,6 +23,12 @@ export function formatPhone(s: string): string {
 }
 
 /** The same number, however it's written: the last 10 digits match (so +1 and a missing country code agree). */
+/** A number as sheep matches it: its digits, the last 10 for longer ones (so +1 and no +1 match). Null if too short. */
+export function phoneKey(s: string | null | undefined): string | null {
+  const d = digitsOf(s ?? '');
+  return d.length < 7 ? null : d.slice(-10);
+}
+
 export function samePhone(a: string | null | undefined, b: string | null | undefined): boolean {
   if (!a || !b) return false;
   const da = digitsOf(a), db = digitsOf(b);

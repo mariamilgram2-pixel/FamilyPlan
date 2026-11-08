@@ -1,11 +1,12 @@
 // Everyone you plan with: members across all your groups, and the groups
 // themselves with their member lists. Loaded when a picker opens.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { supabase } from './supabase';
 import { DEMO_EXTRA_GROUPS, DEMO_MEMBERS, DEMO_ME, DEMO_PEOPLE, isDemoGroup } from './demo';
 import { Group, Profile } from '../types';
 import { useGroup } from '../contexts/GroupContext';
+import { useFriends } from './friends';
 
 export interface CirclePerson { profile: Profile; groupIds: string[]; groupNames: string[] }
 export interface CircleGroup { group: Group; memberIds: string[] }
@@ -16,6 +17,7 @@ export function useCircle(active: boolean, meId: string | null) {
   const [circleGroups, setCircleGroups] = useState<CircleGroup[]>([]);
   const [loading, setLoading] = useState(false);
   const isDemo = isDemoGroup(activeGroup);
+  const { friends } = useFriends(active ? meId : null, isDemo);
 
   useEffect(() => {
     if (!active) return;
@@ -55,5 +57,12 @@ export function useCircle(active: boolean, meId: string | null) {
     return () => { cancelled = true; };
   }, [active, groups, activeGroup, isDemo, meId]);
 
-  return { people, groups: circleGroups, loading };
+  // Friends you don't share a group with count too.
+  const withFriends = useMemo(() => {
+    const have = new Set(people.map(p => p.profile.id));
+    const extra = friends.filter(f => !have.has(f.id)).map(f => ({ profile: f, groupIds: [], groupNames: [] }));
+    return extra.length ? [...people, ...extra] : people;
+  }, [people, friends]);
+
+  return { people: withFriends, groups: circleGroups, loading };
 }

@@ -33,6 +33,8 @@ export type Database = {
       idea_votes: Table<IdeaVote, IdeaVoteInsert,
         [ForeignKey<'idea_votes_idea_id_fkey', 'idea_id', 'ideas'>]>;
       contacts: Table<Contact, ContactInsert>;
+      friendships: Table<Friendship, Pick<Friendship, 'requester_id' | 'addressee_id'> & Partial<Pick<Friendship, 'status' | 'accepted_at'>>>;
+      profile_phones: Table<{ user_id: string; phone_key: string; updated_at: string }, { user_id: string; phone_key: string; updated_at?: string }>;
       saved_places: Table<SavedPlace, SavedPlaceInsert>;
       person_notes: Table<PersonNote, PersonNoteInsert>;
       notifications: Table<AppNotification, AppNotificationInsert>;
@@ -48,6 +50,7 @@ export type Database = {
     Views: { [_ in never]: never };
     Functions: {
       claim_assignment: Rpc<{ p_event: string; p_item: string; p_claim: boolean }>;
+      find_people: Rpc<{ p_phones?: string[]; p_email?: string | null }, { id: string; full_name: string | null; avatar_url: string | null; phone_key: string | null }[]>;
       set_rsvp: Rpc<{ p_event: string; p_status: string; p_note?: string | null }>;
       set_slot_votes: Rpc<{ p_idea: string; p_starts: string[] }>;
       set_idea_response: Rpc<{ p_idea: string; p_response: IdeaResponse | 'none' }>;
@@ -83,11 +86,17 @@ export interface Group {
   invite_code: string;
   created_by: string | null;
   created_at: string;
-  // How the shared calendar looks. Not editable yet; when unset, GroupAvatar
-  // picks an emoji from the name and a color from the id.
+  // How it looks, set in Edit on its page. Unset: its flock on the calendar color.
   avatar_emoji?: string | null;
-  avatar_color?: string | null;      // a GROUP_COLORS key
+  avatar_color?: string | null;      // background for its cover and flock: a calendar palette color (#RRGGBB)
   avatar_url?: string | null;        // a photo, like a group chat's
+  /**
+   * Off for a group that's like a group chat: no shared calendar, anyone in it
+   * adds or removes people (see lib/groups). Unset (older rows) means on.
+   */
+  shared_calendar?: boolean;
+  /** False when it has no name of its own and `name` is who's in it (filled in by GroupContext). */
+  named?: boolean;
 }
 
 export type GroupInsert = Omit<Group, 'id' | 'invite_code' | 'created_at'>;
@@ -190,6 +199,16 @@ export interface HiddenIdea { user_id: string; idea_id: string; created_at: stri
 export interface TimeSlot { start: string; end: string; fit?: SlotFit }   // ISO timestamps; fit = calendar fit when suggested
 
 export type IdeaInsert = Omit<Idea, 'id' | 'votes' | 'created_at' | 'profiles' | 'idea_votes' | 'notes_edited_by' | 'notes_edited_at' | 'last_activity_at' | 'last_activity_by'>;
+
+/** A friend request (pending) or a friendship (accepted) between two people on sheep. */
+export interface Friendship {
+  id: string;
+  requester_id: string;
+  addressee_id: string;
+  status: 'pending' | 'accepted';
+  created_at: string;
+  accepted_at: string | null;
+}
 
 export interface Contact {
   id: string;
@@ -329,7 +348,8 @@ export interface AppNotification {
   id: string;
   user_id: string;                   // recipient
   actor_id: string | null;           // who caused it
-  kind: 'idea_proposed' | 'dates_proposed' | 'invite' | 'assignment' | 'rsvp' | 'event_changed' | 'event_cancelled' | 'date_votes' | 'comment';
+  kind: 'idea_proposed' | 'dates_proposed' | 'invite' | 'assignment' | 'rsvp' | 'event_changed' | 'event_cancelled' | 'date_votes' | 'comment'
+    | 'friend_request' | 'friend_accepted' | 'group_added';
   idea_id: string | null;
   event_id: string | null;
   title: string;

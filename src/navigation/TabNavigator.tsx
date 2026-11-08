@@ -22,7 +22,7 @@ import { PlanComposerProvider } from '../components/PlanComposer';
 import PeopleScreen from '../screens/people/PeopleScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import Avatar from '../components/Avatar';
-import { useGroupSheets, useVisibleGroups } from '../components/GroupSwitcher';
+import { useGroupSheets, useCalendarGroups } from '../components/GroupSwitcher';
 import { Icon, IconButton, IconName, Menu, SectionHeader, TAB_BAR_GAP, TAB_BAR_HEIGHT, Tappable, Txt } from '../components/ui';
 import { useAuth } from '../contexts/AuthContext';
 import { useGroup } from '../contexts/GroupContext';
@@ -123,7 +123,7 @@ function Sidebar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
   const { user, profile } = useAuth();
   const { activeGroup, setActiveGroup } = useGroup();
-  const groups = useVisibleGroups();
+  const groups = useCalendarGroups();
   const { openCreate, openJoin, sheets } = useGroupSheets();
   const current = state.routes[state.index].name;
 
@@ -173,7 +173,7 @@ function Sidebar({ state, navigation }: BottomTabBarProps) {
             title="Groups"
             action={
               <Menu sections={[{ items: [
-                { key: 'new', label: 'New Group…', icon: 'add-circle-outline', onSelect: openCreate },
+                { key: 'new', label: 'New Shared Calendar…', icon: 'add-circle-outline', onSelect: openCreate },
                 { key: 'join', label: 'Join with Code…', icon: 'enter-outline', onSelect: openJoin },
               ] }]}>
                 {(open) => <IconButton icon="add" label="Add group" onPress={open} style={{ marginRight: -space.s }} />}

@@ -11,9 +11,10 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { supabase } from '../../lib/supabase';
-import { DEMO_EVENTS, DEMO_IDEAS, DEMO_MEMBERS, DEMO_ME, DEMO_PEOPLE, isDemoGroup } from '../../lib/demo';
+import { DEMO_EVENTS, DEMO_EXTRA_GROUPS, DEMO_IDEAS, DEMO_MEMBERS, DEMO_ME, DEMO_PEOPLE, isDemoGroup } from '../../lib/demo';
 import { expandEvents } from '../../lib/recurrence';
 import { blocksTime, needsReply, replyOf } from '../../lib/rsvp';
 import { awaitingYourDates, hostOf, readyToSend } from '../../lib/plans';
@@ -257,6 +258,7 @@ function HomeView({ view }: { view: 'start' | 'plans' }) {
     setTimeout(() => {
       if (n.event_id) navigation.navigate('Calendar', { eventId: n.event_id });
       else if (n.idea_id) navigation.navigate('Plans', { ideaId: n.idea_id });
+      else if (n.kind === 'friend_request' || n.kind === 'friend_accepted' || n.kind === 'group_added') navigation.navigate('People');
     }, 450);
   }
   function closeInbox() {
@@ -268,6 +270,11 @@ function HomeView({ view }: { view: 'start' | 'plans' }) {
   const shortTime = (iso: string) => { const { hm, ampm } = timeParts(iso); return `${hm.replace(':00', '')} ${ampm}`; };
 
   // ─── Pieces ────────────────────────────────────────────────────────────────
+  // Which group a plan is for, by name (shared calendars and groups alike).
+  const allGroups = useMemo(() => [
+    ...groups, ...(activeGroup ? [activeGroup] : []), ...(isDemo ? DEMO_EXTRA_GROUPS.map(g => g.group) : []),
+  ], [groups, activeGroup, isDemo]);
+  const groupNameOf = (id: string | null | undefined) => (id ? allGroups.find(g => g.id === id)?.name ?? null : null);
   const stops: Stop[] = upNext.map(e => {
     const d = new Date(e.start_time);
     const host = hostOf(e);
@@ -279,6 +286,7 @@ function HomeView({ view }: { view: 'start' | 'plans' }) {
       title: e.title,
       time: startsAt(e),
       host: host ? (host === meId ? 'You' : first(personOf(host))) : null,
+      group: groupNameOf(e.group_id),
       people: e.attendees.filter(id => id !== meId && e.rsvps?.[id] !== 'declined').map(personOf),
       a11y: `${e.title}, ${when(e)}${host ? `, ${host === meId ? 'your turn to host' : `${first(personOf(host))} hosting`}` : ''}`,
       onPress: () => navigation.navigate('Calendar', { eventId: e.id, date: keyOf(e.start_time) }),
@@ -301,6 +309,7 @@ function HomeView({ view }: { view: 'start' | 'plans' }) {
     badge: 'camera',
     label: e.title,
     caption: relativeDay(keyOf(e.start_time)) ?? shortDate(keyOf(e.start_time)),
+    group: groupNameOf(e.group_id),
     a11y: `How was ${e.title}? Add memories.`,
     onPress: () => composer.addMemories(memoryTarget(e)),
     extra: { icon: 'add', label: 'Memories', a11y: `Add memories from ${e.title}`, onPress: () => composer.addMemories(memoryTarget(e)) },
@@ -377,8 +386,10 @@ function HomeView({ view }: { view: 'start' | 'plans' }) {
   const { open: openTile, toggle: toggleTile } = useOpenTile(null);
   const section = (key: string) => ({ open: openTile === key, onToggle: () => toggleTile(key) });
 
+  // Its own header (not ScreenHeader), so it clears the status bar itself.
+  const insets = useSafeAreaInsets();
   const plansView = (
-    <View style={{ gap: space.xl, paddingTop: space.s }}>
+    <View style={{ gap: space.xl, paddingTop: (compact ? insets.top : 0) + space.s }}>
       <View style={{ gap: space.s }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: space.s }}>
           <Txt v="display" accessibilityRole="header">Home</Txt>
@@ -481,12 +492,12 @@ function HomeView({ view }: { view: 'start' | 'plans' }) {
               <Tappable
                 feedback="opacity"
                 onPress={() => composer.newPlan({ pickWho: true })}
-                accessibilityLabel="Plan with someone"
+                accessibilityLabel="Start with who"
                 accessibilityHint="Pick people, then plan with them"
                 style={{ alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: space.hair + 2, paddingVertical: space.hair, paddingHorizontal: space.s, borderRadius: 999 }}
               >
                 <Icon name="person-add-outline" size={15} color={c.tint} />
-                <Txt v="footnote" tone="tint" semibold>Plan with someone</Txt>
+                <Txt v="footnote" tone="tint" semibold>Start with who</Txt>
               </Tappable>
             </View>
           )}

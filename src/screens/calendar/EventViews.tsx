@@ -48,6 +48,8 @@ function GroupBadge({ group, onPress }: { group: Group; onPress?: () => void }) 
 interface DetailProps {
   event: Event;
   attendees: AvatarPerson[];
+  /** People from your contacts invited through the plan, who aren't on sheep (so not in `attendees`). */
+  invitedContacts?: AvatarPerson[];
   meId: string | null;
   group: Group | null;
   onOpenGroup?: () => void;                    // open that group's shared calendar, if you're in it
@@ -79,7 +81,7 @@ const REPLY_OPTIONS: { key: Rsvp; label: string; icon: IconName }[] = [
 ];
 
 /** Event content; the caller provides the scroll container (pane or sheet). */
-export function EventDetail({ event, attendees, meId, group, onOpenGroup, onClaim, onAssign, onRsvp, onEdit, onCancel, onNudge, onDoAgain, onSamePeople, onAddMemories, conversation, category }: DetailProps) {
+export function EventDetail({ event, attendees, invitedContacts = [], meId, group, onOpenGroup, onClaim, onAssign, onRsvp, onEdit, onCancel, onNudge, onDoAgain, onSamePeople, onAddMemories, conversation, category }: DetailProps) {
   const organizer = !!meId && event.created_by === meId;
   const reply = replyOf(event, meId);
   const cancelled = !!event.cancelled_at;
@@ -175,8 +177,14 @@ export function EventDetail({ event, attendees, meId, group, onOpenGroup, onClai
         </View>
       ) : null}
 
-      {(['going', 'maybe', 'declined', 'pending'] as Reply[]).map(status => byStatus[status].length ? (
-        <ListSection key={status} header={`${RSVP_LABEL[status]} · ${byStatus[status].length}`} separatorInset={64}>
+      {(['going', 'maybe', 'declined', 'pending'] as Reply[]).map(status => byStatus[status].length || (status === 'pending' && invitedContacts.length) ? (
+        <ListSection
+          key={status}
+          header={status === 'pending'
+            ? `Invited · ${byStatus.pending.length + invitedContacts.length}`
+            : `${RSVP_LABEL[status]} · ${byStatus[status].length}`}
+          separatorInset={64}
+        >
           {byStatus[status].map(id => {
             const a = personOf(id);
             return (
@@ -189,6 +197,9 @@ export function EventDetail({ event, attendees, meId, group, onOpenGroup, onClai
               />
             );
           })}
+          {status === 'pending' ? invitedContacts.map(p => (
+            <ListRow key={`c-${p.id}`} leading={<Avatar person={p} size={32} />} title={p.full_name ?? 'Someone'} subtitle="Not on sheep yet" />
+          )) : null}
         </ListSection>
       ) : null)}
 

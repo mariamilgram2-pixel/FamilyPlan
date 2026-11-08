@@ -35,8 +35,16 @@ import { FlockCover, GroupFlock } from '../../components/GroupFlock';
 import { useGroupSheets, useVisibleGroups } from '../../components/GroupSwitcher';
 import { IdentityHeader, NotesSection, PersonDetail } from './PersonDetail';
 import { Dotted, GroupCards, NeedsYouSection, PinnedGrid, PinTile } from './PeoplePieces';
-import { keyOf } from '../calendar/dates';
+import { keyOf, relativeDay, shortDate } from '../calendar/dates';
+import { stageOf } from '../../lib/plans';
 import ImportContactsSheet from './ImportContactsSheet';
+import NewGroupSheet from './NewGroupSheet';
+import AddFriendSheet from './AddFriendSheet';
+import EditGroupSheet from './EditGroupSheet';
+import { FoundPerson, findPeople, useFriends } from '../../lib/friends';
+import WhoPicker, { useAudience } from '../ideas/WhoPicker';
+import { addToGroup, isCalendar, removeFromGroup } from '../../lib/groups';
+import { isPastGroup, lastUsedAt } from '../../lib/groupKinds';
 import {
   Button, EmptyState, Field, Icon, IconButton, ListRow, ListSection, Menu, ReadingColumn,
   ScreenHeader, SectionHeader, Sheet, SplitView, Tag, Txt, useBottomClearance,
@@ -59,7 +67,8 @@ const DEMO_CLOSE_FRIENDS = ['person:demo-ana', 'person:demo-chloe', 'person:demo
 const DAY = 86400000;
 
 export default function PeopleScreen() {
-  const { user } = useAuth();
+  const { user, profile: myProfile } = useAuth();
+  const myFirst = myProfile?.full_name?.split(' ')[0] ?? 'Someone';
   const { activeGroup, setActiveGroup, fetchGroups } = useGroup();
   const visibleGroups = useVisibleGroups();
   const { c } = useTheme();
@@ -77,7 +86,17 @@ export default function PeopleScreen() {
   // Close friends: pinned up top. The demo starts with a few.
   const { pins, isPinned, toggle: togglePinRaw } = usePins(isDemo ? DEMO_CLOSE_FRIENDS : []);
 
-  const [people, setPeople] = useState<PersonEntry[]>([]);
+  const [groupPeople, setPeople] = useState<PersonEntry[]>([]);
+  // Friends on sheep: requests, and friends you don't share a group with.
+  const friendsApi = useFriends(meId, isDemo, myFirst);
+  const { friends, incoming, outgoing, statusWith, rowWith } = friendsApi;
+  const [addingFriend, setAddingFriend] = useState(false);
+  const people = useMemo(() => {
+    const have = new Set(groupPeople.map(p => p.profile.id));
+    const extra = friends.filter(f => !have.has(f.id)).map(f => ({ profile: f, groups: [] as { id: string; name: string }[] }));
+    return extra.length ? [...groupPeople, ...extra].sort((a, b) =>
+      (a.profile.full_name ?? a.profile.email ?? '').localeCompare(b.profile.full_name ?? b.profile.email ?? '')) : groupPeople;
+  }, [groupPeople, friends]);
   const [membersByGroup, setMembersByGroup] = useState<Record<string, Profile[]>>({});
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(false);
@@ -85,10 +104,13 @@ export default function PeopleScreen() {
   const [query, setQuery] = useState('');
   const [planEvents, setPlanEvents] = useState<Event[]>([]);
   const [openIdeas, setOpenIdeas] = useState<Idea[]>([]);
+  const [needsLoaded, setNeedsLoaded] = useState(false);   // until plans load, nothing counts as past
 
   // Person sheet (add / edit contact)
   const [personSheet, setPersonSheet] = useState<null | { editing: Contact | null }>(null);
   const [importing, setImporting] = useState(false);
+  const [newGroup, setNewGroup] = useState(false);   // New Group: like starting a group chat
+  const openNewGroup = () => setNewGroup(true);
   const [personName, setPersonName] = useState('');
   const [personPhone, setPersonPhone] = useState('');
   const [personEmail, setPersonEmail] = useState('');
@@ -153,6 +175,23 @@ export default function PeopleScreen() {
 
   useEffect(() => { load(); }, [load]);
 
+  // People you added who are on sheep (matched by number): offer Add Friend instead of an invite.
+  const [contactOnSheep, setContactOnSheep] = useState<Map<string, FoundPerson>>(new Map());
+  useEffect(() => {
+    if (isDemo || !contacts.length) { setContactOnSheep(new Map()); return; }
+    let cancelled = false;
+    findPeople(contacts.map(ct => ct.phone)).then(found => {
+      if (cancelled) return;
+      const byKey = new Map(found.filter(f => f.phone_key).map(f => [f.phone_key!, f]));
+      setContactOnSheep(new Map(contacts.flatMap(ct => {
+        const d = (ct.phone ?? '').replace(/\D/g, '');
+        const hit = d.length >= 7 ? byKey.get(d.slice(-10)) : undefined;
+        return hit ? [[ct.id, hit] as [string, FoundPerson]] : [];
+      })));
+    });
+    return () => { cancelled = true; };
+  }, [contacts, isDemo]);
+
   // The last four months through the next two: what's open (for the dots)
   // and how long since you saw people (for their status). Refetched on
   // focus, since you answer things elsewhere and come back.
@@ -161,6 +200,7 @@ export default function PeopleScreen() {
     if (isDemo) {
       setPlanEvents(expandEvents(DEMO_EVENTS, from, to));
       setOpenIdeas([...DEMO_IDEAS]);
+      setNeedsLoaded(true);
       return;
     }
     if (!meId || !groups.length) return;
@@ -171,6 +211,7 @@ export default function PeopleScreen() {
     ]);
     setPlanEvents(expandEvents((ev as Event[]) ?? [], from, to));
     setOpenIdeas((id as Idea[]) ?? []);
+    setNeedsLoaded(true);
   }, [isDemo, meId, groups]);
   useFocusEffect(useCallback(() => { loadNeeds(); inbox.refresh(); }, [loadNeeds, inbox.refresh]));
 
@@ -236,7 +277,8 @@ export default function PeopleScreen() {
   }
 
   async function leaveGroup(g: Group) {
-    if (!(await confirmAction('Leave group', `Leave “${g.name}”? You’ll need a new invite code to rejoin.`, 'Leave'))) return;
+    const why = isCalendar(g) ? 'You’ll need a new invite code to rejoin.' : 'You won’t see its plans anymore, unless someone adds you back.';
+    if (!(await confirmAction('Leave group', `Leave “${g.name}”? ${why}`, 'Leave'))) return;
     if (isDemo || !user) return notify('Demo mode', 'Sign in to manage groups.');
     const { error } = await supabase.from('group_members').delete().eq('group_id', g.id).eq('user_id', user.id);
     if (error) return notify('Couldn’t leave', error.message);
@@ -315,13 +357,23 @@ export default function PeopleScreen() {
   const matches = q ? everyone.filter(e => e.kind === 'person'
     ? hit(e.name, handle(e.p.profile.email), ...e.p.groups.map(g => g.name))
     : hit(e.name, handle(e.ct.email), e.ct.note) || phoneMatches(e.ct.phone, q)) : everyone;
-  const groupMatches = q ? groups.filter(g => hit(g.name, g.description)) : [];
+  // Groups match by name, or by anyone in them (so past groups are easy to find).
+  const groupMatches = q ? groups.filter(g => hit(g.name, g.description, ...(membersByGroup[g.id] ?? []).map(m => m.full_name))) : [];
 
   // Pinned ones move up top, out of the lists.
   const unpinned = matches.filter(e => !(e.kind === 'person' ? isPinned('person', e.p.profile.id) : isPinned('contact', e.ct.id)));
   const onSheep = unpinned.filter((e): e is Extract<Entry, { kind: 'person' }> => e.kind === 'person');
-  const notOnSheep = unpinned.filter((e): e is Extract<Entry, { kind: 'contact' }> => e.kind === 'contact');
-  const listedGroups = groups.filter(g => !isPinned('group', g.id));
+  const notOnSheep = unpinned.filter((e): e is Extract<Entry, { kind: 'contact' }> =>
+    e.kind === 'contact' && !(contactOnSheep.get(e.ct.id) && statusWith(contactOnSheep.get(e.ct.id)!.id) === 'friends'));
+  // Groups you haven't used lately step out of the way, into Past groups.
+  const lastUsed = useMemo(() => new Map(groups.map(g => [g.id, lastUsedAt(g, planEvents, openIdeas)])), [groups, planEvents, openIdeas]);
+  const pastGroups = !needsLoaded ? [] : groups.filter(g => g.id !== activeGroup?.id && !isPinned('group', g.id) && isPastGroup(g, lastUsed.get(g.id) ?? 0))
+    .sort((a, b) => (lastUsed.get(b.id) ?? 0) - (lastUsed.get(a.id) ?? 0));
+  const listedGroups = groups.filter(g => !isPinned('group', g.id) && !pastGroups.includes(g));
+  const [pastOpen, setPastOpen] = useState(false);
+  // Edit Group (top right of a group's page): anyone in a group, a shared calendar's admin.
+  const [editingGroup, setEditingGroup] = useState<Group | null>(null);
+  const canEdit = (g: Group) => isDemo || !isCalendar(g) || g.created_by === meId;
 
   const shortDay = (mmdd: string) => {
     const [m, d] = mmdd.split('-').map(Number);
@@ -353,9 +405,11 @@ export default function PeopleScreen() {
     <Menu
       title="Add"
       sections={[{ items: [
-        { key: 'person', label: 'Add Person…', icon: 'person-add-outline', onSelect: () => openPersonSheet(null) },
+        { key: 'friend', label: 'Add Friend…', icon: 'person-add-outline', onSelect: () => setAddingFriend(true) },
+        { key: 'person', label: 'Add Person…', icon: 'create-outline', onSelect: () => openPersonSheet(null) },
         { key: 'contacts', label: 'Add from Contacts…', icon: 'book-outline', onSelect: () => setImporting(true) },
-        { key: 'group', label: 'New Group…', icon: 'add-circle-outline', onSelect: openCreate },
+        { key: 'group', label: 'New Group…', icon: 'people-outline', onSelect: openNewGroup },
+        { key: 'calendar', label: 'New Shared Calendar…', icon: 'calendar-outline', onSelect: openCreate },
         { key: 'join', label: 'Join with Code…', icon: 'enter-outline', onSelect: openJoin },
       ] }]}
     >
@@ -366,7 +420,7 @@ export default function PeopleScreen() {
   // ─── Rows ──────────────────────────────────────────────────────────────────
   const memberLine = (g: Group) => {
     const n = (membersByGroup[g.id] ?? []).length;
-    return `${n} member${n === 1 ? '' : 's'}${g.id === activeGroup?.id ? ' · Active' : ''}`;
+    return isCalendar(g) ? `Shared calendar · ${n}` : `${n} ${n === 1 ? 'person' : 'people'}`;
   };
   const groupRow = (g: Group) => pinMenu('group', g.id, g.name, open => (
     <ListRow
@@ -397,12 +451,25 @@ export default function PeopleScreen() {
       />
     ));
   };
+  // Add Friend, or where a request stands.
+  const friendButton = (userId: string, first: string) => {
+    const status = statusWith(userId);
+    if (status === 'sent') return <Txt v="footnote" tone="secondary">Requested</Txt>;
+    if (status === 'received') {
+      const f = rowWith(userId);
+      return f ? <Button small label="Accept" onPress={() => friendsApi.accept(f)} /> : null;
+    }
+    if (status === 'friends') return <Txt v="footnote" tone="secondary">Friends</Txt>;
+    return <Button small variant="gray" label="Add Friend" onPress={() => friendsApi.send(userId)} />;
+  };
+
   const contactRow = (e: Extract<Entry, { kind: 'contact' }>, searching = false) => pinMenu('contact', e.ct.id, e.name, open => (
     <ListRow
       leading={<Avatar person={{ id: e.ct.id, full_name: e.ct.name, avatar_url: e.ct.avatar_url }} size={32} />}
       title={e.name}
-      subtitle={searching ? ['Not on sheep yet', e.ct.note].filter(Boolean).join(' · ') : e.ct.note}
-      trailing={<IconButton icon="paper-plane-outline" label={`Invite ${firstNameOf(e.name)} to sheep`} onPress={() => inviteToSheep(e.ct)} />}
+      subtitle={contactOnSheep.has(e.ct.id) ? 'On sheep' : searching ? ['Not on sheep yet', e.ct.note].filter(Boolean).join(' · ') : e.ct.note}
+      trailing={contactOnSheep.has(e.ct.id) ? friendButton(contactOnSheep.get(e.ct.id)!.id, firstNameOf(e.name))
+        : <IconButton icon="paper-plane-outline" label={`Invite ${firstNameOf(e.name)} to sheep`} onPress={() => inviteToSheep(e.ct)} />}
       selected={isSel('contact', e.ct.id)}
       onPress={() => setSelection({ kind: 'contact', id: e.ct.id })}
       onLongPress={open}
@@ -426,6 +493,27 @@ export default function PeopleScreen() {
           </ListSection>
         ) : (
           <>
+            {incoming.length ? (
+              <ListSection header="Friend requests" separatorInset={64}>
+                {incoming.map(r => {
+                  const first = (r.person.full_name ?? r.person.email ?? 'them').split(' ')[0];
+                  return (
+                    <ListRow
+                      key={r.friendship.id}
+                      leading={<Avatar person={r.person} size={36} />}
+                      title={r.person.full_name ?? r.person.email}
+                      trailing={
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.hair }}>
+                          <Button small label="Accept" onPress={() => friendsApi.accept(r.friendship)} />
+                          <IconButton icon="close" label={`Decline ${first}’s request`} onPress={() => friendsApi.end(r.friendship)} />
+                        </View>
+                      }
+                    />
+                  );
+                })}
+              </ListSection>
+            ) : null}
+
             {people.length ? (
               <View>
                 <SectionHeader title="Close friends" />
@@ -440,24 +528,30 @@ export default function PeopleScreen() {
             ) : <PinnedGrid tiles={pinTiles} />}
 
             {groups.length === 0 ? (
-              <ListSection header="Groups">
-                <ListRow title="Create or join a group" icon="add-circle-outline" tintTitle onPress={openCreate} />
+              <ListSection header="Groups" footer="Like a group chat, for planning with the same friends: a party, a trip.">
+                <ListRow title="New Group" icon="add-circle-outline" tintTitle onPress={openNewGroup} />
               </ListSection>
-            ) : listedGroups.length ? (
+            ) : listedGroups.length || pastGroups.length ? (
               <View>
                 <SectionHeader title="Groups" />
                 <GroupCards
-                  onNew={openCreate}
+                  onNew={openNewGroup}
                   cards={listedGroups.map(g => ({
                     group: g,
                     members: membersByGroup[g.id] ?? [],
-                    active: g.id === activeGroup?.id,
+                    active: false,
+                    subtitle: memberLine(g),
                     needs: needsOf('group', g.id).length > 0,
                     selected: !!isSel('group', g.id),
                     pinItem: { key: 'pin', label: 'Pin', icon: 'pin', onSelect: () => togglePin('group', g.id) },
                     onPress: () => setSelection({ kind: 'group', id: g.id }),
                   }))}
                 />
+                {pastGroups.length ? (
+                  <View style={{ flexDirection: 'row', marginTop: space.hair }}>
+                    <Button small variant="plain" icon="time-outline" label={`Past groups · ${pastGroups.length}`} onPress={() => setPastOpen(true)} />
+                  </View>
+                ) : null}
               </View>
             ) : null}
 
@@ -544,6 +638,15 @@ export default function PeopleScreen() {
     detailBody = (
       <GroupDetail
         group={selGroup}
+        allGroups={groups}
+        onEdit={threeColumn && canEdit(selGroup) ? () => setEditingGroup(selGroup) : undefined}
+        me={meId ? { id: meId, name: myFirst } : null}
+        onChanged={async () => { await fetchGroups(); load(); }}
+        onPlan={() => closeFirst(() => composer.newPlan({ groups: [selGroup.id] }))}
+        events={planEvents.filter(e => e.group_id === selGroup.id || !!e.invited_group_ids?.includes(selGroup.id))}
+        ideas={openIdeas.filter(i => i.group_id === selGroup.id || (i.audience_group_ids ?? []).includes(selGroup.id))}
+        onOpenEvent={(e) => closeFirst(() => navigation.navigate('Calendar', { eventId: e.series_id ?? e.id, date: keyOf(e.start_time) }))}
+        onOpenIdea={(i) => closeFirst(() => navigation.navigate('Plans', { ideaId: i.id }))}
         isActive={selGroup.id === activeGroup?.id}
         meId={meId}
         fallbackMembers={membersByGroup[selGroup.id] ?? []}
@@ -587,6 +690,27 @@ export default function PeopleScreen() {
         onTogglePin={() => togglePin('person', selPerson.profile.id)}
       />
     );
+    const f = rowWith(selPerson.profile.id);
+    const status = statusWith(selPerson.profile.id);
+    const first = (selPerson.profile.full_name ?? 'them').split(' ')[0];
+    detailBody = (
+      <View style={{ gap: space.l }}>
+        {detailBody}
+        <ListSection>
+          {status === 'friends' && f ? (
+            <ListRow icon="person-remove-outline" title="Remove Friend" destructive onPress={async () => {
+              if (await confirmAction('Remove friend', `Remove ${first} as a friend? Groups and plans you share stay.`, 'Remove')) friendsApi.end(f);
+            }} />
+          ) : status === 'received' && f ? (
+            <ListRow icon="person-add-outline" title={`Accept ${first}’s Request`} tintTitle onPress={() => friendsApi.accept(f)} />
+          ) : status === 'sent' ? (
+            <ListRow icon="time-outline" title="Friend request sent" subtitle="Waiting on them" />
+          ) : (
+            <ListRow icon="person-add-outline" title="Add Friend" tintTitle onPress={() => friendsApi.send(selPerson.profile.id)} />
+          )}
+        </ListSection>
+      </View>
+    );
   }
 
   const detail = detailBody ? <ReadingColumn>{detailBody}</ReadingColumn> : (
@@ -598,9 +722,52 @@ export default function PeopleScreen() {
   return (
     <>
       <SplitView list={list} detail={detail} />
+      <EditGroupSheet
+        visible={!!editingGroup}
+        group={editingGroup}
+        memberCount={editingGroup ? (membersByGroup[editingGroup.id] ?? []).length : 0}
+        meId={meId}
+        isDemo={isDemo}
+        onClose={() => {
+          const g = editingGroup;
+          setEditingGroup(null);
+          if (g && !threeColumn) setTimeout(() => setSelection({ kind: 'group', id: g.id }), 450);   // back to its page
+        }}
+        onSaved={async () => { await fetchGroups(); load(); }}
+      />
+      <PastGroupsSheet
+        visible={pastOpen}
+        groups={pastGroups}
+        membersOf={(id) => (membersByGroup[id] ?? []).filter(m => m.id !== meId)}
+        lastUsed={lastUsed}
+        onClose={() => setPastOpen(false)}
+        onOpen={(g) => { setPastOpen(false); setTimeout(() => setSelection({ kind: 'group', id: g.id }), threeColumn ? 0 : 450); }}
+      />
+      <AddFriendSheet
+        visible={addingFriend}
+        onClose={() => setAddingFriend(false)}
+        statusWith={statusWith}
+        outgoing={outgoing}
+        onSend={friendsApi.send}
+        onCancelRequest={friendsApi.end}
+        isDemo={isDemo}
+      />
+      <NewGroupSheet
+        visible={newGroup}
+        groups={groups}
+        isDemo={isDemo}
+        onClose={() => setNewGroup(false)}
+        onCreated={(g) => { load(); if (threeColumn) setSelection({ kind: 'group', id: g.id }); }}
+      />
       <ImportContactsSheet visible={importing} onClose={() => setImporting(false)} demo={isDemo} onAdded={() => load()} />
       {!threeColumn && (
-        <Sheet visible={!!detailBody} onClose={() => setSelection(null)} title={detailTitle} cancelLabel="Done">
+        <Sheet
+          visible={!!detailBody}
+          onClose={() => setSelection(null)}
+          title={detailTitle}
+          cancelLabel="Done"
+          action={selGroup && canEdit(selGroup) ? { label: 'Edit', onPress: () => closeFirst(() => setEditingGroup(selGroup)) } : undefined}
+        >
           {detailBody}
         </Sheet>
       )}
@@ -651,7 +818,100 @@ export default function PeopleScreen() {
 
 // ─── Pieces ──────────────────────────────────────────────────────────────────
 
-function PeopleSearch({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+/**
+ * A group's plans, start to finish: what's coming up, what's still being
+ * planned, and what's happened (where its memories are). Each opens it.
+ */
+function GroupPlans({ group, events, ideas, onOpenEvent, onOpenIdea }: {
+  group: Group; events: Event[]; ideas: Idea[]; onOpenEvent: (e: Event) => void; onOpenIdea: (i: Idea) => void;
+}) {
+  const now = Date.now();
+  // One row per plan, even for one that repeats: its next time, or its last.
+  const once = (list: Event[]) => {
+    const seen = new Set<string>();
+    return list.filter(e => { const k = e.series_id ?? e.id; if (seen.has(k)) return false; seen.add(k); return true; });
+  };
+  const live = events.filter(e => !e.cancelled_at);
+  const coming = once(live.filter(e => new Date(e.end_time).getTime() >= now).sort((a, b) => a.start_time.localeCompare(b.start_time))).slice(0, 4);
+  const past = once(live.filter(e => new Date(e.end_time).getTime() < now).sort((a, b) => b.start_time.localeCompare(a.start_time))).slice(0, 4);
+  const planning = ideas.filter(i => i.status !== 'draft' && (stageOf(i) === 'idea' || stageOf(i) === 'dates'));
+
+  const day = (iso: string) => relativeDay(keyOf(iso)) ?? shortDate(keyOf(iso));
+  const time = (iso: string) => new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).replace(':00', '');
+
+  if (!coming.length && !planning.length && !past.length) {
+    return isCalendar(group) ? null : (
+      <Txt v="footnote" tone="secondary" style={{ paddingHorizontal: space.m }}>No plans yet. Make one and everyone in the group sees it here.</Txt>
+    );
+  }
+  return (
+    <>
+      {coming.length ? (
+        <ListSection header="Coming up" separatorInset={60}>
+          {coming.map(e => (
+            <ListRow key={e.id} icon="calendar-outline" title={e.title} subtitle={`${day(e.start_time)} · ${time(e.start_time)}`} chevron onPress={() => onOpenEvent(e)} />
+          ))}
+        </ListSection>
+      ) : null}
+      {planning.length ? (
+        <ListSection header="Being planned" separatorInset={60}>
+          {planning.map(i => (
+            <ListRow
+              key={i.id}
+              icon={stageOf(i) === 'dates' ? 'time-outline' : 'bulb-outline'}
+              title={i.title}
+              subtitle={stageOf(i) === 'dates' ? ((i.proposed_slots ?? []).length ? 'Picking a date' : 'Finding a time') : 'An idea'}
+              chevron
+              onPress={() => onOpenIdea(i)}
+            />
+          ))}
+        </ListSection>
+      ) : null}
+      {past.length ? (
+        <ListSection header="Past" footer="Open one for its photos and notes, or to add yours." separatorInset={60}>
+          {past.map(e => (
+            <ListRow key={e.id} icon="images-outline" title={e.title} subtitle={day(e.start_time)} chevron onPress={() => onOpenEvent(e)} />
+          ))}
+        </ListSection>
+      ) : null}
+    </>
+  );
+}
+
+/** Groups you haven't used lately: search by the group's name or anyone in it. */
+function PastGroupsSheet({ visible, groups, membersOf, lastUsed, onClose, onOpen }: {
+  visible: boolean; groups: Group[]; membersOf: (groupId: string) => Profile[]; lastUsed: Map<string, number>;
+  onClose: () => void; onOpen: (g: Group) => void;
+}) {
+  const [query, setQuery] = useState('');
+  useEffect(() => { if (visible) setQuery(''); }, [visible]);
+  const q = query.trim().toLowerCase();
+  const names = (g: Group) => membersOf(g.id).map(m => m.full_name ?? m.email ?? '').filter(Boolean);
+  const shown = q ? groups.filter(g => [g.name, ...names(g)].some(n => n.toLowerCase().includes(q))) : groups;
+  const when = (t?: number) => t ? new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: new Date(t).getFullYear() === new Date().getFullYear() ? undefined : 'numeric' }) : null;
+  return (
+    <Sheet visible={visible} onClose={onClose} title="Past groups" cancelLabel="Done" width={480}>
+      <PeopleSearch value={query} onChange={setQuery} placeholder="Search by group or person" autoFocus />
+      <ListSection
+        separatorInset={64}
+        footer={shown.length ? 'Groups you haven’t planned with in a while. Plan with one again and it’s back in Groups.' : `No past group matches “${query.trim()}”.`}
+      >
+        {shown.map(g => (
+          <ListRow
+            key={g.id}
+            leading={<GroupFlock group={g} count={membersOf(g.id).length} size={36} />}
+            title={g.name}
+            subtitle={[when(lastUsed.get(g.id)) && `Last used ${when(lastUsed.get(g.id))}`, names(g).map(n => n.split(' ')[0]).slice(0, 4).join(', ')].filter(Boolean).join(' · ')}
+            chevron
+            onPress={() => onOpen(g)}
+          />
+        ))}
+      </ListSection>
+    </Sheet>
+  );
+}
+
+function PeopleSearch({ value, onChange, placeholder = 'Search friends and groups', autoFocus }: { value: string; onChange: (v: string) => void; placeholder?: string; autoFocus?: boolean }) {
   const { c } = useTheme();
   const [focused, setFocused] = useState(false);
   return (
@@ -666,12 +926,13 @@ function PeopleSearch({ value, onChange }: { value: string; onChange: (v: string
       <TextInput
         value={value}
         onChangeText={onChange}
-        placeholder="Search friends and groups"
+        placeholder={placeholder}
         placeholderTextColor={c.secondaryLabel}
+        autoFocus={autoFocus}
         autoCorrect={false}
         autoCapitalize="none"
         returnKeyType="search"
-        accessibilityLabel="Search friends and groups"
+        accessibilityLabel={placeholder}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
         style={[
@@ -710,21 +971,60 @@ function GroupHero({ group, isActive, memberCount }: { group: Group; isActive: b
   );
 }
 
-function GroupDetail({ group, isActive, meId, fallbackMembers, isDemo, onMakeActive, onLeave, needs, pinRow }: {
-  group: Group; isActive: boolean; meId: string | null; fallbackMembers: Profile[]; isDemo: boolean;
-  onMakeActive: () => void; onLeave: () => void; needs: React.ReactNode; pinRow: React.ReactNode;
+/**
+ * A group's page. A shared calendar: its invite code, members, and Make
+ * Active. A group (like a group chat): Make a Plan, and anyone in it can add
+ * or remove people, rename it, or leave.
+ */
+function GroupDetail({ group, allGroups, onEdit, events, ideas, onOpenEvent, onOpenIdea, isActive, meId, me, fallbackMembers, isDemo, onMakeActive, onLeave, onChanged, onPlan, needs, pinRow }: {
+  group: Group; allGroups: Group[]; onEdit?: () => void;
+  events: Event[]; ideas: Idea[]; onOpenEvent: (e: Event) => void; onOpenIdea: (i: Idea) => void;
+  isActive: boolean; meId: string | null; me?: { id: string; name: string } | null; fallbackMembers: Profile[]; isDemo: boolean;
+  onMakeActive: () => void; onLeave: () => void; onChanged: () => Promise<void>; onPlan: () => void;
+  needs: React.ReactNode; pinRow: React.ReactNode;
 }) {
   const { c } = useTheme();
+  const calendar = isCalendar(group);
   const [members, setMembers] = useState<(Profile & { role?: string })[]>(fallbackMembers);
   const [copied, setCopied] = useState(false);
   const [showAll, setShowAll] = useState(false);
+  const [version, setVersion] = useState(0);
+  // Adding people: the same picker as a plan's, just people on sheep.
+  const [adding, setAdding] = useState(false);
+  const [toAdd, setToAdd] = useState<Set<string>>(new Set());
+  const audience = useAudience(adding, allGroups);
 
   useEffect(() => {
     setShowAll(false);
     if (isDemo) { setMembers(fallbackMembers); return; }
     supabase.from('group_members').select('profiles(id, full_name, email, avatar_url), role').eq('group_id', group.id)
       .then(({ data }) => setMembers((data ?? []).map((r: any) => r.profiles && ({ ...r.profiles, role: r.role })).filter(Boolean)));
-  }, [group.id, isDemo]);
+  }, [group.id, isDemo, version]);
+  useEffect(() => { setAdding(false); }, [group.id]);
+
+  const changed = async () => { setVersion(v => v + 1); await onChanged(); };
+  const demoOnly = () => notify('Demo mode', 'Sign in to change groups.');
+
+  async function addPeople() {
+    setAdding(false);
+    const ids = Array.from(toAdd).filter(id => !members.some(m => m.id === id));
+    if (!ids.length) return;
+    if (isDemo) return demoOnly();
+    const error = await addToGroup(group.id, ids, me ? { id: me.id, name: me.name, groupName: group.name } : undefined);
+    if (error) return notify('Couldn’t add them', error.message);
+    await changed();
+  }
+
+  async function remove(m: Profile) {
+    const first = (m.full_name ?? m.email ?? 'them').split(' ')[0];
+    if (!(await confirmAction('Remove from group', `Remove ${first} from “${group.name}”? They won’t see its plans anymore.`, 'Remove'))) return;
+    if (isDemo) return demoOnly();
+    const error = await removeFromGroup(group.id, m.id);
+    if (error) return notify('Couldn’t remove them', error.message);
+    await changed();
+  }
+
+
 
   async function copy() {
     await Clipboard.setStringAsync(group.invite_code);
@@ -736,9 +1036,35 @@ function GroupDetail({ group, isActive, meId, fallbackMembers, isDemo, onMakeAct
 
   return (
     <View style={{ gap: space.l }}>
+      {onEdit ? (
+        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginBottom: -space.s }}>
+          <Button label="Edit" variant="plain" onPress={onEdit} />
+        </View>
+      ) : null}
       <GroupHero group={group} isActive={isActive} memberCount={members.length} />
 
       {needs}
+
+      {!calendar ? <Button label="Make a Plan" icon="calendar-outline" onPress={onPlan} block /> : null}
+
+      <GroupPlans group={group} events={events} ideas={ideas} onOpenEvent={onOpenEvent} onOpenIdea={onOpenIdea} />
+
+      {!calendar ? (
+        <ListSection header={`People · ${members.length}`} separatorInset={64}>
+          {members.map(m => (
+            <ListRow
+              key={m.id}
+              leading={<Avatar person={m} size={32} highlight={m.id === meId} />}
+              title={m.id === meId ? `${m.full_name ?? m.email} (you)` : (m.full_name ?? m.email)}
+              trailing={m.id !== meId ? (
+                <IconButton icon="close" label={`Remove ${(m.full_name ?? m.email ?? 'them').split(' ')[0]}`} onPress={() => remove(m)} />
+              ) : null}
+            />
+          ))}
+          <ListRow icon="person-add-outline" title="Add People" tintTitle onPress={() => { setToAdd(new Set(members.map(m => m.id))); setAdding(true); }} />
+        </ListSection>
+      ) : null}
+
 
       <View style={{ backgroundColor: c.fill, borderRadius: radius.group, padding: space.m, gap: space.s, ...continuous }}>
         <Txt v="footnote" tone="secondary" style={eyebrow}>Invite code</Txt>
@@ -746,10 +1072,10 @@ function GroupDetail({ group, isActive, meId, fallbackMembers, isDemo, onMakeAct
           <Txt v="title" selectable style={[tabularNums, { flex: 1, letterSpacing: 4 }]}>{group.invite_code}</Txt>
           <Button label={copied ? 'Copied' : 'Copy'} icon={copied ? 'checkmark' : 'copy-outline'} variant="plain" onPress={copy} />
         </View>
-        <Txt v="footnote" tone="secondary">Share this code so others can join.</Txt>
+        <Txt v="footnote" tone="secondary">{calendar ? 'Share this code so others can join.' : 'Or share this code, for friends you can’t find above.'}</Txt>
       </View>
 
-      <ListSection header={`Members · ${members.length}`} separatorInset={64}>
+      {calendar ? <ListSection header={`Members · ${members.length}`} separatorInset={64}>
         {shown.map(m => (
           <ListRow
             key={m.id}
@@ -762,13 +1088,38 @@ function GroupDetail({ group, isActive, meId, fallbackMembers, isDemo, onMakeAct
         {members.length > CHUNK ? (
           <ListRow key="more" title={showAll ? 'Show fewer' : `Show all ${members.length}`} tintTitle onPress={() => setShowAll(x => !x)} />
         ) : null}
-      </ListSection>
+      </ListSection> : null}
 
-      <ListSection>
-        {!isActive && !isDemo ? <ListRow key="active" icon="checkmark-circle-outline" title="Make Active Group" tintTitle onPress={onMakeActive} /> : null}
+      <ListSection footer={calendar ? undefined : 'Everyone in the group sees it and its plans, and anyone in it can add or remove people.'}>
+        {calendar && !isActive && !isDemo ? <ListRow key="active" icon="checkmark-circle-outline" title="Make Active Group" tintTitle onPress={onMakeActive} /> : null}
         {pinRow}
         <ListRow key="leave" icon="exit-outline" title="Leave Group" destructive onPress={onLeave} />
       </ListSection>
+
+      {/* Inside the page (a sheet on iPhone) so it shows on top of it. */}
+      {!calendar ? (
+        <WhoPicker
+          visible={adding}
+          title="Add People"
+          usersOnly
+          onDone={addPeople}
+          onCancel={() => setAdding(false)}
+          loading={audience.loading}
+          groups={[]}
+          people={audience.people}
+          contacts={[]}
+          groupIds={new Set()}
+          userIds={toAdd}
+          contactIds={new Set()}
+          onToggle={(k, id) => {
+            if (k !== 'user' || members.some(m => m.id === id)) return;   // take people out with × on the page
+            const next = new Set(toAdd);
+            if (next.has(id)) next.delete(id); else next.add(id);
+            setToAdd(next);
+          }}
+          onAddPhone={audience.addContact}
+        />
+      ) : null}
     </View>
   );
 }

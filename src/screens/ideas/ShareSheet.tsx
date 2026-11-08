@@ -9,6 +9,9 @@ import Avatar from '../../components/Avatar';
 import GroupAvatar from '../../components/GroupAvatar';
 import { Button, Field, Icon, ListRow, ListSection, Sheet, Tappable, Txt } from '../../components/ui';
 import { continuous, radius, space, useTheme } from '../../theme';
+import MakeGroupRow from '../../components/MakeGroupRow';
+import { useGroup } from '../../contexts/GroupContext';
+import { isDemoGroup } from '../../lib/demo';
 
 export interface ShareTarget { groupIds: string[]; userIds: string[] }
 
@@ -27,6 +30,7 @@ export function AudiencePicker({ groups, people, groupIds, userIds, onChange, hi
   hint?: string;
 }) {
   const { c } = useTheme();
+  const { activeGroup } = useGroup();
   const [query, setQuery] = useState('');
 
   const q = query.trim().toLowerCase();
@@ -100,6 +104,19 @@ export function AudiencePicker({ groups, people, groupIds, userIds, onChange, hi
             <ListRow key={p.id} leading={<Avatar person={p} size={32} />} title={nameOf(p)} checked={userIds.has(p.id)} onPress={() => togglePerson(p.id)} />
           ))}
         </ListSection>
+      ) : null}
+
+      {/* Two or more people picked: keep them together as a group. */}
+      {!q ? (
+        <MakeGroupRow
+          userIds={Array.from(userIds)}
+          names={people.filter(p => userIds.has(p.id)).map(nameOf)}
+          isDemo={isDemoGroup(activeGroup)}
+          onMade={(g, ids) => {
+            const users = new Set(userIds); ids.forEach(id => users.delete(id));
+            onChange(new Set([...groupIds, g.id]), users);
+          }}
+        />
       ) : null}
 
       {q && !shownGroups.length && !shownPeople.length ? (

@@ -11,6 +11,7 @@ import React, { useMemo, useState } from 'react';
 import { Image, StyleProp, View, ViewStyle } from 'react-native';
 import { Group } from '../types';
 import { DEMO_EXTRA_GROUPS, isDemoGroup } from '../lib/demo';
+import { isCalendar } from '../lib/groups';
 import { calendarColor, tintOf } from '../lib/calendarColors';
 import { useCalendarColors } from '../lib/calendarColorsStore';
 import { useGroup } from '../contexts/GroupContext';
@@ -31,10 +32,12 @@ export function useGroupColor() {
   const { activeGroup } = useGroup();
   const isDemo = isDemoGroup(activeGroup);
   const order = useMemo(() => [
-    ...visible.map(g => g.id),
+    ...visible.filter(isCalendar).map(g => g.id),
+    ...visible.filter(g => !isCalendar(g)).map(g => g.id),
     ...(isDemo ? DEMO_EXTRA_GROUPS.map(g => g.group.id).filter(id => !visible.some(v => v.id === id)) : []),
   ], [visible, isDemo]);
-  return (groupId: string) => calendarColor(groupId, prefs, order);
+  const own = useMemo(() => new Map(visible.map(g => [g.id, g.avatar_color ?? null])), [visible]);
+  return (groupId: string, color?: string | null) => calendarColor(groupId, prefs, order, color ?? own.get(groupId));
 }
 
 const POSES = [ART.standing1, ART.grazing1, ART.standing3, ART.lying1, ART.grazing2, ART.sitting1, ART.standing2, ART.lying2];
@@ -78,16 +81,16 @@ function Hill({ w, h, rise, from = -0.25, curve = 1 }: { w: number; h: number; r
   );
 }
 
-function useWash(groupId: string) {
+function useWash(group: FlockGroup) {
   const { isDark } = useTheme();
   const colorOf = useGroupColor();
-  return tintOf(colorOf(groupId), isDark ? 0.4 : 0.26);
+  return tintOf(colorOf(group.id, group.avatar_color), isDark ? 0.4 : 0.26);
 }
 
 /** Round: the group's flock in a circle, one to three sheep by how many of you there are. */
 export function GroupFlock({ group, count = 3, size = 32, style }: { group: FlockGroup; count?: number; size?: number; style?: StyleProp<ViewStyle> }) {
   const { c } = useTheme();
-  const wash = useWash(group.id);
+  const wash = useWash(group);
   const slots = ROUND_SLOTS[Math.max(1, Math.min(3, count)) - 1];
   return (
     <View
@@ -112,7 +115,7 @@ export function FlockCover({ group, count, style, children }: {
   group: FlockGroup; count: number; style?: StyleProp<ViewStyle>; children?: React.ReactNode;
 }) {
   const { c } = useTheme();
-  const wash = useWash(group.id);
+  const wash = useWash(group);
   // Measured, so the hill and the flock fit a card or a full-width header alike.
   const [{ width, height }, setBox] = useState({ width: 0, height: 0 });
   const shown = Math.min(count, CARD_SLOTS.length);

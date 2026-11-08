@@ -36,6 +36,7 @@ import { SearchField, SearchHit, searchIdea } from '../../lib/ideaSearch';
 import { useIdeaSeen } from '../../lib/ideaSeen';
 import { Contact, Event, Group, Idea, IdeaResponse, PlanComment, Profile, Rsvp, Season } from '../../types';
 import { useGroup } from '../../contexts/GroupContext';
+import { useFriends } from '../../lib/friends';
 import { useAuth } from '../../contexts/AuthContext';
 import { AvatarPerson } from '../../components/Avatar';
 import { useVisibleGroups } from '../../components/GroupSwitcher';
@@ -135,6 +136,7 @@ export default function PlansScreen() {
 
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [members, setMembers] = useState<Profile[]>([]);
+  const { friends: friendProfiles } = useFriends(user?.id ?? null, isDemoGroup(activeGroup));
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [audienceFilter, setAudienceFilter] = useState<AudienceFilter>({ kind: 'all' });
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -218,7 +220,12 @@ export default function PlansScreen() {
     navigation.setParams({ ideaId: undefined });
   }, [route.params?.ideaId]);
 
-  const memberById = useMemo(() => new Map(members.map(p => [p.id, p])), [members]);
+  // You're in it too, even on a plan with no group (where no group's members include you).
+  const memberById = useMemo(() => new Map<string, AvatarPerson>([
+    ...(profile ? [[profile.id, profile] as [string, AvatarPerson]] : []),
+    ...friendProfiles.map(p => [p.id, p] as [string, AvatarPerson]),
+    ...members.map(p => [p.id, p] as [string, AvatarPerson]),
+  ]), [members, profile, friendProfiles]);
   const contactById = useMemo(() => new Map(contacts.map(ct => [ct.id, ct])), [contacts]);
   const groupById = useMemo(() => new Map<string, Group>(myGroups.map(g => [g.id, g])), [myGroups]);
   const personOf = (id: string): AvatarPerson => memberById.get(id) ?? { id };

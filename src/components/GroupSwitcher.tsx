@@ -4,9 +4,11 @@ import { notify } from '../lib/alert';
 import { useGroup } from '../contexts/GroupContext';
 import { Field, Menu, MenuSection, Sheet } from './ui';
 import { Group } from '../types';
+import { isCalendar } from '../lib/groups';
 
 // ─── Sheets ──────────────────────────────────────────────────────────────────
 
+/** A group with a shared calendar (public.groups). Groups of friends without one are made in Friends. */
 export function CreateGroupSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const { createGroup } = useGroup();
   const [name, setName] = useState('');
@@ -27,11 +29,19 @@ export function CreateGroupSheet({ visible, onClose }: { visible: boolean; onClo
     <Sheet
       visible={visible}
       onClose={onClose}
-      title="New Group"
+      title="New Shared Calendar"
       width={480}
       action={{ label: 'Create', onPress: submit, disabled: !name.trim(), loading: busy }}
     >
-      <Field label="Name" value={name} onChangeText={setName} placeholder="The Cohens, Book club…" autoFocus returnKeyType="next" />
+      <Field
+        label="Name"
+        value={name}
+        onChangeText={setName}
+        placeholder="The Cohens, Our house…"
+        autoFocus
+        returnKeyType="next"
+        hint="For people who plan together all the time, like family. Everyone who joins sees its calendar. You’ll get a code to invite them."
+      />
       <Field label="Description" value={desc} onChangeText={setDesc} placeholder="Optional — who’s this for?" multiline />
     </Sheet>
   );
@@ -89,7 +99,7 @@ export function useGroupSheets() {
   return { openCreate: () => setMode('create'), openJoin: () => setMode('join'), sheets };
 }
 
-/** All groups the UI should list (demo mode has an active group but no list). */
+/** All groups the UI should list (demo mode has an active group but no list): shared calendars and groups. */
 export function useVisibleGroups(): Group[] {
   const { groups, activeGroup } = useGroup();
   // Memoized: callers use this as an effect dependency.
@@ -97,6 +107,12 @@ export function useVisibleGroups(): Group[] {
     () => (groups.length > 0 ? groups : activeGroup ? [activeGroup] : []),
     [groups, activeGroup],
   );
+}
+
+/** Just the shared calendars: what Calendar, calendar colors and the group switcher list. */
+export function useCalendarGroups(): Group[] {
+  const visible = useVisibleGroups();
+  return useMemo(() => visible.filter(isCalendar), [visible]);
 }
 
 // ─── Switcher: header title menu on compact ─────────────────────────────────
@@ -107,7 +123,7 @@ export function useVisibleGroups(): Group[] {
  */
 export default function GroupSwitcher({ children }: { children: (open: () => void) => React.ReactNode }) {
   const { activeGroup, setActiveGroup } = useGroup();
-  const groups = useVisibleGroups();
+  const groups = useCalendarGroups();
   const { openCreate, openJoin, sheets } = useGroupSheets();
 
   const sections: MenuSection[] = [
@@ -119,7 +135,7 @@ export default function GroupSwitcher({ children }: { children: (open: () => voi
     },
     {
       items: [
-        { key: 'new', label: 'New Group…', icon: 'add-circle-outline', onSelect: openCreate },
+        { key: 'new', label: 'New Shared Calendar…', icon: 'add-circle-outline', onSelect: openCreate },
         { key: 'join', label: 'Join with Code…', icon: 'enter-outline', onSelect: openJoin },
       ],
     },

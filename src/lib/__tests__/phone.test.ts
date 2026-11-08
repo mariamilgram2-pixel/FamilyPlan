@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { digitsOf, firstNameOf, formatPhone, looksLikePhone, phoneMatches, samePhone } from '../phone';
+import { phoneKey, digitsOf, firstNameOf, formatPhone, looksLikePhone, phoneMatches, samePhone } from '../phone';
 
 describe('phone', () => {
   it('tells numbers from names', () => {
@@ -35,5 +35,16 @@ describe('firstNameOf', () => {
   it('keeps a number whole', () => {
     expect(firstNameOf('Lena Brooks')).toBe('Lena');
     expect(firstNameOf('(415) 555-0199')).toBe('(415) 555-0199');
+  });
+});
+
+describe('phoneKey', () => {
+  it('matches with or without the country code', () => {
+    expect(phoneKey('+1 (310) 666-0744')).toBe('3106660744');
+    expect(phoneKey('310-666-0744')).toBe('3106660744');
+  });
+  it('is nothing for too few digits', () => {
+    expect(phoneKey('12345')).toBeNull();
+    expect(phoneKey(null)).toBeNull();
   });
 });
