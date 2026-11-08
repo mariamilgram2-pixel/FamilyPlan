@@ -24,11 +24,15 @@ import { supabase } from '../../lib/supabase';
 import { notify } from '../../lib/alert';
 import { firstNameOf, formatPhone, looksLikePhone, phoneMatches, samePhone } from '../../lib/phone';
 import { PhoneContact, useDeviceContacts } from '../../lib/deviceContacts';
+import { isCalendar } from '../../lib/groups';
+import MakeGroupRow from '../../components/MakeGroupRow';
+import { useFriends } from '../../lib/friends';
 
 export interface PersonInGroup {
   profile: Profile;
   groupIds: string[];
   groupNames: string[];
+  friend?: boolean;        // a friend on sheep
 }
 
 /**
@@ -42,6 +46,7 @@ export function useAudience(active: boolean, groups: Group[]) {
   const [people, setPeople] = useState<PersonInGroup[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(false);
+  const { friends } = useFriends(active ? user?.id ?? null : null, isDemo);
   useEffect(() => {
     if (!active) return;
     let cancelled = false;
@@ -119,7 +124,17 @@ export function useAudience(active: boolean, groups: Group[]) {
     return data as Contact;
   }, [contacts, isDemo, user]);
 
-  return { people, contacts, loading, addContact };
+  // Friends you don't share a group with count too.
+  const withFriends = useMemo(() => {
+    const friendIds = new Set(friends.map(f => f.id));
+    const have = new Set(people.map(p => p.profile.id));
+    return [
+      ...people.map(p => (friendIds.has(p.profile.id) ? { ...p, friend: true } : p)),
+      ...friends.filter(f => !have.has(f.id)).map(f => ({ profile: f, groupIds: [], groupNames: [], friend: true })),
+    ].sort((a, b) => (a.profile.full_name ?? a.profile.email ?? '').localeCompare(b.profile.full_name ?? b.profile.email ?? ''));
+  }, [people, friends]);
+
+  return { people: withFriends, contacts, loading, addContact };
 }
 
 type Kind = 'group' | 'user' | 'contact';
@@ -137,8 +152,13 @@ interface Entry { kind: Kind; id: string; name: string; subtitle: string | null;
 
 export default function WhoPicker({
   visible, onDone, onCancel, loading, groups, people, contacts,
-  groupIds, userIds, contactIds, onToggle, onAddPhone,
+  groupIds, userIds, contactIds, onToggle, onAddPhone, title = 'Add people', usersOnly = false, canMakeGroup = false,
 }: {
+  title?: string;
+  /** Offer "Make this a group" once two or more people are picked (plans). */
+  canMakeGroup?: boolean;
+  /** Just people on sheep (who's in a group): no people you added, phone numbers, or phone contacts. */
+  usersOnly?: boolean;
   visible: boolean;
   onDone: () => void;
   onCancel: () => void;
@@ -155,7 +175,7 @@ export default function WhoPicker({
 }) {
   const { c } = useTheme();
   const { activeGroup } = useGroup();
-  const phoneBook = useDeviceContacts(visible, isDemoGroup(activeGroup));
+  const phoneBook = useDeviceContacts(visible && !usersOnly, isDemoGroup(activeGroup));
   const [query, setQuery] = useState('');
   const [adding, setAdding] = useState<string | null>(null);
   // A typed number being named before it's added.
@@ -167,20 +187,20 @@ export default function WhoPicker({
 
   const entries = useMemo(() => ({
     group: groups.map((g): Entry => ({
-      kind: 'group', id: g.id, name: g.name, subtitle: 'Group', avatar: size => <GroupAvatar group={g} size={size} />,
+      kind: 'group', id: g.id, name: g.name, subtitle: isCalendar(g) ? 'Shared calendar' : 'Group', avatar: size => <GroupAvatar group={g} size={size} />,
     })),
     user: people.map((p): Entry => ({
       kind: 'user', id: p.profile.id, name: p.profile.full_name ?? p.profile.email ?? 'Someone',
-      subtitle: p.groupNames.join(', ') || p.profile.email, avatar: size => <Avatar person={p.profile} size={size} />,
+      subtitle: p.groupNames.join(', ') || (p.friend ? 'Friend' : p.profile.email), avatar: size => <Avatar person={p.profile} size={size} />,
     })),
-    contact: contacts.map((ct): Entry => ({
+    contact: (usersOnly ? [] : contacts).map((ct): Entry => ({
       kind: 'contact', id: ct.id, name: ct.name, phone: ct.phone,
       subtitle: ct.email ?? (ct.phone && !looksLikePhone(ct.name) ? formatPhone(ct.phone) : null),
       avatar: size => !ct.avatar_url && looksLikePhone(ct.name)
         ? <PhoneDisc size={size} />
         : <Avatar person={{ id: ct.id, full_name: ct.name, avatar_url: ct.avatar_url }} size={size} />,
     })),
-  }), [groups, people, contacts]);
+  }), [groups, people, contacts, usersOnly]);
 
   const isOn = (e: Entry) => (e.kind === 'group' ? groupIds : e.kind === 'user' ? userIds : contactIds).has(e.id);
   const all = [...entries.group, ...entries.user, ...entries.contact];
@@ -193,7 +213,7 @@ export default function WhoPicker({
     nameMatches(e.name) || (e.subtitle ?? '').toLowerCase().includes(q) || phoneMatches(e.phone, q)) : [];
 
   // A number typed in: add it, unless it's someone you already have (they're in matches).
-  const typedPhone = looksLikePhone(query) ? formatPhone(query) : null;
+  const typedPhone = !usersOnly && looksLikePhone(query) ? formatPhone(query) : null;
   const typedIsKnown = !!typedPhone && contacts.some(ct => samePhone(ct.phone, typedPhone));
   // Your phone's contacts matching what's typed, leaving out numbers already in your people.
   const phoneMatchesList = q && phoneBook.access === 'granted'
@@ -270,7 +290,7 @@ export default function WhoPicker({
   );
 
   // Your phone's contacts, before access: one row to search them.
-  const askRow = phoneBook.available && (phoneBook.access === 'ask' || phoneBook.access === 'blocked') ? (
+  const askRow = !usersOnly && phoneBook.available && (phoneBook.access === 'ask' || phoneBook.access === 'blocked') ? (
     <ListSection
       header="From your contacts"
       footer={phoneBook.access === 'blocked' ? 'Contacts are turned off for sheep. Turn them on in Settings to search them here.' : undefined}
@@ -297,13 +317,13 @@ export default function WhoPicker({
   );
 
   return (
-    <Sheet visible={visible} onClose={onCancel} title="Add people" action={{ label: 'Done', onPress: onDone }} scroll={false}>
+    <Sheet visible={visible} onClose={onCancel} title={title} action={{ label: 'Done', onPress: onDone }} scroll={false}>
       <View style={{ paddingHorizontal: space.m, paddingBottom: space.s, gap: space.s }}>
         <View>
           <Field
             value={query}
             onChangeText={changeQuery}
-            placeholder="Search people, or type a phone number"
+            placeholder={usersOnly ? 'Search people on sheep' : 'Search people, or type a phone number'}
             autoFocus
             autoCorrect={false}
             autoCapitalize="none"
@@ -312,7 +332,7 @@ export default function WhoPicker({
               if (matches.length === 1) { onToggle(matches[0].kind, matches[0].id); setQuery(''); }
               else if (!matches.length && typedPhone && !typedIsKnown) startNaming(typedPhone);
             }}
-            accessibilityLabel="Search people, or type a phone number"
+            accessibilityLabel={usersOnly ? 'Search people on sheep' : 'Search people, or type a phone number'}
             style={{ paddingLeft: space.xl + space.s }}
           />
           <View pointerEvents="none" style={{ position: 'absolute', left: space.m, top: 0, bottom: 0, justifyContent: 'center' }}>
@@ -346,7 +366,7 @@ export default function WhoPicker({
             {phoneMatchesList.length ? <ListSection header="From your contacts" separatorInset={64}>{phoneMatchesList.map(phoneRow)}</ListSection> : null}
             {!typedRow && !matches.length && !phoneMatchesList.length ? (
               <Txt v="callout" tone="secondary" style={{ paddingHorizontal: space.m }}>
-                {`No one matching “${query.trim()}”.`}{phoneBook.access === 'granted' ? '' : ' Type their phone number to add them.'}
+                {`No one matching “${query.trim()}”.`}{usersOnly ? '' : phoneBook.access === 'granted' ? '' : ' Type their phone number to add them.'}
               </Txt>
             ) : null}
             {phoneMatchesList.length || typedPhone ? null : askRow}
@@ -358,15 +378,15 @@ export default function WhoPicker({
                 {entries.group.map(row)}
               </ListSection>
             ) : null}
-            {entries.user.length ? <ListSection header="People from your groups" separatorInset={64}>{entries.user.map(row)}</ListSection> : null}
+            {entries.user.length ? <ListSection header="People on sheep" separatorInset={64}>{entries.user.map(row)}</ListSection> : null}
             {entries.contact.length ? <ListSection header="Your people" separatorInset={64}>{entries.contact.map(row)}</ListSection> : null}
             {askRow}
-            {phoneBook.access === 'granted' && phoneBook.limited ? (
+            {!usersOnly && phoneBook.access === 'granted' && phoneBook.limited ? (
               <ListSection footer="You let sheep see only some of your contacts.">
                 <ListRow leading={disc('person-add-outline')} title="Allow more contacts" onPress={phoneBook.allowMore} />
               </ListSection>
             ) : null}
-            {phoneBook.access === 'granted' ? (
+            {!usersOnly && phoneBook.access === 'granted' ? (
               <Txt v="footnote" tone="secondary" style={{ paddingHorizontal: space.m }}>
                 Type a name to find someone in your contacts, or type a phone number.
               </Txt>
@@ -375,12 +395,25 @@ export default function WhoPicker({
         ) : (
           <>
             <Txt v="callout" tone="secondary" style={{ paddingHorizontal: space.m }}>
-              You’re not in any groups and haven’t added anyone yet. Type someone’s phone number to add them.
+              {usersOnly
+                ? 'No one on sheep to pick yet. Tap Done, name the group, and share its invite code so friends can join.'
+                : 'You’re not in any groups and haven’t added anyone yet. Type someone’s phone number to add them.'}
             </Txt>
             {askRow}
           </>
         ))}
       </ScrollView>
+      {/* Two or more people picked: keep them together as a group. */}
+      {canMakeGroup && !q && !namingCard ? (
+        <View style={{ paddingHorizontal: space.m, paddingBottom: space.m }}>
+          <MakeGroupRow
+            userIds={Array.from(userIds)}
+            names={people.filter(p => userIds.has(p.profile.id)).map(p => p.profile.full_name ?? p.profile.email ?? 'Someone')}
+            isDemo={isDemoGroup(activeGroup)}
+            onMade={(g, ids) => { ids.forEach(id => onToggle('user', id)); onToggle('group', g.id); }}
+          />
+        </View>
+      ) : null}
     </Sheet>
   );
 }

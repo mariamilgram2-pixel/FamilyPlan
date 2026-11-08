@@ -134,12 +134,13 @@ const CARD_WIDTH = 176;
 const CARD_HEIGHT = 132;
 
 export interface GroupCardData {
-  group: Group;
-  members: Profile[];
+  group: Pick<Group, 'id' | 'name'> & Partial<Group>;
+  members: { id: string }[];
   active: boolean;
   needs: boolean;
   selected: boolean;
-  pinItem: MenuItem;
+  pinItem?: MenuItem;        // long-press to pin (shared calendars)
+  subtitle?: string;         // in place of "N members"
   onPress: () => void;
 }
 
@@ -159,21 +160,23 @@ export function GroupCards({ cards, onNew }: { cards: GroupCardData[]; onNew: ()
       style={{ marginHorizontal: -bleed }}
       contentContainerStyle={{ paddingHorizontal: bleed, gap: space.s }}
     >
-      {cards.map(d => (
-        <Menu key={d.group.id} title={d.group.name} sections={[{ items: [d.pinItem] }]}>
-          {(open) => (
-            <Tappable
-              onPress={d.onPress}
-              onLongPress={open}
-              feedback="opacity"
-              accessibilityLabel={`${d.group.name}, ${d.members.length} members${d.needs ? ', your turn' : ''}`}
-              style={[card, d.selected && { borderWidth: 2, borderColor: c.tint, borderRadius: radius.group + 2 }]}
-            >
-              <GroupCard data={d} />
-            </Tappable>
-          )}
-        </Menu>
-      ))}
+      {cards.map(d => {
+        const tile = (open?: () => void) => (
+          <Tappable
+            key={d.group.id}
+            onPress={d.onPress}
+            onLongPress={open}
+            feedback="opacity"
+            accessibilityLabel={`${d.group.name}, ${d.subtitle ?? `${d.members.length} members`}${d.needs ? ', your turn' : ''}`}
+            style={[card, d.selected && { borderWidth: 2, borderColor: c.tint, borderRadius: radius.group + 2 }]}
+          >
+            <GroupCard data={d} />
+          </Tappable>
+        );
+        return d.pinItem
+          ? <Menu key={d.group.id} title={d.group.name} sections={[{ items: [d.pinItem] }]}>{tile}</Menu>
+          : tile();
+      })}
       <Tappable
         onPress={onNew}
         accessibilityLabel="New group"
@@ -207,7 +210,7 @@ function GroupCard({ data: d }: { data: GroupCardData }) {
       <View>
         <Txt v="title" numberOfLines={2} style={{ color: ink, fontSize: 22, lineHeight: 26 }}>{d.group.name}</Txt>
         <Txt v="footnote" numberOfLines={1} style={{ color: soft }}>
-          {`${d.members.length} member${d.members.length === 1 ? '' : 's'}${d.active ? ' · Active' : ''}`}
+          {d.subtitle ?? `${d.members.length} member${d.members.length === 1 ? '' : 's'}${d.active ? ' · Active' : ''}`}
         </Txt>
       </View>
     </FlockCover>

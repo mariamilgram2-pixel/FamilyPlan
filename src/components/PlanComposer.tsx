@@ -20,6 +20,7 @@ export interface PlanPrefill {
   location?: string;
   notes?: string;
   people?: string[];       // user ids
+  contacts?: string[];     // people you added (contact ids)
   groups?: string[];       // group ids
   date?: string | null;    // YYYY-MM-DD
   start?: string;          // HH:MM

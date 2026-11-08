@@ -239,7 +239,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
       }
     } else {
       setTitle(prefill?.title ?? ''); setDescription(prefill?.notes ?? ''); setLocation(prefill?.location ?? ''); setDate(prefill?.date ?? null);
-      setSelectedGroupIds(new Set(prefill?.groups ?? [])); setSelectedUserIds(new Set(prefill?.people ?? [])); setSelectedContactIds(new Set());
+      setSelectedGroupIds(new Set(prefill?.groups ?? [])); setSelectedUserIds(new Set(prefill?.people ?? [])); setSelectedContactIds(new Set(prefill?.contacts ?? []));
       setPrefs(defaultPrefs({ start: prefill?.start, end: prefill?.end, date: prefill?.date ?? null }));
       setWhen({
         day: prefill?.date ? { kind: 'date', date: prefill.date } : { kind: 'any' },
@@ -1206,6 +1206,7 @@ export default function CreateIdeaSheet({ visible, onClose, onSaved, entry, pref
       onCancel={cancelWho}
       loading={loadingPeople}
       groups={effectiveGroups}
+      canMakeGroup
       people={people}
       contacts={contacts}
       groupIds={selectedGroupIds}

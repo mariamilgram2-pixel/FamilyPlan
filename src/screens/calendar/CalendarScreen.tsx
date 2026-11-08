@@ -19,13 +19,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import { supabase } from '../../lib/supabase';
 import { DEMO_EVENTS, DEMO_EXTRA_GROUPS, DEMO_IDEAS, DEMO_MEMBERS, DEMO_ME, isDemoGroup } from '../../lib/demo';
+import { isCalendar } from '../../lib/groups';
 import { useShortcut } from '../../lib/shortcuts';
 import { Assignment, Event, Group, Idea, Profile, Rsvp, TimeSlot } from '../../types';
 import { useGroup } from '../../contexts/GroupContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { AvatarPerson } from '../../components/Avatar';
 import AvatarStack from '../../components/AvatarStack';
-import { useGroupSheets, useVisibleGroups } from '../../components/GroupSwitcher';
+import { useGroupSheets, useCalendarGroups } from '../../components/GroupSwitcher';
 import { Sheep } from '../../components/Sheep';
 import { GroupFlock } from '../../components/GroupFlock';
 import {
@@ -94,7 +95,7 @@ const afterSheet = (fn: () => void) => setTimeout(fn, Platform.OS === 'ios' ? 45
 
 export default function CalendarScreen() {
   const { activeGroup, groups, setActiveGroup } = useGroup();
-  const visibleGroups = useVisibleGroups();
+  const visibleGroups = useCalendarGroups();   // shared calendars only; groups' plans show on My calendar
   const { user, profile } = useAuth();
   const { c, isDark } = useTheme();
   const { compact, threeColumn } = useLayout();
@@ -110,6 +111,7 @@ export default function CalendarScreen() {
   const [scope, setScope] = useState<Scope>('mine');
   const [editing, setEditing] = useState<Event | null>(null);
   const [nudged, setNudged] = useState<Set<string>>(new Set());
+  const [invitedByEvent, setInvitedByEvent] = useState<Map<string, AvatarPerson[]>>(new Map());   // a plan's contacts, by its event
   const [openIdeas, setOpenIdeas] = useState<Idea[]>([]);   // still proposed: no date yet, or picking one
   const [members, setMembers] = useState<Profile[]>([]);
   const [selectedDate, setSelectedDate] = useState(todayKey());
@@ -193,6 +195,22 @@ export default function CalendarScreen() {
     setOpenIdeas((ideaRows as Idea[]) ?? []);
     setMembers(((memberRows ?? []).map((r: any) => r.profiles).filter(Boolean)) as Profile[]);
     setLoading(false);
+
+    // Contacts invited through a plan aren't on the event (it only holds sheep
+    // accounts), so read them off the plan. Contacts are private: only the
+    // person who added them can see them.
+    const eventIds = ((eventData as Event[]) ?? []).map(e => e.id);
+    const { data: planRows } = eventIds.length && meId
+      ? await supabase.from('ideas').select('event_id, audience_contact_ids').in('event_id', eventIds).eq('created_by', meId)
+      : { data: [] as any[] };
+    const plans = ((planRows ?? []) as { event_id: string; audience_contact_ids: string[] | null }[]).filter(p => p.audience_contact_ids?.length);
+    const contactIds = Array.from(new Set(plans.flatMap(p => p.audience_contact_ids ?? [])));
+    const { data: contactRows } = contactIds.length
+      ? await supabase.from('contacts').select('id, name, email, avatar_url').in('id', contactIds)
+      : { data: [] as any[] };
+    const contactById = new Map(((contactRows ?? []) as { id: string; name: string; email: string | null; avatar_url?: string | null }[])
+      .map(ct => [ct.id, { id: ct.id, full_name: ct.name, email: ct.email, avatar_url: ct.avatar_url ?? null } as AvatarPerson]));
+    setInvitedByEvent(new Map(plans.map(p => [p.event_id, (p.audience_contact_ids ?? []).map(id => contactById.get(id)).filter(Boolean) as AvatarPerson[]])));
   }, [activeGroup, groups, isDemo, meId]);
 
   // Refetch on focus (planning an idea adds events from Plans), and whenever
@@ -213,10 +231,12 @@ export default function CalendarScreen() {
   // ─── Derived ───────────────────────────────────────────────────────────────
   // Names for attendees from any of your groups (invites can cross groups).
   const circle = useCircle(true, meId);
+  // You're in it too: the circle leaves you out, and a plan with no group has no members list.
   const memberById = useMemo(() => new Map<string, Profile>([
+    ...(profile ? [[profile.id, profile] as [string, Profile]] : []),
     ...circle.people.map(p => [p.profile.id, p.profile] as [string, Profile]),
     ...members.map(p => [p.id, p] as [string, Profile]),
-  ]), [members, circle.people]);
+  ]), [members, circle.people, profile]);
 
   // People you're at events with most often, best first.
   const suggestedIds = useMemo(() => {
@@ -349,8 +369,18 @@ export default function CalendarScreen() {
 
   const groupById = useMemo(() => new Map<string, Group>([
     ...visibleGroups.map(g => [g.id, g] as [string, Group]),
-    ...(isDemo ? DEMO_EXTRA_GROUPS.map(g => [g.group.id, g.group] as [string, Group]) : []),
+    ...(isDemo ? DEMO_EXTRA_GROUPS.filter(g => isCalendar(g.group)).map(g => [g.group.id, g.group] as [string, Group]) : []),
   ]), [visibleGroups, isDemo]);
+
+  // A plan's calendar for colors: its group's, if that's a shared calendar; else yours.
+  const calendarOf = (groupId: string | null | undefined) => (groupId && groupById.has(groupId) ? groupId : null);
+  const ownColor = (groupId: string | null | undefined) => (groupId ? groupById.get(groupId)?.avatar_color ?? null : null);
+  // Groups without a shared calendar: their plans are on My calendar, labeled with the group.
+  const plainById = useMemo(() => new Map([...groups, ...(isDemo ? DEMO_EXTRA_GROUPS.map(g => g.group) : [])]
+    .filter(g => !isCalendar(g)).map(g => [g.id, g] as [string, Group])), [groups, isDemo]);
+  /** Which group a row says: a shared calendar's when mixing calendars (or an overlay), a group's always. */
+  const groupLabel = (groupId: string | null | undefined, showCalendar: boolean) =>
+    !groupId ? null : plainById.get(groupId)?.name ?? (showCalendar ? groupById.get(groupId)?.name ?? null : null);
 
   const attendeesOf = useCallback(
     (e: Event) => (e.attendees ?? []).map(id => memberById.get(id)).filter(Boolean) as AvatarPerson[],
@@ -359,7 +389,7 @@ export default function CalendarScreen() {
 
   // Shared calendars you can open: the groups you're in.
   const sharedCalendars: Group[] = useMemo(() => isDemo
-    ? [...visibleGroups, ...DEMO_EXTRA_GROUPS.filter(g => g.memberIds.includes(DEMO_ME)).map(g => g.group)]
+    ? [...visibleGroups, ...DEMO_EXTRA_GROUPS.filter(g => g.memberIds.includes(DEMO_ME) && isCalendar(g.group)).map(g => g.group)]
     : visibleGroups, [isDemo, visibleGroups]);
   const viewGroup = (isDemo ? sharedCalendars.find(g => g.id === demoGroupId) : null) ?? activeGroup;
 
@@ -428,8 +458,8 @@ export default function CalendarScreen() {
   const { prefs: colorPrefs, assign: assignCategory } = useCalendarColors();
   const calendarOrder = useMemo(() => Array.from(groupById.keys()), [groupById]);
   const colorOf = (r: Row) => isMaybe(r)
-    ? colorFor({ groupId: r.idea.group_id, key: null }, colorPrefs, calendarOrder)
-    : colorFor({ groupId: r.group_id, key: r.series_id ?? r.id }, colorPrefs, calendarOrder);
+    ? colorFor({ groupId: calendarOf(r.idea.group_id), key: null, own: ownColor(r.idea.group_id) }, colorPrefs, calendarOrder)
+    : colorFor({ groupId: calendarOf(r.group_id), key: r.series_id ?? r.id, own: ownColor(r.group_id) }, colorPrefs, calendarOrder);
 
   // What each chip says besides when and what (see EventChip).
   const mixed = scope === 'mine' && groupById.size > 1;
@@ -439,7 +469,7 @@ export default function CalendarScreen() {
         color: colorOf(r),
         people: (r.idea.audience_user_ids ?? []).filter(id => id !== meId).map(id => memberById.get(id)).filter(Boolean) as AvatarPerson[],
         place: r.idea.location,
-        group: mixed && r.idea.group_id ? groupById.get(r.idea.group_id)?.name ?? null : null,
+        group: groupLabel(r.idea.group_id, mixed),
         reply: false,
       };
     }
@@ -447,7 +477,7 @@ export default function CalendarScreen() {
       color: r.overlay ? null : colorOf(r),
       people: attendeesOf(r).filter(p => p.id !== meId),
       place: r.location,
-      group: (mixed || r.overlay) && r.group_id ? groupById.get(r.group_id)?.name ?? null : null,
+      group: groupLabel(r.group_id, mixed || !!r.overlay),
       reply: !r.overlay && needsReply(r, meId),
     };
   };
@@ -551,7 +581,7 @@ export default function CalendarScreen() {
     },
     {
       items: [
-        { key: 'new', label: 'New Group…', icon: 'add-circle-outline', onSelect: groupSheets.openCreate },
+        { key: 'new', label: 'New Shared Calendar…', icon: 'add-circle-outline', onSelect: groupSheets.openCreate },
         { key: 'join', label: 'Join with Code…', icon: 'enter-outline', onSelect: groupSheets.openJoin },
       ],
     },
@@ -673,7 +703,7 @@ export default function CalendarScreen() {
       attendees={attendeesOf(item)}
       meId={meId}
       hostName={(() => { const h = hostOf(item); return h ? (h === meId ? 'you' : memberById.get(h)?.full_name?.split(' ')[0] ?? null) : null; })()}
-      groupName={((scope === 'mine' && groupById.size > 1) || item.overlay) && item.group_id ? groupById.get(item.group_id)?.name ?? null : null}
+      groupName={groupLabel(item.group_id, (scope === 'mine' && groupById.size > 1) || !!item.overlay)}
       overlay={!!item.overlay}
       selected={threeColumn && item.id === selectedEventId}
       onPress={() => openRow(item)}
@@ -758,7 +788,7 @@ export default function CalendarScreen() {
     <ScrollView
       // A shared calendar wears its group's color, faintly, edge to edge, so
       // you can tell My Family from Book club at a glance. My calendar stays plain.
-      style={scope === 'group' && viewGroup ? { backgroundColor: tintOf(calendarColor(viewGroup.id, colorPrefs, calendarOrder), isDark ? 0.12 : 0.1) } : undefined}
+      style={scope === 'group' && viewGroup ? { backgroundColor: tintOf(calendarColor(viewGroup.id, colorPrefs, calendarOrder, viewGroup.avatar_color), isDark ? 0.12 : 0.1) } : undefined}
       contentContainerStyle={{ paddingBottom: bottomClearance }}
     >
       {top}{period}{comingUp}{footer}
@@ -785,8 +815,9 @@ export default function CalendarScreen() {
     <EventDetail
       event={e}
       attendees={attendeesOf(e)}
+      invitedContacts={invitedByEvent.get(e.series_id ?? e.id)}
       meId={meId}
-      group={(e.group_id && groupById.get(e.group_id)) || null}
+      group={(e.group_id && (groupById.get(e.group_id) ?? plainById.get(e.group_id))) || null}
       onOpenGroup={(() => {
         const g = sharedCalendars.find(x => x.id === e.group_id);
         if (!g || (scope === 'group' && g.id === viewGroup?.id)) return undefined;

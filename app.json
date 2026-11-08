@@ -55,7 +55,7 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow sheep to access your photos so you can import a work schedule screenshot.",
+          "photosPermission": "Allow sheep to access your photos so you can choose a profile picture, add memories, or import a work schedule screenshot.",
           "cameraPermission": false
         }
       ],

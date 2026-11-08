@@ -136,6 +136,13 @@ DEMO_EVENTS.push(
   { ...ev('e12', 'Author talk at the library', 6, 18, 30, 90, 'Central Library', ['demo-ana', 'demo-dev']), group_id: 'demo-books', rsvps: { 'demo-dev': 'going' } },
 );
 
+// Ice skating is a group without a shared calendar: its plans show on My
+// calendar labeled "Ice skating". One coming up, one done.
+DEMO_EVENTS.push(
+  { ...ev('e17', 'Skating at the rink', 3, 19, 0, 120, 'Rockefeller Center Rink', [DEMO_ME, 'demo-ana', 'demo-chloe', 'demo-ben']), group_id: 'demo-skate', rsvps: { 'demo-ana': 'going', 'demo-chloe': 'going' } },
+  { ...ev('e18', 'Hot cocoa after skating', -14, 16, 0, 90, 'Jacques Torres Chocolate', ['demo-ana', DEMO_ME, 'demo-chloe', 'demo-ben']), group_id: 'demo-skate', rsvps: { [DEMO_ME]: 'going', 'demo-chloe': 'going', 'demo-ben': 'going' } },
+);
+
 // Family dinner shows off assignments: some claimed, one open.
 DEMO_EVENTS[1].assignments = [
   { id: 'a1', item: 'Bread', assignee_id: 'demo-ben' },
@@ -276,6 +283,10 @@ export const DEMO_EXTRA_GROUPS: { group: Group; memberIds: string[] }[] = [
   { group: { id: 'demo-soccer', name: 'Soccer parents', description: null, invite_code: 'SOCCER01', created_by: 'demo-ben', created_at: now }, memberIds: ['demo-ben', 'demo-eli'] },
   { group: { id: 'demo-books', name: 'Book club', description: null, invite_code: 'BOOKS001', created_by: 'demo-ana', created_at: now }, memberIds: ['demo-ana', 'demo-dev', DEMO_ME] },
   { group: { id: 'demo-climb', name: 'Climbing crew', description: 'Tuesday gym nights, the occasional road trip.', invite_code: 'CLIMB777', created_by: 'demo-gabe', created_at: now }, memberIds: ['demo-gabe', DEMO_ME, 'demo-hana', 'demo-iris', 'demo-dev'] },
+  // A group like a group chat: no shared calendar.
+  { group: { id: 'demo-skate', name: 'Ice skating', description: null, invite_code: 'SKATE123', created_by: DEMO_ME, created_at: now, shared_calendar: false, named: true }, memberIds: [DEMO_ME, 'demo-ana', 'demo-chloe', 'demo-ben'] },
+  // One from a while ago, for Past groups.
+  { group: { id: 'demo-tahoe', name: 'Tahoe 2025', description: null, invite_code: 'TAHOE025', created_by: 'demo-gabe', created_at: daysAgo(300), shared_calendar: false, named: true }, memberIds: [DEMO_ME, 'demo-gabe', 'demo-iris', 'demo-hana'] },
 ];
 
 /** Your private notes about people. */
