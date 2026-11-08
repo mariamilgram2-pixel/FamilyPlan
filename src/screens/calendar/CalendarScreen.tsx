@@ -8,8 +8,7 @@
 // grid, with what's coming up listed underneath) or List (every day with
 // something on it, from the selected day on).
 //
-// compact:   header → view → agenda; detail in a sheet; "New Plan" capsule
-//            in the thumb zone.
+// compact:   header (with New Plan's +) → view → agenda; detail in a sheet.
 // "My plans" shows everything you're invited to across all your groups; the
 // group view shows everything on the active group's calendar.
 // expanded:  [list column: header, view, agenda] | [event detail].
@@ -28,17 +27,20 @@ import { AvatarPerson } from '../../components/Avatar';
 import AvatarStack from '../../components/AvatarStack';
 import { useGroupSheets, useVisibleGroups } from '../../components/GroupSwitcher';
 import { Sheep } from '../../components/Sheep';
-import GroupAvatar from '../../components/GroupAvatar';
+import { GroupFlock } from '../../components/GroupFlock';
 import {
-  EmptyState, Icon, IconButton, ListRow, Menu, MenuSection, PrimaryAction, ReadingColumn, ScreenHeader,
+  EmptyState, Icon, IconButton, ListRow, Menu, MenuSection, ReadingColumn, ScreenHeader,
   Segmented, Sheet, SplitView, Tappable, Toggle, Txt, useBottomClearance,
 } from '../../components/ui';
 import { space, tabularNums, useLayout, useTheme } from '../../theme';
 import CalendarGrid from './CalendarGrid';
-import { DayTimeline, EventChip, Maybe, MineChip, PeriodBar, Row, WeekRows, isMaybe, rowEnd } from './CalendarViews';
+import { ChipInfo, DayTimeline, EventChip, FreeTime, Maybe, MineChip, PeriodBar, Row, WeekRows, isMaybe, rowEnd } from './CalendarViews';
 import { daysCovered, fillsDay, isMultiDay, spanLabel, whenOnDay } from '../../lib/span';
 import { calendarEvents } from './calendarFilter';
-import { EventComposer, EventDetail, WorkLine } from './EventViews';
+import { calendarColor, categoryFor, colorFor, tintOf } from '../../lib/calendarColors';
+import { useCalendarColors } from '../../lib/calendarColorsStore';
+import { EventComposer, EventDetail, SyncedLines, WorkLine } from './EventViews';
+import { itemsOnDay, useConnectedCalendars } from '../../lib/phoneCalendars';
 import { usePlanComposer } from '../../components/PlanComposer';
 import CommentThread from '../../components/CommentThread';
 import { dateVoters, tallySlots } from '../../lib/rsvp';
@@ -94,7 +96,7 @@ export default function CalendarScreen() {
   const { activeGroup, groups, setActiveGroup } = useGroup();
   const visibleGroups = useVisibleGroups();
   const { user, profile } = useAuth();
-  const { c } = useTheme();
+  const { c, isDark } = useTheme();
   const { compact, threeColumn } = useLayout();
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
@@ -115,12 +117,7 @@ export default function CalendarScreen() {
   const [view, setView] = useState<CalView>('week');
   // Show the day, week or month as a list of plans instead of a calendar.
   const [asList, setAsList] = useState(false);
-  // A starred view opens every time you come to the calendar. Without one,
-  // it opens however you left it.
-  type DefaultView = { view: CalView; asList: boolean };
-  const [defaultView, setDefaultView] = useState<DefaultView | null>(null);
-  const defaultRef = useRef<DefaultView | null>(null);
-  defaultRef.current = defaultView;
+  // It opens however you left it, like Apple Calendar: the view is remembered below.
   const [upcomingDays, setUpcomingDays] = useState(7);
   const [weekStartsOn, setWeekStartsOn] = useState<0 | 1>(0);
   // In a shared calendar, lay your own events over it for context. On by
@@ -142,12 +139,6 @@ export default function CalendarScreen() {
         if (VIEWS.some(v => v.key === p.view)) setView(p.view);
         if (p.view === 'list') { setView('week'); setAsList(true); }   // "List" used to be a fourth view
         if (typeof p.asList === 'boolean') setAsList(p.asList);
-        const d = p.defaultView;
-        if (d && VIEWS.some(v => v.key === d.view) && typeof d.asList === 'boolean') {
-          setDefaultView({ view: d.view, asList: d.asList });
-          setView(d.view);
-          setAsList(d.asList);
-        }
         if (p.scope === 'mine' || p.scope === 'group') setScope(p.scope);
         if (UPCOMING_OPTIONS.some(o => o.days === p.upcomingDays)) setUpcomingDays(p.upcomingDays);
         if (p.weekStartsOn === 0 || p.weekStartsOn === 1) setWeekStartsOn(p.weekStartsOn);
@@ -159,14 +150,8 @@ export default function CalendarScreen() {
   }, []);
   useEffect(() => {
     if (!prefsLoaded.current) return;
-    AsyncStorage.setItem(VIEW_PREFS_KEY, JSON.stringify({ view, asList, defaultView, scope, upcomingDays, weekStartsOn, showMine, mineHintSeen })).catch(() => {});
-  }, [view, asList, defaultView, scope, upcomingDays, weekStartsOn, showMine, mineHintSeen]);
-
-  // Coming back to the calendar tab opens the starred view.
-  useFocusEffect(useCallback(() => {
-    const d = defaultRef.current;
-    if (d) { setView(d.view); setAsList(d.asList); }
-  }, []));
+    AsyncStorage.setItem(VIEW_PREFS_KEY, JSON.stringify({ view, asList, scope, upcomingDays, weekStartsOn, showMine, mineHintSeen })).catch(() => {});
+  }, [view, asList, scope, upcomingDays, weekStartsOn, showMine, mineHintSeen]);
 
   // ─── Data ──────────────────────────────────────────────────────────────────
   // Repeating events become one entry per occurrence, a year either side of today.
@@ -176,7 +161,6 @@ export default function CalendarScreen() {
   };
 
   const fetchAll = useCallback(async () => {
-    if (!activeGroup) return;
     if (isDemo) {
       setRawEvents([...DEMO_EVENTS]);
       setEvents(withOccurrences(DEMO_EVENTS));   // new array: planned ideas add to the demo list
@@ -186,16 +170,23 @@ export default function CalendarScreen() {
     }
     setLoading(true);
     // Every group you're in, plus anything you were invited to from elsewhere.
-    const groupIds = (groups.length ? groups : [activeGroup]).map(g => g.id);
+    // No group yet: just what you're invited to.
+    const groupIds = (groups.length ? groups : activeGroup ? [activeGroup] : []).map(g => g.id);
     const eventQuery = supabase.from('events').select('*, profiles(id, full_name, email)');
+    const none = Promise.resolve({ data: [] as any[] });
     const [{ data: eventData }, { data: ideaRows }, { data: memberRows }] = await Promise.all([
-      (meId ? eventQuery.or(`group_id.in.(${groupIds.join(',')}),attendees.cs.{${meId}}`) : eventQuery.in('group_id', groupIds))
+      (groupIds.length
+        ? (meId ? eventQuery.or(`group_id.in.(${groupIds.join(',')}),attendees.cs.{${meId}}`) : eventQuery.in('group_id', groupIds))
+        : meId ? eventQuery.contains('attendees', [meId]) : eventQuery.limit(0))
         .order('start_time', { ascending: true }),
-      supabase.from('ideas')
-        .select('id, title, group_id, audience_group_ids, audience_user_ids, created_by, created_at, status, proposed_slots, slot_votes, idea_votes(id, user_id)')
-        .in('group_id', groupIds).eq('status', 'proposed'),
-      supabase.from('group_members').select('profiles(id, full_name, email, avatar_url)')
-        .eq('group_id', activeGroup.id),
+      groupIds.length
+        ? supabase.from('ideas')
+            .select('id, title, group_id, audience_group_ids, audience_user_ids, created_by, created_at, status, proposed_slots, slot_votes, idea_votes(id, user_id)')
+            .in('group_id', groupIds).eq('status', 'proposed')
+        : none,
+      activeGroup
+        ? supabase.from('group_members').select('profiles(id, full_name, email, avatar_url)').eq('group_id', activeGroup.id)
+        : none,
     ]);
     setRawEvents((eventData as Event[]) ?? []);
     setEvents(withOccurrences((eventData as Event[]) ?? []));
@@ -432,6 +423,46 @@ export default function CalendarScreen() {
     return map;
   }, [shown, maybes]);
 
+  // Your color coding (You → Calendar colors). Calendars keep their order, so
+  // a calendar's starting color matches the one shown in settings.
+  const { prefs: colorPrefs, assign: assignCategory } = useCalendarColors();
+  const calendarOrder = useMemo(() => Array.from(groupById.keys()), [groupById]);
+  const colorOf = (r: Row) => isMaybe(r)
+    ? colorFor({ groupId: r.idea.group_id, key: null }, colorPrefs, calendarOrder)
+    : colorFor({ groupId: r.group_id, key: r.series_id ?? r.id }, colorPrefs, calendarOrder);
+
+  // What each chip says besides when and what (see EventChip).
+  const mixed = scope === 'mine' && groupById.size > 1;
+  const chipInfo = (r: Row): ChipInfo => {
+    if (isMaybe(r)) {
+      return {
+        color: colorOf(r),
+        people: (r.idea.audience_user_ids ?? []).filter(id => id !== meId).map(id => memberById.get(id)).filter(Boolean) as AvatarPerson[],
+        place: r.idea.location,
+        group: mixed && r.idea.group_id ? groupById.get(r.idea.group_id)?.name ?? null : null,
+        reply: false,
+      };
+    }
+    return {
+      color: r.overlay ? null : colorOf(r),
+      people: attendeesOf(r).filter(p => p.id !== meId),
+      place: r.location,
+      group: (mixed || r.overlay) && r.group_id ? groupById.get(r.group_id)?.name ?? null : null,
+      reply: !r.overlay && needsReply(r, meId),
+    };
+  };
+
+  // How full each day is, for the month's dots: booked plans and maybe dates.
+  const dots = useMemo(() => {
+    const map = new Map<string, { solid: number; maybe: number; colors?: string[] }>();
+    byDay.forEach((rows, k) => {
+      const booked = rows.filter(r => !isMaybe(r) && !r.cancelled_at);
+      const colors = colorPrefs.mode === 'none' ? undefined : booked.slice(0, 3).map(r => colorOf(r) ?? '');
+      map.set(k, { solid: booked.length, maybe: rows.filter(isMaybe).length, colors });
+    });
+    return map;
+  }, [byDay, colorPrefs, calendarOrder]);
+
   // The days the view covers.
   const week = weekStart(selectedDate, weekStartsOn);
   const monthStart = dateKeyOf(new Date(parseKey(selectedDate).getFullYear(), parseKey(selectedDate).getMonth(), 1));
@@ -444,10 +475,15 @@ export default function CalendarScreen() {
     return days;
   }, [view, selectedDate, week, monthStart, nextMonthStart]);
 
+  // Your events from connected calendars, on your own calendar only. A day
+  // with only those still counts as a day with something on.
+  const synced = useConnectedCalendars(isDemo);
+  const hasSynced = useCallback((k: string) => scope === 'mine' && itemsOnDay(synced.items, k).length > 0, [scope, synced.items]);
+
   // As a list: each day in view that has plans (the day view always shows its day).
   const sections: DaySection[] = useMemo(() => periodDays
-    .filter(k => view === 'day' || (byDay.get(k)?.length ?? 0) > 0)
-    .map(k => daySection(k, byDay.get(k) ?? [])), [periodDays, byDay, view]);
+    .filter(k => view === 'day' || (byDay.get(k)?.length ?? 0) > 0 || hasSynced(k))
+    .map(k => daySection(k, byDay.get(k) ?? [])), [periodDays, byDay, view, hasSynced]);
 
   // Plans visible in the view (the month grid itself lists none).
   const periodRows: Row[] = useMemo(
@@ -467,8 +503,12 @@ export default function CalendarScreen() {
   const upcomingTo = addDays(upcomingFrom, Math.max(upcomingDays, 1) - 1);
   const upcoming: DaySection[] = useMemo(() => {
     if (!upcomingDays) return [];
-    return Array.from(byDay.keys()).filter(k => k >= upcomingFrom && k <= upcomingTo).sort().map(k => daySection(k, byDay.get(k)!));
-  }, [byDay, upcomingDays, upcomingFrom, upcomingTo]);
+    const keys: string[] = [];
+    for (let k = upcomingFrom; k <= upcomingTo; k = addDays(k, 1)) {
+      if ((byDay.get(k)?.length ?? 0) > 0 || hasSynced(k)) keys.push(k);
+    }
+    return keys.map(k => daySection(k, byDay.get(k) ?? []));
+  }, [byDay, upcomingDays, upcomingFrom, upcomingTo, hasSynced]);
 
   // Keep a sensible event selected for the detail column.
   useEffect(() => {
@@ -491,6 +531,7 @@ export default function CalendarScreen() {
   useShortcut('n', () => newPlan());
   useShortcut('t', () => setSelectedDate(todayKey()));
   const workSchedules = useWorkSchedules();
+  const syncedLine = (key: string) => scope === 'mine' ? <SyncedLines day={key} items={itemsOnDay(synced.items, key)} /> : null;
 
   // ─── Pieces ────────────────────────────────────────────────────────────────
   // Which calendar: yours (everything you're in, across groups) or one
@@ -503,7 +544,7 @@ export default function CalendarScreen() {
     {
       title: 'Shared calendars',
       items: sharedCalendars.map(g => ({
-        key: g.id, label: g.name, leading: <GroupAvatar group={g} size={24} />,
+        key: g.id, label: g.name, leading: <GroupFlock group={g} size={24} />,
         checked: scope === 'group' && g.id === viewGroup?.id,
         onSelect: () => openCalendar(g),
       })),
@@ -544,21 +585,20 @@ export default function CalendarScreen() {
     ...undatedIdeas.map(i => ({ key: ideaKey(i), label: `Pick a date: ${i.title}`, icon: 'bulb-outline' as const, onSelect: () => navigation.navigate('Plans', { ideaId: i.id }) })),
   ];
   const needsCount = needsTargets.length;
-  const needsBell = (
-    <Menu
-      title={needsCount ? 'Needs you' : undefined}
-      sections={needsCount
-        ? [
-          { title: awaiting.length ? 'Waiting on your reply' : undefined, items: needsTargets.filter(t => !t.key.startsWith('idea:')) },
-          { title: undatedIdeas.length ? 'Ideas that need a date' : undefined, items: needsTargets.filter(t => t.key.startsWith('idea:')) },
-        ]
-        : [{ items: [{ key: 'none', label: 'You’re all caught up', icon: 'checkmark-circle-outline', onSelect: () => {} }] }]}
-    >
+  // Your turn (invites to answer, ideas that need a date) leads the ⋯ menu,
+  // which wears the dot when something's waiting. Invites also say Reply on
+  // their own rows, so the header keeps room for the calendar's name.
+  const yourTurn: MenuSection[] = needsCount ? [
+    { title: awaiting.length ? 'Your turn: waiting on your reply' : undefined, items: needsTargets.filter(t => !t.key.startsWith('idea:')) },
+    { title: undatedIdeas.length ? 'Your turn: ideas that need a date' : undefined, items: needsTargets.filter(t => t.key.startsWith('idea:')) },
+  ].filter(sec => sec.items.length) : [];
+  const moreMenu = (
+    <Menu sections={[...yourTurn, ...optionsMenu]} title={needsCount ? 'Your turn and view options' : 'View options'}>
       {(open) => (
         <View>
           <IconButton
-            icon={needsCount ? 'notifications' : 'notifications-outline'}
-            label={needsCount ? `Needs you: ${needsCount} item${needsCount === 1 ? '' : 's'}` : 'Needs you: nothing right now'}
+            icon="ellipsis-horizontal"
+            label={needsCount ? `Your turn: ${needsCount} item${needsCount === 1 ? '' : 's'}, and view options` : 'View options'}
             variant="gray"
             onPress={open}
           />
@@ -577,33 +617,23 @@ export default function CalendarScreen() {
     <ScreenHeader
       title={scope === 'mine' ? 'My calendar' : viewGroup?.name ?? 'Shared calendar'}
       titleAccessibilityLabel={scope === 'group' && viewGroup ? `${viewGroup.name}, shared calendar` : undefined}
-      titleLeading={scope === 'group' && viewGroup ? <GroupAvatar group={viewGroup} size={38} /> : undefined}
+      // On a phone the name needs the room; the cover shows on wider screens.
+      titleLeading={scope === 'group' && viewGroup && !compact ? <GroupFlock group={viewGroup} size={38} /> : undefined}
       titleMenu={{ sections: calendarMenu, title: 'Show calendar' }}
       display
       trailing={
         <>
-          {needsBell}
-          <Menu sections={optionsMenu} title="View options">
-            {(open) => <IconButton icon="ellipsis-horizontal" label="View options" variant="gray" onPress={open} />}
-          </Menu>
-          {!compact && <IconButton icon="add" label="New Plan (⌘N)" variant="gray" onPress={() => newPlan()} />}
+          {moreMenu}
+          {/* New Plan, the round + Home and Plans use, so nothing floats over the list. */}
+          <IconButton icon="add" label={compact ? 'New Plan' : 'New Plan (⌘N)'} variant="filled" onPress={() => newPlan()} />
         </>
       }
     />
   );
 
-  // ☆ beside the views: star what you're looking at (e.g. Week, or Week as a
-  // list) to open it every time; tap the filled star to unset.
-  const viewName = `${VIEWS.find(v => v.key === view)!.label}${asList ? ' as a list' : ''}`;
-  const starred = !!defaultView && defaultView.view === view && defaultView.asList === asList;
   const viewPicker = (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.hair, paddingLeft: space.m, paddingRight: space.s, paddingBottom: space.s }}>
-      <Segmented options={VIEWS} value={view} onChange={setView} style={{ flex: 1 }} />
-      <IconButton
-        icon={starred ? 'star' : 'star-outline'}
-        label={starred ? `${viewName} is your default view. Tap to unset` : `Make ${viewName} your default view`}
-        onPress={() => setDefaultView(starred ? null : { view, asList })}
-      />
+    <View style={{ paddingHorizontal: space.m, paddingBottom: space.s }}>
+      <Segmented options={VIEWS} value={view} onChange={setView} />
     </View>
   );
 
@@ -629,7 +659,7 @@ export default function CalendarScreen() {
         <Txt v="headline" accessibilityRole="header">{section.title}</Txt>
         {section.subtitle ? <Txt v="callout" tone="secondary">{section.subtitle}</Txt> : null}
       </View>
-      <WorkLine day={workOn(workSchedules, section.key)} />
+      <WorkLine day={workOn(workSchedules, section.key)} />{syncedLine(section.key)}
     </View>
   );
 
@@ -643,7 +673,7 @@ export default function CalendarScreen() {
       attendees={attendeesOf(item)}
       meId={meId}
       hostName={(() => { const h = hostOf(item); return h ? (h === meId ? 'you' : memberById.get(h)?.full_name?.split(' ')[0] ?? null) : null; })()}
-      groupName={(scope === 'mine' && groupById.size > 1) || item.overlay ? groupById.get(item.group_id)?.name ?? null : null}
+      groupName={((scope === 'mine' && groupById.size > 1) || item.overlay) && item.group_id ? groupById.get(item.group_id)?.name ?? null : null}
       overlay={!!item.overlay}
       selected={threeColumn && item.id === selectedEventId}
       onPress={() => openRow(item)}
@@ -661,7 +691,7 @@ export default function CalendarScreen() {
   const weekRange = rangeLabel(week, addDays(week, 6));
   const periodBar =
     view === 'day' ? (
-      <PeriodBar label={longDate(selectedDate)} unit="day" accessory={mineChip} onStep={dir => setSelectedDate(addDays(selectedDate, dir))} onToday={selectedDate !== today ? goToday : undefined} />
+      <PeriodBar label={compact ? shortDate(selectedDate) : longDate(selectedDate)} spoken={longDate(selectedDate)} unit="day" accessory={mineChip} onStep={dir => setSelectedDate(addDays(selectedDate, dir))} onToday={selectedDate !== today ? goToday : undefined} />
     ) : view === 'week' ? (
       <PeriodBar label={weekRange.text} spoken={weekRange.spoken} unit="week" accessory={mineChip} onStep={dir => setSelectedDate(addDays(selectedDate, 7 * dir))} onToday={today < week || today > addDays(week, 6) ? goToday : undefined} />
     ) : (
@@ -673,13 +703,13 @@ export default function CalendarScreen() {
       {sections.map(s => (
         <View key={s.key}>
           {sectionHeader(s)}
-          {s.data.length ? s.data.map(r => rowView(r, s.key)) : (
+          {s.data.length ? s.data.map(r => rowView(r, s.key)) : hasSynced(s.key) ? null : (
             <ListRow title="Nothing planned" subtitle={scope === 'mine' ? 'Make plans for this day' : 'Add something for this day'} tintTitle={false} onPress={() => newPlan(s.key)} icon="add-circle-outline" />
           )}
         </View>
       ))}
       {sections.length === 0 ? (
-        <ListRow title={`Nothing planned this ${view}`} subtitle="Make plans" tintTitle={false} onPress={() => newPlan()} icon="add-circle-outline" />
+        <FreeTime title={`A free ${view}`} onAdd={() => newPlan()} />
       ) : null}
     </View>
   );
@@ -689,14 +719,15 @@ export default function CalendarScreen() {
       <DayTimeline
         day={selectedDate}
         rows={byDay.get(selectedDate) ?? []}
-        header={<View style={{ paddingHorizontal: space.m }}><WorkLine day={workOn(workSchedules, selectedDate)} /></View>}
+        header={<View style={{ paddingHorizontal: space.m }}><WorkLine day={workOn(workSchedules, selectedDate)} />{syncedLine(selectedDate)}</View>}
         onOpen={openRow}
         onAdd={() => newPlan(selectedDate)}
+        infoOf={chipInfo}
       />
     ) : view === 'week' ? (
-      <WeekRows start={week} byDay={byDay} selected={selectedDate} onPickDay={openDay} onOpen={openRow} />
+      <WeekRows start={week} byDay={byDay} selected={selectedDate} onPickDay={openDay} onOpen={openRow} infoOf={chipInfo} extra={k => (hasSynced(k) ? syncedLine(k) : null)} />
     ) : (
-      <CalendarGrid selected={selectedDate} onSelect={openDay} marked={marked} expanded hideHeader weekStartsOn={weekStartsOn} />
+      <CalendarGrid selected={selectedDate} onSelect={openDay} marked={marked} dots={dots} expanded hideHeader weekStartsOn={weekStartsOn} />
     );
 
   const comingUp = upcomingDays > 0 ? (
@@ -712,11 +743,11 @@ export default function CalendarScreen() {
             <Txt v="callout" semibold accessibilityRole="header">{s.title}</Txt>
             {s.subtitle ? <Txt v="footnote" tone="secondary">{s.subtitle}</Txt> : null}
           </View>
-          <WorkLine day={workOn(workSchedules, s.key)} />
-          {s.data.map(r => <EventChip key={r.id} row={r} day={s.key} onPress={() => openRow(r)} />)}
+          <WorkLine day={workOn(workSchedules, s.key)} />{syncedLine(s.key)}
+          {s.data.map(r => <EventChip key={r.id} row={r} day={s.key} info={chipInfo(r)} onPress={() => openRow(r)} />)}
         </View>
       )) : (
-        <Txt v="callout" tone="secondary" style={{ paddingHorizontal: space.m, paddingTop: space.s }}>Nothing else planned yet.</Txt>
+        <FreeTime title="Nothing else planned yet" onAdd={() => newPlan()} small />
       )}
     </>
   ) : null;
@@ -724,7 +755,12 @@ export default function CalendarScreen() {
   const top = <>{header}{viewPicker}{periodBar}{mineHint}</>;
 
   const list = (
-    <ScrollView contentContainerStyle={{ paddingBottom: bottomClearance }}>
+    <ScrollView
+      // A shared calendar wears its group's color, faintly, edge to edge, so
+      // you can tell My Family from Book club at a glance. My calendar stays plain.
+      style={scope === 'group' && viewGroup ? { backgroundColor: tintOf(calendarColor(viewGroup.id, colorPrefs, calendarOrder), isDark ? 0.12 : 0.1) } : undefined}
+      contentContainerStyle={{ paddingBottom: bottomClearance }}
+    >
       {top}{period}{comingUp}{footer}
     </ScrollView>
   );
@@ -750,7 +786,7 @@ export default function CalendarScreen() {
       event={e}
       attendees={attendeesOf(e)}
       meId={meId}
-      group={groupById.get(e.group_id) ?? null}
+      group={(e.group_id && groupById.get(e.group_id)) || null}
       onOpenGroup={(() => {
         const g = sharedCalendars.find(x => x.id === e.group_id);
         if (!g || (scope === 'group' && g.id === viewGroup?.id)) return undefined;
@@ -758,6 +794,12 @@ export default function CalendarScreen() {
       })()}
       onClaim={(item, claim) => handleClaim(e, item, claim)}
       onAssign={(items) => handleAssign(e, items)}
+      category={{
+        current: categoryFor(e.series_id ?? e.id, colorPrefs),
+        options: colorPrefs.categories,
+        onPick: (id) => assignCategory(e.series_id ?? e.id, id),
+        onManage: () => { setSelectedEventId(null); navigation.navigate('You', { open: 'colors' }); },
+      }}
       onRsvp={(reply, note) => handleRsvp(e, reply, note)}
       onEdit={() => openEdit(e)}
       onCancel={() => handleCancel(e)}
@@ -805,7 +847,6 @@ export default function CalendarScreen() {
         </Sheet>
       )}
 
-      <PrimaryAction label="New Plan" onPress={() => newPlan()} />
       {groupSheets.sheets}
 
       {/* Editing only; new plans go through the shared New Plan sheet. */}

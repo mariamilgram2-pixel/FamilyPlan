@@ -11,7 +11,7 @@ const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
 function createSupabaseClient(): SupabaseClient<Database> {
   if (!supabaseUrl || !supabaseAnonKey) {
     console.warn(
-      '[FamilyPlan] Supabase env vars not set. ' +
+      '[sheep] Supabase env vars not set. ' +
       'Copy .env.example → .env and fill in your project URL and anon key.'
     );
     // Return a minimal stub that won't throw on access

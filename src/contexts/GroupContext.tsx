@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { Group, GroupMember } from '../types';
 import { useAuth } from './AuthContext';
@@ -24,9 +24,14 @@ export function GroupProvider({ children }: { children: React.ReactNode }) {
   const [members, setMembers] = useState<GroupMember[]>([]);
   const [loadingGroups, setLoadingGroups] = useState(true);
 
+  // Only the first load counts as loading: the app waits on it once, at
+  // sign-in. Refreshing later (opening a plan, joining a group) happens
+  // quietly, or the whole app would blink to a spinner and lose what was open.
+  const loadedFor = useRef<string | null>(null);
+
   const fetchGroups = useCallback(async () => {
     if (!user) return;
-    setLoadingGroups(true);
+    if (loadedFor.current !== user.id) setLoadingGroups(true);
 
     const { data } = await supabase
       .from('group_members')
@@ -39,6 +44,7 @@ export function GroupProvider({ children }: { children: React.ReactNode }) {
 
     setGroups(fetched);
     setActiveGroup(prev => (prev && fetched.some(g => g.id === prev.id) ? prev : fetched[0] ?? null));
+    loadedFor.current = user.id;
     setLoadingGroups(false);
   }, [user]);
 
@@ -47,6 +53,7 @@ export function GroupProvider({ children }: { children: React.ReactNode }) {
     else {
       setGroups([]);
       setActiveGroup(null);
+      loadedFor.current = null;
       setLoadingGroups(false);
     }
   }, [user, fetchGroups]);

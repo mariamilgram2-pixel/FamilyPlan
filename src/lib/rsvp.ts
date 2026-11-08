@@ -60,24 +60,29 @@ export function rsvpNotice(name: string, reply: Rsvp, title: string) {
 
 /**
  * Who should weigh in on an idea's dates: whoever proposed it, the people it's
- * for, anyone who said "I'm in", and anyone who has already answered.
+ * for, anyone who said "I'm in", and anyone who has already answered; not
+ * anyone who said they can't make it.
  */
 export function dateVoters(idea: Idea): string[] {
-  return Array.from(new Set([
+  const out = new Set([
     ...(idea.created_by ? [idea.created_by] : []),
     ...(idea.audience_user_ids ?? []),
     ...(idea.idea_votes ?? []).map(v => v.user_id),
     ...Object.keys(idea.slot_votes ?? {}),
-  ]));
+  ]);
+  // Anyone who said they can't make it isn't asked.
+  (idea.declined_user_ids ?? []).forEach(id => out.delete(id));
+  return Array.from(out);
 }
 
 /**
  * Whose answer the dates wait on: everyone asked, except the organizer until
- * they answer. Proposing dates isn't a vote — the organizer may say which
+ * they answer, and anyone who said "plan without me". Proposing dates isn't a vote — the organizer may say which
  * work for them, but nothing waits on it.
  */
 export function awaitedVoters(idea: Idea): string[] {
-  return dateVoters(idea).filter(id => id !== idea.created_by || !!idea.slot_votes?.[id]);
+  const maybes = new Set(idea.tentative_user_ids ?? []);
+  return dateVoters(idea).filter(id => !maybes.has(id) && (id !== idea.created_by || !!idea.slot_votes?.[id]));
 }
 
 export interface SlotTally { slot: TimeSlot; yes: string[] }

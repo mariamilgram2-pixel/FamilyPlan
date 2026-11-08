@@ -7,13 +7,13 @@ import { Image, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import { TAB_BAR_HEIGHT } from '../../components/ui';
-import { useLayout } from '../../theme';
+import { useLayout, brand } from '../../theme';
 
-const GROUND = '#dcecc8';
-const CREST = '#4f7338';
+const GROUND = brand.meadow;
+const CREST = brand.meadowCrest;
 
 // Pixel sizes of the imported drawings. Web's Image has no resolveAssetSource.
-const ART = {
+export const ART = {
   lying1: { source: require('../../../assets/sheep/lying-1.png'), w: 82, h: 61 },
   lying2: { source: require('../../../assets/sheep/lying-2.png'), w: 80, h: 60 },
   sitting1: { source: require('../../../assets/sheep/sitting-1.png'), w: 71, h: 51 },

@@ -23,7 +23,7 @@ let demoInbox: AppNotification[] = [{
   id: 'n1', user_id: 'demo-me', actor_id: ana.id, kind: 'idea_proposed', idea_id: 'i3', event_id: null,
   title: 'Ana is in on Pottery class', body: 'You proposed it — want to find a time?',
   read_at: null, created_at: new Date(Date.now() - 2 * 3600000).toISOString(),
-  profiles: { id: ana.id, full_name: ana.full_name, email: ana.email },
+  profiles: { id: ana.id, full_name: ana.full_name, email: ana.email, avatar_url: ana.avatar_url },
 }];
 
 // ─── Hook ────────────────────────────────────────────────────────────────────
@@ -35,7 +35,7 @@ export function useNotifications(meId: string | null, isDemo: boolean) {
     if (isDemo) { setItems(demoInbox); return; }
     if (!meId) { setItems([]); return; }
     const { data } = await supabase.from('notifications')
-      .select('*, profiles:actor_id(id, full_name, email)')
+      .select('*, profiles:actor_id(id, full_name, email, avatar_url)')
       .eq('user_id', meId)
       .order('created_at', { ascending: false })
       .limit(50);
@@ -53,5 +53,13 @@ export function useNotifications(meId: string | null, isDemo: boolean) {
     await supabase.from('notifications').update({ read_at: at } as any).in('id', ids);
   }, [isDemo]);
 
-  return { items, unread: items.filter(n => !n.read_at).length, refresh, markRead };
+  /** Clear notifications from your Activity for good (one, or all of them). */
+  const remove = useCallback(async (ids: string[]) => {
+    if (ids.length === 0) return;
+    setItems(list => list.filter(n => !ids.includes(n.id)));
+    if (isDemo) { demoInbox = demoInbox.filter(n => !ids.includes(n.id)); return; }
+    await supabase.from('notifications').delete().in('id', ids);
+  }, [isDemo]);
+
+  return { items, unread: items.filter(n => !n.read_at).length, refresh, markRead, remove };
 }

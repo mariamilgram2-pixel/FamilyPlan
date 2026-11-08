@@ -5,7 +5,7 @@
 import React from 'react';
 import { StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
 import { Icon, IconName, Tappable, Txt } from './primitives';
-import { continuous, radius, space, useLayout, useTheme } from '../../theme';
+import { continuous, eyebrow, radius, space, useLayout, useTheme } from '../../theme';
 
 // ─── Section ─────────────────────────────────────────────────────────────────
 
@@ -57,7 +57,7 @@ export function SectionHeader({ title, action }: { title: string; action?: React
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
       paddingHorizontal: space.m, paddingBottom: space.s, minHeight: 32,
     }}>
-      <Txt v="footnote" tone="secondary" semibold style={{ textTransform: 'uppercase', letterSpacing: 0.4 }}>{title}</Txt>
+      <Txt v="footnote" tone="secondary" style={eyebrow}>{title}</Txt>
       {action}
     </View>
   );
@@ -68,6 +68,7 @@ export function SectionHeader({ title, action }: { title: string; action?: React
 interface RowProps {
   title: string;
   subtitle?: string | null;
+  subtitleTint?: boolean;     // a subtitle that's a call to act ("Reply to Book club")
   detail?: string | null;     // a second secondary line, e.g. calendar fit under votes
   leading?: React.ReactNode;
   icon?: IconName;            // shorthand for a tinted leading glyph
@@ -84,7 +85,7 @@ interface RowProps {
 }
 
 export function ListRow({
-  title, subtitle, detail, leading, icon, trailing, value, chevron, checked, selected,
+  title, subtitle, subtitleTint, detail, leading, icon, trailing, value, chevron, checked, selected,
   destructive, tintTitle, onPress, onLongPress, style,
 }: RowProps) {
   const { c } = useTheme();
@@ -94,7 +95,7 @@ export function ListRow({
     <>
       {icon ? <Icon name={icon} size={compact ? 22 : 18} color={destructive ? c.danger : c.tint} style={{ width: 28, textAlign: 'center' }} /> : null}
       {leading}
-      <View style={{ flex: 1, minWidth: 0, paddingVertical: space.s }}>
+      <View style={{ flex: 1, minWidth: value ? '28%' : 0, paddingVertical: space.s }}>
         <Txt
           v={compact ? 'body' : 'callout'}
           tone={destructive ? 'danger' : tintTitle ? 'tint' : 'primary'}
@@ -104,13 +105,14 @@ export function ListRow({
           {title}
         </Txt>
         {subtitle ? (
-          <Txt v={compact ? 'callout' : 'footnote'} tone="secondary" numberOfLines={1}>{subtitle}</Txt>
+          <Txt v={compact ? 'callout' : 'footnote'} tone={subtitleTint ? 'tint' : 'secondary'} numberOfLines={1}>{subtitle}</Txt>
         ) : null}
         {detail ? (
           <Txt v="footnote" tone="secondary" numberOfLines={1}>{detail}</Txt>
         ) : null}
       </View>
-      {value ? <Txt v={compact ? 'body' : 'callout'} tone="secondary" numberOfLines={1}>{value}</Txt> : null}
+      {/* A long value ("You and Ana and Chloe") truncates instead of squeezing the title to nothing. */}
+      {value ? <Txt v={compact ? 'body' : 'callout'} tone="secondary" numberOfLines={1} style={{ flexShrink: 1, maxWidth: '58%', textAlign: 'right' }}>{value}</Txt> : null}
       {trailing}
       {checked ? <Icon name="checkmark" size={20} color={c.tint} /> : null}
       {chevron ? <Icon name="chevron-forward" size={16} color={c.secondaryLabel} /> : null}

@@ -1,19 +1,21 @@
 // The adaptive shell.
 //
-// One navigator, two presentations of the same four destinations — Home,
-// Calendar, Plans, People:
-//   compact  → translucent tab bar anchored to the bottom (thumb zone);
-//              settings ("You") open from your avatar on Home
+// One navigator, two presentations of the same five destinations — Sheep,
+// Home, Plans, Calendar, Friends:
+//   compact  → a floating olive capsule just above the bottom edge (thumb
+//              zone); settings ("You") open from your avatar on Sheep
 //   sidebar  → a left source list with sections, your groups, and your
 //              account pinned bottom-left (macOS / iPadOS convention)
-// Desktop also gets ⌘1–⌘4 to jump between sections. The New Plan sheet
+// Sheep is where the app opens: the sheep and the box to plan in. Its tab
+// icon is a sheep drawn to match the others. Desktop also gets ⌘1–⌘5. The New Plan sheet
 // wraps everything so any screen can open it.
 
 import React, { useEffect } from 'react';
 import { Platform, ScrollView, StyleSheet, View } from 'react-native';
 import { BottomTabBarProps, createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import HomeScreen from '../screens/home/HomeScreen';
+import HomeScreen, { SheepScreen } from '../screens/home/HomeScreen';
+import { SheepGlyph } from '../components/SheepGlyph';
 import CalendarScreen from '../screens/calendar/CalendarScreen';
 import PlansScreen from '../screens/ideas/IdeasScreen';
 import { PlanComposerProvider } from '../components/PlanComposer';
@@ -21,37 +23,47 @@ import PeopleScreen from '../screens/people/PeopleScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import Avatar from '../components/Avatar';
 import { useGroupSheets, useVisibleGroups } from '../components/GroupSwitcher';
-import { Icon, IconButton, IconName, Material, Menu, SectionHeader, TAB_BAR_HEIGHT, Tappable, Txt } from '../components/ui';
+import { Icon, IconButton, IconName, Menu, SectionHeader, TAB_BAR_GAP, TAB_BAR_HEIGHT, Tappable, Txt } from '../components/ui';
 import { useAuth } from '../contexts/AuthContext';
 import { useGroup } from '../contexts/GroupContext';
 import { modKey } from '../lib/shortcuts';
+import { usePhoneCalendarSync } from '../lib/phoneCalendars';
+import FirstRunSetup from '../screens/onboarding/FirstRunSetup';
+import { isDemoGroup } from '../lib/demo';
 import { TabParamList } from '../types';
 import { continuous, radius, SIDEBAR_WIDTH, space, useLayout, useTheme } from '../theme';
 
 const Tab = createBottomTabNavigator<TabParamList>();
 
-const DESTINATIONS: { name: keyof TabParamList; label: string; icon: IconName; iconActive: IconName }[] = [
+const DESTINATIONS: { name: keyof TabParamList; label: string; icon: IconName; iconActive: IconName; sheep?: boolean }[] = [
+  { name: 'Sheep',    label: 'Sheep',    icon: 'ellipse-outline',  iconActive: 'ellipse', sheep: true },
   { name: 'Home',     label: 'Home',     icon: 'home-outline',     iconActive: 'home' },
-  { name: 'Calendar', label: 'Calendar', icon: 'calendar-outline', iconActive: 'calendar' },
   { name: 'Plans',    label: 'Plans',    icon: 'sparkles-outline', iconActive: 'sparkles' },
-  { name: 'People',   label: 'People',   icon: 'people-outline',   iconActive: 'people' },
+  { name: 'Calendar', label: 'Calendar', icon: 'calendar-outline', iconActive: 'calendar' },
+  { name: 'People',   label: 'Friends',  icon: 'people-outline',   iconActive: 'people' },   // the route keeps its name
 ];
 
 export default function TabNavigator() {
   const { c } = useTheme();
   const { hasSidebar } = useLayout();
+  // Connected phone calendars sync when the app opens and comes back.
+  const demo = isDemoGroup(useGroup().activeGroup);
+  usePhoneCalendarSync(demo);
   return (
     <PlanComposerProvider>
       <Tab.Navigator
         screenOptions={{ headerShown: false, sceneStyle: { backgroundColor: c.background, marginLeft: hasSidebar ? SIDEBAR_WIDTH : 0 } }}
         tabBar={(props) => (hasSidebar ? <Sidebar {...props} /> : <TabBar {...props} />)}
       >
+        <Tab.Screen name="Sheep" component={SheepScreen} />
         <Tab.Screen name="Home" component={HomeScreen} />
-        <Tab.Screen name="Calendar" component={CalendarScreen} />
         <Tab.Screen name="Plans" component={PlansScreen} />
+        <Tab.Screen name="Calendar" component={CalendarScreen} />
         <Tab.Screen name="People" component={PeopleScreen} />
         <Tab.Screen name="You" component={ProfileScreen} />
       </Tab.Navigator>
+      {/* A new account's first stop: set up calendars, contacts, birthday… */}
+      <FirstRunSetup demo={demo} />
     </PlanComposerProvider>
   );
 }
@@ -59,16 +71,22 @@ export default function TabNavigator() {
 // ─── Compact: bottom tab bar ─────────────────────────────────────────────────
 
 function TabBar({ state, navigation }: BottomTabBarProps) {
-  const { c } = useTheme();
+  const { c, isDark } = useTheme();
   const insets = useSafeAreaInsets();
+  // The selected tab sits in a cream (or, in dark, sage) pill.
+  const bar = c.tabBar;
+  const idle = c.tabIdle;
   return (
-    <Material style={[styles.tabBar, { paddingBottom: insets.bottom, borderTopColor: c.separator }]}>
-      <View accessibilityRole="tablist" style={styles.tabRow}>
+    <View pointerEvents="box-none" style={[styles.tabBarWrap, { bottom: insets.bottom + TAB_BAR_GAP }]}>
+      <View
+        accessibilityRole="tablist"
+        style={[styles.tabRow, { backgroundColor: bar, borderColor: isDark ? c.separator : 'transparent', shadowColor: c.shadow }]}
+      >
         {state.routes.map((route, i) => {
           const d = DESTINATIONS.find(x => x.name === route.name);
-          if (!d) return null;   // "You" opens from your avatar on Home
+          if (!d) return null;   // "You" opens from your avatar on Sheep
           const focused = state.index === i;
-          const color = focused ? c.tint : c.secondaryLabel;
+          const color = focused ? (isDark ? c.onTint : c.tint) : idle;
           return (
             <Tappable
               key={route.key}
@@ -80,16 +98,22 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
                 const e = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
                 if (!focused && !e.defaultPrevented) navigation.navigate(route.name);
               }}
-              style={styles.tabItem}
+              style={[styles.tabItem, focused && { backgroundColor: isDark ? c.tint : c.background }]}
             >
-              <Icon name={focused ? d.iconActive : d.icon} size={24} color={color} />
-              <Txt v="caption" style={{ color, fontWeight: focused ? '600' : '400' }}>{d.label}</Txt>
+              <TabGlyph d={d} focused={focused} size={20} color={color} />
+              <Txt v="caption" style={{ color }}>{d.label}</Txt>
             </Tappable>
           );
         })}
       </View>
-    </Material>
+    </View>
   );
+}
+
+/** A tab's icon: the drawn sheep for Sheep, an Ionicon for the others. */
+function TabGlyph({ d, focused, size, color }: { d: (typeof DESTINATIONS)[number]; focused: boolean; size: number; color: string }) {
+  if (d.sheep) return <SheepGlyph size={size + 2} color={color} filled={focused} />;
+  return <Icon name={focused ? d.iconActive : d.icon} size={size} color={color} />;
 }
 
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
@@ -103,7 +127,7 @@ function Sidebar({ state, navigation }: BottomTabBarProps) {
   const { openCreate, openJoin, sheets } = useGroupSheets();
   const current = state.routes[state.index].name;
 
-  // ⌘1–⌘4 jump between destinations.
+  // ⌘1–⌘5 jump between destinations.
   useEffect(() => {
     if (Platform.OS !== 'web') return;
     const onKey = (e: KeyboardEvent) => {
@@ -123,7 +147,7 @@ function Sidebar({ state, navigation }: BottomTabBarProps) {
   return (
     <View style={[styles.sidebar, { backgroundColor: c.fill, paddingTop: insets.top + space.m, borderRightColor: c.separator }]}>
       <View style={styles.brand}>
-        <Txt v="title" style={{ fontFamily: Platform.select({ web: 'ui-serif, "New York", Georgia, serif', ios: 'Georgia' }), fontWeight: '600' }}>sheep</Txt>
+        <Txt v="title">sheep</Txt>
       </View>
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: space.s, paddingBottom: space.m }}>
@@ -135,6 +159,7 @@ function Sidebar({ state, navigation }: BottomTabBarProps) {
                 key={d.name}
                 label={d.label}
                 icon={selected ? d.iconActive : d.icon}
+                sheep={d.sheep}
                 selected={selected}
                 hint={`${modKey}${i + 1}`}
                 onPress={() => navigation.navigate(d.name)}
@@ -193,8 +218,8 @@ function Sidebar({ state, navigation }: BottomTabBarProps) {
   );
 }
 
-function SidebarItem({ label, icon, iconSize = 18, selected, checked, hint, onPress }: {
-  label: string; icon: IconName; iconSize?: number; selected: boolean; checked?: boolean; hint?: string; onPress: () => void;
+function SidebarItem({ label, icon, sheep, iconSize = 18, selected, checked, hint, onPress }: {
+  label: string; icon: IconName; sheep?: boolean; iconSize?: number; selected: boolean; checked?: boolean; hint?: string; onPress: () => void;
 }) {
   const { c } = useTheme();
   return (
@@ -207,7 +232,9 @@ function SidebarItem({ label, icon, iconSize = 18, selected, checked, hint, onPr
       style={styles.item}
     >
       <View style={{ width: 24, alignItems: 'center' }}>
-        <Icon name={icon} size={iconSize} color={selected || checked ? c.tint : c.secondaryLabel} />
+        {sheep
+          ? <SheepGlyph size={iconSize + 2} color={selected ? c.tint : c.secondaryLabel} filled={selected} />
+          : <Icon name={icon} size={iconSize} color={selected || checked ? c.tint : c.secondaryLabel} />}
       </View>
       <Txt v="callout" semibold={selected || checked} numberOfLines={1} style={{ flex: 1 }}>{label}</Txt>
       {hint ? <Txt v="footnote" tone="secondary">{hint}</Txt> : null}
@@ -216,12 +243,17 @@ function SidebarItem({ label, icon, iconSize = 18, selected, checked, hint, onPr
 }
 
 const styles = StyleSheet.create({
-  tabBar: {
-    position: 'absolute', left: 0, right: 0, bottom: 0,
-    borderTopWidth: StyleSheet.hairlineWidth,
+  tabBarWrap: { position: 'absolute', left: 0, right: 0, alignItems: 'center', paddingHorizontal: space.m },
+  tabRow: {
+    flexDirection: 'row', alignItems: 'center', gap: space.hair,
+    height: TAB_BAR_HEIGHT - TAB_BAR_GAP, padding: space.s - 2, borderRadius: radius.pill, borderWidth: 1,
+    width: '100%', maxWidth: 360, ...continuous,
+    shadowOpacity: 0.18, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 8,
   },
-  tabRow: { flexDirection: 'row', height: TAB_BAR_HEIGHT },
-  tabItem: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 2 },
+  tabItem: {
+    flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center', gap: 1,
+    borderRadius: radius.pill, ...continuous,
+  },
 
   sidebar: {
     position: 'absolute', left: 0, top: 0, bottom: 0, width: SIDEBAR_WIDTH,

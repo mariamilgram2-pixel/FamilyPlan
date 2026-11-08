@@ -4,9 +4,10 @@ import { splitPlace } from '../../lib/places';
 import { notify } from '../../lib/alert';
 import { View } from 'react-native';
 import { supabase } from '../../lib/supabase';
-import { Event, Group, Profile } from '../../types';
+import { CalendarOccurrence, Event, Group, Profile } from '../../types';
 import Avatar, { AvatarPerson } from '../../components/Avatar';
-import { Button, Field, Icon, IconName, ListRow, ListSection, Sheet, Tag, Tappable, Toggle, Txt } from '../../components/ui';
+import { Button, Field, Icon, IconName, ListRow, ListSection, Menu, Sheet, Tag, Tappable, Toggle, Txt } from '../../components/ui';
+import { EventCategory } from '../../lib/calendarColors';
 import { WorkDay, formatHours, useWorkSchedules, workConflict, workOn } from '../../lib/workSchedule';
 import { space, useTheme } from '../../theme';
 import CalendarGrid from './CalendarGrid';
@@ -60,6 +61,15 @@ interface DetailProps {
   onSamePeople?: () => void;                   // after: same people, new plan
   onAddMemories?: () => void;                  // after: photos and notes
   conversation?: React.ReactNode;              // comments, or memories afterwards
+  category?: CategoryChoice;                   // your own filing, for color coding
+}
+
+/** Which of your categories this event is filed under. Colors themselves are chosen in You → Calendar colors. */
+export interface CategoryChoice {
+  current: EventCategory | null;
+  options: EventCategory[];
+  onPick: (id: string | null) => void;
+  onManage: () => void;
 }
 
 const REPLY_OPTIONS: { key: Rsvp; label: string; icon: IconName }[] = [
@@ -69,7 +79,7 @@ const REPLY_OPTIONS: { key: Rsvp; label: string; icon: IconName }[] = [
 ];
 
 /** Event content; the caller provides the scroll container (pane or sheet). */
-export function EventDetail({ event, attendees, meId, group, onOpenGroup, onClaim, onAssign, onRsvp, onEdit, onCancel, onNudge, onDoAgain, onSamePeople, onAddMemories, conversation }: DetailProps) {
+export function EventDetail({ event, attendees, meId, group, onOpenGroup, onClaim, onAssign, onRsvp, onEdit, onCancel, onNudge, onDoAgain, onSamePeople, onAddMemories, conversation, category }: DetailProps) {
   const organizer = !!meId && event.created_by === meId;
   const reply = replyOf(event, meId);
   const cancelled = !!event.cancelled_at;
@@ -207,6 +217,8 @@ export function EventDetail({ event, attendees, meId, group, onOpenGroup, onClai
         </ListSection>
       ) : null}
 
+      {category ? <CategoryRow choice={category} /> : null}
+
       {organizer && !cancelled && (onEdit || onCancel) ? (
         <ListSection footer={event.recurrence ? 'Changes apply to every time it repeats.' : undefined}>
           {onEdit ? <ListRow icon="create-outline" title="Edit Event" tintTitle onPress={onEdit} /> : null}
@@ -216,6 +228,38 @@ export function EventDetail({ event, attendees, meId, group, onOpenGroup, onClai
 
       {creator?.full_name ? <Txt v="footnote" tone="secondary" style={{ paddingHorizontal: space.m }}>Added by {creator.full_name}</Txt> : null}
     </View>
+  );
+}
+
+// ─── Category ────────────────────────────────────────────────────────────────
+
+/** Category: file it under one of yours (only you see it), or none. */
+function CategoryRow({ choice }: { choice: CategoryChoice }) {
+  const { current, options, onPick, onManage } = choice;
+  const dot = (color: string) => <View style={{ width: 14, height: 14, borderRadius: 7, backgroundColor: color }} />;
+  return (
+    <ListSection footer="Only you see how you file it. Colors are in You → Calendar colors.">
+      <Menu
+        title="Category"
+        sections={[
+          { items: [
+            { key: 'none', label: 'None', checked: !current, onSelect: () => onPick(null) },
+            ...options.map(o => ({ key: o.id, label: o.name, checked: current?.id === o.id, leading: dot(o.color), onSelect: () => onPick(o.id) })),
+          ] },
+          { items: [{ key: 'manage', label: 'Edit Categories and Colors…', icon: 'color-palette-outline' as IconName, onSelect: onManage }] },
+        ]}
+      >
+        {(open) => (
+          <ListRow
+            leading={<View style={{ width: 24, alignItems: 'center' }}>{current ? dot(current.color) : <Icon name="pricetag-outline" size={18} />}</View>}
+            title="Category"
+            value={current?.name ?? 'None'}
+            chevron
+            onPress={open}
+          />
+        )}
+      </Menu>
+    </ListSection>
   );
 }
 
@@ -456,7 +500,7 @@ export function EventComposer({ visible, onClose, onSaved, initialDate, group, m
 
   async function save() {
     if (!title.trim()) return;
-    if (!group || !meId) return notify('Not signed in', 'Sign in to save events.');
+    if (!meId) return notify('Not signed in', 'Sign in to save events.');
     const times = span();
     if (!times) return notify('Check the time', 'Use 24-hour times like 09:00 or 18:30.');
     const [startIso, endIso] = times;
@@ -512,7 +556,7 @@ export function EventComposer({ visible, onClose, onSaved, initialDate, group, m
     setSaving(true);
     const { data, error } = editing
       ? await supabase.from('events').update(row as any).eq('id', editing.id).select('id').single()
-      : await supabase.from('events').insert({ ...row, group_id: group.id } as any).select('id').single();
+      : await supabase.from('events').insert({ ...row, group_id: group?.id ?? null } as any).select('id').single();
     if (error) { setSaving(false); return notify('Couldn’t save', error.message); }
     const eventId = (data as { id: string }).id;
     const place = row.location ? ` · ${row.location}` : '';
@@ -690,6 +734,35 @@ export function WorkLine({ day }: { day: WorkDay }) {
       <Txt v="footnote" tone="secondary">
         {isWork ? `Work · ${formatHours(day.hours)}` : `Off · ${day.holiday.name}`}
       </Txt>
+    </View>
+  );
+}
+
+/**
+ * Your own events from connected calendars on a day, under its heading like
+ * work hours: "9:00 AM Dentist". Only you ever see these; up to four, then a count.
+ */
+export function SyncedLines({ items, day }: { items: CalendarOccurrence[]; day: string }) {
+  const { c } = useTheme();
+  if (!items.length) return null;
+  const when = (i: CalendarOccurrence) => {
+    if (i.all_day) return 'All day';
+    const starts = keyOf(i.start_at) === day, ends = keyOf(i.end_at) === day;
+    const t = (iso: string) => new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    return starts ? t(i.start_at) : ends ? `Until ${t(i.end_at)}` : 'All day';
+  };
+  const shown = items.slice(0, 4);
+  return (
+    <View style={{ gap: 2, marginTop: space.hair }} accessible accessibilityLabel={`From your calendars: ${items.map(i => `${when(i)}, ${i.title ?? 'Busy'}`).join('; ')}`}>
+      {shown.map(i => (
+        <View key={i.id} style={{ flexDirection: 'row', alignItems: 'center', gap: space.s }}>
+          <Icon name="calendar-clear-outline" size={14} color={c.secondaryLabel} />
+          <Txt v="footnote" tone="secondary" numberOfLines={1} style={{ flexShrink: 1 }}>
+            {`${when(i)} · ${i.title ?? 'Busy'}${i.busy_status === 'tentative' ? ' (maybe)' : ''}`}
+          </Txt>
+        </View>
+      ))}
+      {items.length > shown.length ? <Txt v="footnote" tone="secondary" style={{ paddingLeft: 14 + space.s }}>{`+${items.length - shown.length} more`}</Txt> : null}
     </View>
   );
 }
